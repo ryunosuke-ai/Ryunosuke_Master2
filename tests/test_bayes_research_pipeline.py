@@ -2,17 +2,31 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from core.generated_bayes_model import parse_bayes_model
 from tools.analyze_small_corpus import (
+    build_analysis_instructions,
     build_corpus_text,
+    build_json_mode_input as build_analysis_json_mode_input,
     extract_json_object,
+    extract_response_text,
     generate_bayes_model,
     read_jsonl,
+    resolve_analysis_azure_api_key,
+    resolve_analysis_model,
     summarize_corpus,
 )
 from tools.build_dpo_from_bayes_scores import build_preference_records
-from tools.score_dialogue_with_bayes_model import parse_observation_score, score_records
+from tools.score_dialogue_with_bayes_model import (
+    build_json_mode_input as build_scoring_json_mode_input,
+    parse_observation_score,
+    resolve_scoring_azure_api_key,
+    resolve_scoring_model,
+    score_records,
+)
 
 
 class StubGenerator:
@@ -82,10 +96,86 @@ def test_generate_bayes_model_extracts_json_from_stub():
     assert generator.calls[0]["model"] == "gpt-5.4-pro"
 
 
+def test_analysis_instructions_infer_dataset_purpose_without_fixed_domain():
+    instructions = build_analysis_instructions()
+
+    assert "大量" in instructions
+    assert "prompt/response" in instructions
+    assert "posterior" in instructions
+    assert "DPO" in instructions
+    assert "そのまま使わず" in instructions
+    assert "必ずコーパス分析に基づいて" in instructions
+    assert "回想法" not in instructions
+
+
+def test_generate_bayes_model_validates_generated_payload():
+    payload = make_bayes_payload()
+    payload["likelihoods"]["target_style"]["deepening"] = 0.2
+    generator = StubGenerator([json.dumps(payload, ensure_ascii=False)])
+    records = [{"conversation_id": "c1", "turn_index": 1, "speaker": "user", "text": "昔の話です。"}]
+
+    with pytest.raises(ValueError, match="合計"):
+        generate_bayes_model(records, generator=generator, model="gpt-5.4-pro", max_output_tokens=1024)
+
+
+def test_analysis_env_resolution_prefers_gpt54_pro_specific_values(monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "generic-key")
+    monkeypatch.setenv("AZURE_OPENAI_GPT54_PRO_API_KEY", "pro-key")
+    monkeypatch.setenv("AZURE_OPENAI_GPT54_PRO_DEPLOYMENT_NAME", "pro-deployment")
+    monkeypatch.delenv("ANALYSIS_LLM_MODEL", raising=False)
+
+    assert resolve_analysis_azure_api_key() == "pro-key"
+    assert resolve_analysis_model() == "pro-deployment"
+
+
+def test_scoring_env_resolution_prefers_gpt54_specific_values(monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "generic-key")
+    monkeypatch.setenv("AZURE_OPENAI_GPT54_API_KEY", "base-key")
+    monkeypatch.setenv("AZURE_OPENAI_GPT54_DEPLOYMENT_NAME", "base-deployment")
+    monkeypatch.delenv("SCORING_LLM_MODEL", raising=False)
+
+    assert resolve_scoring_azure_api_key() == "base-key"
+    assert resolve_scoring_model() == "base-deployment"
+
+
 def test_extract_json_object_handles_surrounding_text():
     result = extract_json_object('前置き {"name": "x", "prior": 0.5} 後置き')
 
     assert result == {"name": "x", "prior": 0.5}
+
+
+def test_extract_response_text_falls_back_to_output_content():
+    response = SimpleNamespace(
+        output_text="",
+        output=[
+            SimpleNamespace(
+                type="message",
+                content=[
+                    SimpleNamespace(type="output_text", text='{"name": "x"}'),
+                ],
+            )
+        ],
+        status="completed",
+    )
+
+    assert extract_response_text(response) == '{"name": "x"}'
+
+
+def test_extract_response_text_reports_incomplete_reason():
+    response = SimpleNamespace(
+        output_text="",
+        output=[],
+        status="incomplete",
+        incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+    )
+
+    with pytest.raises(RuntimeError, match="max_output_tokens"):
+        extract_response_text(response)
+
+
+def test_json_mode_input_contains_json_keyword():
+    assert "json" in build_analysis_json_mode_input("本文").lower()
+    assert "json" in build_scoring_json_mode_input("本文").lower()
 
 
 def test_parse_observation_score_accepts_known_observation():

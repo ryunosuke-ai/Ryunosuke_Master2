@@ -21,28 +21,80 @@ from core.generated_bayes_model import BayesModel, ObservationScore, load_bayes_
 DEFAULT_INPUT_PATH = "data/large_dialogue.jsonl"
 DEFAULT_MODEL_PATH = "artifacts/bayes_models/generated_bayes_model.json"
 DEFAULT_OUTPUT_PATH = "artifacts/scored_dialogues/bayes_scored_dialogue.jsonl"
-DEFAULT_MODEL = os.getenv("SCORING_LLM_MODEL", "gpt-5.4")
-DEFAULT_MAX_OUTPUT_TOKENS = 512
+DEFAULT_MODEL = "gpt-5.4"
+DEFAULT_MAX_OUTPUT_TOKENS = 1024
 JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 
 
 class TextGenerator(Protocol):
     """テキスト生成器の最小インターフェース。"""
 
-    def generate(self, *, instructions: str, input_text: str, model: str, max_output_tokens: int) -> str:
+    def generate(
+        self,
+        *,
+        instructions: str,
+        input_text: str,
+        model: str,
+        max_output_tokens: int,
+        response_text_format: dict[str, Any] | None = None,
+    ) -> str:
         """LLMからテキストを生成する。"""
 
 
 def parse_args() -> argparse.Namespace:
     """コマンドライン引数を解析する。"""
+    load_env_file()
     parser = argparse.ArgumentParser(description="対話データを生成ベイズモデルでスコアリングします。")
     parser.add_argument("--input", default=DEFAULT_INPUT_PATH, help=f"入力JSONL/CSV（既定: {DEFAULT_INPUT_PATH}）。")
     parser.add_argument("--bayes-model", default=DEFAULT_MODEL_PATH, help=f"ベイズモデルJSON（既定: {DEFAULT_MODEL_PATH}）。")
     parser.add_argument("--output", default=DEFAULT_OUTPUT_PATH, help=f"出力JSONL（既定: {DEFAULT_OUTPUT_PATH}）。")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"評価LLMモデル（既定: {DEFAULT_MODEL}）。")
+    default_model = resolve_scoring_model()
+    parser.add_argument("--model", default=default_model, help=f"評価LLMモデルまたはAzure deployment名（既定: {default_model}）。")
     parser.add_argument("--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS, help="最大出力トークン数。")
     parser.add_argument("--dry-run", action="store_true", help="APIを呼ばず、入力件数だけ確認します。")
     return parser.parse_args()
+
+
+def load_env_file() -> None:
+    """存在すれば.envを読み込む。"""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv()
+
+
+def read_env_value(name: str, default: str = "") -> str:
+    """環境変数から空白を除いた値を読む。"""
+    return os.getenv(name, default).strip() or default
+
+
+def read_env_value_with_fallback(*names: str, default: str = "") -> str:
+    """複数の環境変数名を順に見て、最初の有効値を返す。"""
+    for name in names:
+        value = read_env_value(name)
+        if value:
+            return value
+    return default
+
+
+def resolve_scoring_model() -> str:
+    """評価用モデルまたはAzure deployment名を解決する。"""
+    return read_env_value_with_fallback(
+        "SCORING_LLM_MODEL",
+        "AZURE_OPENAI_GPT54_DEPLOYMENT_NAME",
+        "OPENAI_GPT54_MODEL",
+        default=DEFAULT_MODEL,
+    )
+
+
+def resolve_scoring_azure_api_key() -> str:
+    """評価用Azure OpenAI APIキーを解決する。"""
+    return read_env_value_with_fallback(
+        "AZURE_OPENAI_GPT54_API_KEY",
+        "OPENAI_GPT54_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+    )
 
 
 def read_dialogue_records(path: Path | str) -> list[dict[str, Any]]:
@@ -122,6 +174,55 @@ def extract_json_object(text: str) -> dict[str, Any]:
         raise ValueError(f"抽出したJSONを解析できません: {exc}") from exc
 
 
+def _get_response_attr(item: Any, name: str, default: Any = None) -> Any:
+    """Responses APIのオブジェクト/辞書どちらからでも値を読む。"""
+    if isinstance(item, dict):
+        return item.get(name, default)
+    return getattr(item, name, default)
+
+
+def _collect_response_text_from_output(output_items: Any) -> str:
+    """Responses APIのoutput配列からテキスト本文を拾う。"""
+    texts: list[str] = []
+    for item in output_items or []:
+        content_items = _get_response_attr(item, "content", []) or []
+        for content in content_items:
+            text = _get_response_attr(content, "text")
+            if text:
+                texts.append(str(text))
+    return "\n".join(texts).strip()
+
+
+def extract_response_text(response: Any) -> str:
+    """Responses APIレスポンスから生成本文を取り出す。"""
+    output_text = _get_response_attr(response, "output_text", "")
+    if output_text:
+        return str(output_text).strip()
+
+    output_text = _collect_response_text_from_output(_get_response_attr(response, "output", []))
+    if output_text:
+        return output_text
+
+    status = _get_response_attr(response, "status", "")
+    incomplete_details = _get_response_attr(response, "incomplete_details", None)
+    if status == "incomplete" or incomplete_details:
+        reason = _get_response_attr(incomplete_details, "reason", incomplete_details)
+        raise RuntimeError(
+            "LLM出力が途中で打ち切られ、JSON本文が返りませんでした。"
+            f"理由: {reason}。"
+            "`--max-output-tokens` を増やすか、プロンプトを短くしてください。"
+        )
+
+    output_types = [
+        str(_get_response_attr(item, "type", "unknown"))
+        for item in (_get_response_attr(response, "output", []) or [])
+    ]
+    raise RuntimeError(
+        "Responses APIの返答から本文を取り出せませんでした。"
+        f"status={status or 'unknown'}, output_types={output_types}"
+    )
+
+
 def parse_observation_score(payload: dict[str, Any], model: BayesModel) -> ObservationScore:
     """LLM出力を観測評価へ変換する。"""
     observation = str(payload.get("observation", "")).strip()
@@ -140,33 +241,50 @@ class OpenAIResponsesGenerator:
 
     def __init__(self) -> None:
         try:
-            from dotenv import load_dotenv
             from openai import AzureOpenAI, OpenAI
         except ImportError as exc:
             raise RuntimeError("OpenAI API利用に必要な `openai` と `python-dotenv` をインストールしてください。") from exc
-        load_dotenv()
-        azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
-        azure_api_key = os.getenv("AZURE_OPENAI_API_KEY", "").strip()
-        azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2025-04-01-preview").strip()
+        load_env_file()
+        self.azure_client_class = AzureOpenAI
+        self.openai_client_class = OpenAI
+
+    def generate(
+        self,
+        *,
+        instructions: str,
+        input_text: str,
+        model: str,
+        max_output_tokens: int,
+        response_text_format: dict[str, Any] | None = None,
+    ) -> str:
+        """Responses APIでテキストを生成する。"""
+        azure_endpoint = read_env_value("AZURE_OPENAI_ENDPOINT")
+        azure_api_key = resolve_scoring_azure_api_key()
+        azure_api_version = read_env_value("AZURE_OPENAI_API_VERSION", "2025-04-01-preview")
         if azure_endpoint and azure_api_key:
-            self.client = AzureOpenAI(
+            client = self.azure_client_class(
                 api_key=azure_api_key,
                 azure_endpoint=azure_endpoint,
                 api_version=azure_api_version,
             )
         else:
-            self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            client = self.openai_client_class(api_key=read_env_value("OPENAI_API_KEY"))
+        create_kwargs: dict[str, Any] = {
+            "model": model,
+            "instructions": instructions,
+            "input": build_json_mode_input(input_text) if response_text_format else input_text,
+            "max_output_tokens": max_output_tokens,
+            "reasoning": {"effort": "medium"},
+        }
+        if response_text_format:
+            create_kwargs["text"] = {"format": response_text_format}
+        response = client.responses.create(**create_kwargs)
+        return extract_response_text(response)
 
-    def generate(self, *, instructions: str, input_text: str, model: str, max_output_tokens: int) -> str:
-        """Responses APIでテキストを生成する。"""
-        response = self.client.responses.create(
-            model=model,
-            instructions=instructions,
-            input=input_text,
-            max_output_tokens=max_output_tokens,
-            reasoning={"effort": "medium"},
-        )
-        return (response.output_text or "").strip()
+
+def build_json_mode_input(input_text: str) -> str:
+    """JSONモード要件を満たすため、input側にもjson語を含める。"""
+    return "Return a valid JSON object only.\n\n" + input_text
 
 
 def score_records(
@@ -190,6 +308,7 @@ def score_records(
             input_text=build_scoring_input(record),
             model=model,
             max_output_tokens=max_output_tokens,
+            response_text_format={"type": "json_object"},
         )
         observation_score = parse_observation_score(extract_json_object(output_text), bayes_model)
         bayes_result = score_observation(bayes_model, observation_score, prior=prior)
