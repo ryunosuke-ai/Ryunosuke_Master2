@@ -5,10 +5,13 @@ from apps.dpo_compare_chat import (
     DEFAULT_LORA_PATH,
     DEFAULT_MAX_NEW_TOKENS,
     build_dpo_compare_prompt,
+    build_prompt_history_from_turns,
     cleanup_generated_text,
     disable_peft_bitsandbytes_dispatch,
+    independent_history_file,
     list_lora_adapter_paths,
     strip_prompt_prefix,
+    write_independent_session_header,
     write_streamlit_session_header,
 )
 from apps.dpo_text_chat import build_dpo_generation_prompt
@@ -71,7 +74,52 @@ def test_write_streamlit_session_header_records_compare_log_metadata(tmp_path):
     assert "# base_model_id: Qwen/Qwen3.5-27B" in content
     assert "# lora_path: artifacts/training_runs/qwen35_dpo_lora_200samples_ep1_lr5e-6_r8_a16_no4bit" in content
     assert "# thinking: disabled" in content
-    assert "# prompt_history_ai: dpo" in content
+    assert "# conversation_mode: independent" in content
+    assert "# prompt_history: independent_per_model" in content
+
+
+def test_independent_history_file_uses_model_specific_names(tmp_path):
+    run_dir = tmp_path / "run_20260603_120000"
+    run_dir.mkdir()
+
+    assert independent_history_file(run_dir.as_posix(), "base").endswith("base_conversation.txt")
+    assert independent_history_file(run_dir.as_posix(), "dpo").endswith("dpo_conversation.txt")
+
+
+def test_write_independent_session_header_records_side_metadata(tmp_path):
+    history_file = tmp_path / "base_conversation.txt"
+
+    write_independent_session_header(
+        str(history_file),
+        model_label="base",
+        title="学習前: Qwen3.5",
+        base_model_id=DEFAULT_BASE_MODEL_ID,
+        lora_path=DEFAULT_LORA_PATH,
+    )
+
+    content = history_file.read_text(encoding="utf-8")
+    assert "# mode: streamlit_compare_independent_chat" in content
+    assert "# model_label: base" in content
+    assert "# title: 学習前: Qwen3.5" in content
+    assert "# thinking: disabled" in content
+    assert "# prompt_template: dpo" in content
+
+
+def test_build_prompt_history_from_turns_keeps_independent_conversation():
+    base_turns = [
+        {"user": "今日は庭仕事をしました。", "assistant": "どんな作業をされたんですか？"},
+    ]
+    dpo_turns = [
+        {"user": "昔の旅行を思い出しました。", "assistant": "どんな景色が印象に残っていますか？"},
+    ]
+
+    base_prompt = build_dpo_compare_prompt("草取りです。", build_prompt_history_from_turns(base_turns))
+    dpo_prompt = build_dpo_compare_prompt("京都です。", build_prompt_history_from_turns(dpo_turns))
+
+    assert "今日は庭仕事をしました。" in base_prompt
+    assert "昔の旅行を思い出しました。" not in base_prompt
+    assert "昔の旅行を思い出しました。" in dpo_prompt
+    assert "今日は庭仕事をしました。" not in dpo_prompt
 
 
 def test_build_dpo_compare_generation_prompt_disables_qwen_thinking():

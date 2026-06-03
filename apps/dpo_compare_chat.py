@@ -70,6 +70,19 @@ def build_dpo_compare_prompt(
     return build_dpo_prompt(user_text, history_turns)
 
 
+def build_prompt_history_from_turns(turns: list[dict[str, str]]) -> list[dict[str, str]]:
+    """比較UIの会話ターンからDPO prompt用の履歴を作る。"""
+    history: list[dict[str, str]] = []
+    for turn in turns:
+        user_text = str(turn.get("user", "")).strip()
+        ai_text = str(turn.get("assistant", "")).strip()
+        if user_text:
+            append_prompt_history_turn(history, "User", user_text)
+        if ai_text:
+            append_prompt_history_turn(history, "AI", ai_text)
+    return history
+
+
 def write_streamlit_session_header(history_file: str, *, base_model_id: str, lora_path: str) -> None:
     """Streamlit比較UIの会話ログへセッション情報を残す。"""
     with open(history_file, "a", encoding="utf-8") as file:
@@ -78,17 +91,69 @@ def write_streamlit_session_header(history_file: str, *, base_model_id: str, lor
         file.write(f"# base_model_id: {base_model_id}\n")
         file.write(f"# lora_path: {lora_path}\n")
         file.write("# thinking: disabled\n")
-        file.write("# prompt_history_ai: dpo\n")
+        file.write("# conversation_mode: independent\n")
+        file.write("# prompt_history: independent_per_model\n")
         file.write("\n")
+
+
+def independent_history_file(run_dir: str, model_label: str) -> str:
+    """独立会話ごとのログファイルパスを返す。"""
+    return (Path(run_dir) / f"{model_label}_conversation.txt").as_posix()
+
+
+def write_independent_session_header(
+    history_file: str,
+    *,
+    model_label: str,
+    title: str,
+    base_model_id: str,
+    lora_path: str,
+) -> None:
+    """左右それぞれの独立会話ログへセッション情報を残す。"""
+    with open(history_file, "a", encoding="utf-8") as file:
+        file.write(f"# session_start: {datetime.now().isoformat(timespec='seconds')}\n")
+        file.write("# mode: streamlit_compare_independent_chat\n")
+        file.write(f"# model_label: {model_label}\n")
+        file.write(f"# title: {title}\n")
+        file.write(f"# base_model_id: {base_model_id}\n")
+        file.write(f"# lora_path: {lora_path}\n")
+        file.write("# thinking: disabled\n")
+        file.write("# prompt_template: dpo\n")
+        file.write("\n")
+
+
+def setup_independent_history_files(run_dir: str, *, base_model_id: str, lora_path: str) -> tuple[str, str]:
+    """base/DPOそれぞれの独立会話ログを初期化する。"""
+    base_history_file = independent_history_file(run_dir, "base")
+    dpo_history_file = independent_history_file(run_dir, "dpo")
+    write_independent_session_header(
+        base_history_file,
+        model_label="base",
+        title="学習前: Qwen3.5",
+        base_model_id=base_model_id,
+        lora_path=lora_path,
+    )
+    write_independent_session_header(
+        dpo_history_file,
+        model_label="dpo",
+        title="学習後: DPO LoRA",
+        base_model_id=base_model_id,
+        lora_path=lora_path,
+    )
+    return base_history_file, dpo_history_file
 
 
 def ensure_streamlit_session(base_model_id: str, lora_path: str) -> None:
     """Streamlitの会話履歴とログ保存先を初期化する。"""
-    if "dpo_compare_prompt_history" not in st.session_state:
-        st.session_state.dpo_compare_prompt_history = []
-    if "dpo_compare_turns" not in st.session_state:
-        st.session_state.dpo_compare_turns = []
-    if "dpo_compare_history_file" not in st.session_state:
+    if "dpo_compare_base_turns" not in st.session_state:
+        st.session_state.dpo_compare_base_turns = []
+    if "dpo_compare_dpo_turns" not in st.session_state:
+        st.session_state.dpo_compare_dpo_turns = []
+    model_changed = (
+        st.session_state.get("dpo_compare_base_model_id") != base_model_id
+        or st.session_state.get("dpo_compare_lora_path") != lora_path
+    )
+    if "dpo_compare_history_file" not in st.session_state or model_changed:
         run_dir, history_file = create_run_dir(
             code_id="dpo_compare",
             base_model_id=base_model_id,
@@ -96,7 +161,18 @@ def ensure_streamlit_session(base_model_id: str, lora_path: str) -> None:
         )
         st.session_state.dpo_compare_run_dir = run_dir
         st.session_state.dpo_compare_history_file = history_file
+        base_history_file, dpo_history_file = setup_independent_history_files(
+            run_dir,
+            base_model_id=base_model_id,
+            lora_path=lora_path,
+        )
+        st.session_state.dpo_compare_base_history_file = base_history_file
+        st.session_state.dpo_compare_dpo_history_file = dpo_history_file
+        st.session_state.dpo_compare_base_model_id = base_model_id
+        st.session_state.dpo_compare_lora_path = lora_path
         write_streamlit_session_header(history_file, base_model_id=base_model_id, lora_path=lora_path)
+        append_history_line(history_file, "log(base)", base_history_file)
+        append_history_line(history_file, "log(dpo)", dpo_history_file)
 
 
 def reset_streamlit_session(base_model_id: str, lora_path: str) -> None:
@@ -106,11 +182,31 @@ def reset_streamlit_session(base_model_id: str, lora_path: str) -> None:
         base_model_id=base_model_id,
         lora_path=lora_path,
     )
-    st.session_state.dpo_compare_prompt_history = []
-    st.session_state.dpo_compare_turns = []
+    st.session_state.dpo_compare_base_turns = []
+    st.session_state.dpo_compare_dpo_turns = []
     st.session_state.dpo_compare_run_dir = run_dir
     st.session_state.dpo_compare_history_file = history_file
+    base_history_file, dpo_history_file = setup_independent_history_files(
+        run_dir,
+        base_model_id=base_model_id,
+        lora_path=lora_path,
+    )
+    st.session_state.dpo_compare_base_history_file = base_history_file
+    st.session_state.dpo_compare_dpo_history_file = dpo_history_file
+    st.session_state.dpo_compare_base_model_id = base_model_id
+    st.session_state.dpo_compare_lora_path = lora_path
     write_streamlit_session_header(history_file, base_model_id=base_model_id, lora_path=lora_path)
+    append_history_line(history_file, "log(base)", base_history_file)
+    append_history_line(history_file, "log(dpo)", dpo_history_file)
+
+
+def reset_independent_chat(model_label: str) -> None:
+    """片側の独立会話だけをリセットする。"""
+    turns_key = f"dpo_compare_{model_label}_turns"
+    st.session_state[turns_key] = []
+    history_file = st.session_state.get(f"dpo_compare_{model_label}_history_file")
+    if history_file:
+        append_history_line(history_file, f"system({model_label})", "conversation reset")
 
 
 def strip_prompt_prefix(decoded_text: str, prompt_text: str) -> str:
@@ -279,10 +375,90 @@ def generate_reply(
     return cleanup_generated_text(decoded, generation_prompt)
 
 
+def render_independent_chat_column(
+    *,
+    title: str,
+    model_label: str,
+    use_adapter: bool,
+    compare_models: CompareModels | None,
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+    repetition_penalty: float,
+    seed: int,
+) -> None:
+    """base/DPOそれぞれの独立したチャット欄を描画する。"""
+    turns_key = f"dpo_compare_{model_label}_turns"
+    form_key = f"dpo_compare_{model_label}_form"
+    input_key = f"dpo_compare_{model_label}_input"
+
+    st.subheader(title)
+    if st.button("この会話をリセット", key=f"dpo_compare_{model_label}_reset"):
+        reset_independent_chat(model_label)
+        st.rerun()
+
+    turns = st.session_state[turns_key]
+    for turn in turns:
+        with st.chat_message("user"):
+            st.markdown(turn["user"])
+        with st.chat_message("assistant"):
+            st.markdown(turn["assistant"])
+
+    prompt_history = build_prompt_history_from_turns(turns)
+    with st.expander("生成に使うprompt", expanded=False):
+        preview_text = st.session_state.get(input_key, "")
+        preview_prompt = build_dpo_compare_prompt(preview_text, prompt_history) if str(preview_text).strip() else ""
+        st.code(preview_prompt or "入力後に表示されます。", language="text")
+
+    with st.form(form_key, clear_on_submit=True):
+        user_text = st.text_area(
+            f"{title}への入力",
+            key=input_key,
+            height=120,
+            placeholder="ここにメッセージを入力してください",
+        )
+        submitted = st.form_submit_button("送信", disabled=compare_models is None)
+
+    if not submitted:
+        return
+
+    clean_text = user_text.strip()
+    if not clean_text:
+        st.warning("メッセージを入力してください。")
+        return
+    if compare_models is None:
+        st.error("モデルが読み込まれていません。")
+        return
+
+    prompt_text = build_dpo_compare_prompt(clean_text, prompt_history)
+    try:
+        with st.spinner(f"{title} が返答を生成しています。"):
+            reply = generate_reply(
+                compare_models,
+                prompt_text,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                repetition_penalty=repetition_penalty,
+                seed=seed,
+                use_adapter=use_adapter,
+            )
+    except Exception as exc:
+        st.error(f"生成に失敗しました: {exc}")
+        return
+
+    final_reply = reply or "（空の返答）"
+    turns.append({"user": clean_text, "assistant": final_reply})
+    history_file = st.session_state[f"dpo_compare_{model_label}_history_file"]
+    append_history_line(history_file, "User", clean_text)
+    append_history_line(history_file, "AI", final_reply)
+    st.rerun()
+
+
 def render_app() -> None:
     """Streamlit UIを描画する。"""
     st.set_page_config(page_title="DPO前後比較チャット", layout="wide")
-    st.title("DPO前後比較チャット")
+    st.title("DPO前後 独立比較チャット")
 
     with st.sidebar:
         st.header("モデル設定")
@@ -319,77 +495,45 @@ def render_app() -> None:
         seed = st.number_input("seed", value=42, min_value=0, max_value=2_147_483_647)
         ensure_streamlit_session(base_model_id, lora_path)
         st.caption(f"ログ出力先: {st.session_state.dpo_compare_run_dir}/")
-        if st.button("会話をリセット"):
+        st.caption(f"baseログ: `{st.session_state.dpo_compare_base_history_file}`")
+        st.caption(f"DPOログ: `{st.session_state.dpo_compare_dpo_history_file}`")
+        if st.button("両方の会話をリセット"):
             reset_streamlit_session(base_model_id, lora_path)
             st.rerun()
+        st.caption("左右の会話履歴と入力は独立しています。")
 
-    user_text = st.text_area(
-        "User入力",
-        height=160,
-        placeholder="例: 最近、昔やっていたギターの話を思い出して、また少し弾いてみたくなってきました。",
-    )
-    prompt_history = st.session_state.dpo_compare_prompt_history
-    prompt_text = build_dpo_compare_prompt(user_text, prompt_history) if user_text.strip() else ""
-    with st.expander("生成に使うprompt", expanded=False):
-        st.code(prompt_text or "User入力後に表示されます。", language="text")
+    try:
+        with st.spinner("モデルを読み込んでいます。初回は時間がかかります。"):
+            compare_models: CompareModels | None = load_compare_models(base_model_id, lora_path)
+    except Exception as exc:
+        compare_models = None
+        st.error(f"モデル読み込みに失敗しました: {exc}")
 
-    if st.button("ベースモデルとDPO後モデルで生成", type="primary", disabled=not user_text.strip()):
-        try:
-            with st.spinner("モデルを読み込んでいます。初回は時間がかかります。"):
-                compare_models = load_compare_models(base_model_id, lora_path)
-            with st.spinner("返答を生成しています。"):
-                base_reply = generate_reply(
-                    compare_models,
-                    prompt_text,
-                    max_new_tokens=max_new_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    repetition_penalty=repetition_penalty,
-                    seed=int(seed),
-                    use_adapter=False,
-                )
-                dpo_reply = generate_reply(
-                    compare_models,
-                    prompt_text,
-                    max_new_tokens=max_new_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    repetition_penalty=repetition_penalty,
-                    seed=int(seed),
-                    use_adapter=True,
-                )
-        except Exception as exc:
-            st.error(f"生成に失敗しました: {exc}")
-            return
-
-        base_final = base_reply or "（空の返答）"
-        dpo_final = dpo_reply or "（空の返答）"
-        st.session_state.dpo_compare_turns.append(
-            {
-                "user": user_text,
-                "base": base_final,
-                "dpo": dpo_final,
-            }
+    left, right = st.columns(2, gap="large")
+    with left:
+        render_independent_chat_column(
+            title="学習前: Qwen3.5",
+            model_label="base",
+            use_adapter=False,
+            compare_models=compare_models,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+            seed=int(seed),
         )
-        append_prompt_history_turn(prompt_history, "User", user_text)
-        append_prompt_history_turn(prompt_history, "AI", dpo_final)
-
-        history_file = st.session_state.dpo_compare_history_file
-        append_history_line(history_file, "User", user_text)
-        append_history_line(history_file, "AI(base)", base_final)
-        append_history_line(history_file, "AI(dpo)", dpo_final)
-
-    for index, turn in enumerate(st.session_state.dpo_compare_turns, start=1):
-        st.divider()
-        st.markdown(f"#### Turn {index}")
-        st.markdown(f"**User:** {turn['user']}")
-        left, right = st.columns(2)
-        with left:
-            st.subheader("学習前: Qwen3.5")
-            st.markdown(turn["base"])
-        with right:
-            st.subheader("学習後: DPO LoRA")
-            st.markdown(turn["dpo"])
+    with right:
+        render_independent_chat_column(
+            title="学習後: DPO LoRA",
+            model_label="dpo",
+            use_adapter=True,
+            compare_models=compare_models,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+            seed=int(seed),
+        )
 
 
 if __name__ == "__main__":
