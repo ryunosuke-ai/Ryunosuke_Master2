@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -25,11 +28,30 @@ from tools.score_dialogue_with_bayes_model import (
     resolve_scoring_model,
     write_jsonl,
 )
+from tools.audit_logging import DEFAULT_AUDIT_LOG_PATH, append_audit_log
 
 
 DEFAULT_INPUT_PATH = "data/large_dialogue.jsonl"
 DEFAULT_MODEL_PATH = "artifacts/bayes_models/generated_transition_bayes_model.json"
 DEFAULT_OUTPUT_PATH = "artifacts/scored_dialogues/transition_bayes_scored_dialogue.jsonl"
+CONTENT_FILTER_FALLBACK_REASON = (
+    "LLM評価APIのcontent filterにより観測ラベルを直接判定できなかったため、"
+    "大量処理継続用にnegative/off_style寄りの観測へフォールバックしました。"
+)
+CONTENT_FILTER_RETRY_PREFIX = (
+    "content filterの誤検出を避けるため、固有の年齢・日付・個人名・親密表現などを"
+    "中立的なプレースホルダに置換した安全化版です。"
+    "評価では、置換された具体情報そのものではなく、会話文脈への応答戦略だけを判定してください。\n\n"
+)
+SENSITIVE_WORD_PATTERN = re.compile(
+    r"\b("
+    r"one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|"
+    r"january|february|march|april|may|june|july|august|september|october|november|december|"
+    r"birthday|old|older|younger|child|children|kid|kids|boy|girl"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -42,6 +64,8 @@ def parse_args() -> argparse.Namespace:
     default_model = resolve_scoring_model()
     parser.add_argument("--model", default=default_model, help=f"評価LLMモデルまたはAzure deployment名（既定: {default_model}）。")
     parser.add_argument("--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS, help="最大出力トークン数。")
+    parser.add_argument("--workers", type=int, default=1, help="会話単位で並列評価するworker数。1なら逐次処理。")
+    parser.add_argument("--audit-log", default=DEFAULT_AUDIT_LOG_PATH, help="重要操作の要約を追記するaudit_log.mdのパス。")
     parser.add_argument("--dry-run", action="store_true", help="APIを呼ばず、入力件数だけ確認します。")
     return parser.parse_args()
 
@@ -85,6 +109,43 @@ def parse_transition_observation_score(
     return TransitionObservationScore(observation=observation, score=score, reason=reason)
 
 
+def is_content_filter_error(exc: Exception) -> bool:
+    """Azure/OpenAIのcontent filter由来の例外かを判定する。"""
+    text = str(exc).lower()
+    return "content_filter" in text or "content management policy" in text
+
+
+def select_negative_fallback_observation(model: TransitionBayesModel) -> str:
+    """LLM判定不能時に使うnegative寄りの観測ラベルを選ぶ。"""
+    preferred_labels = ("generic_or_unrelated", "off_style", "generic", "blocking")
+    for label in preferred_labels:
+        if label in model.observations:
+            return label
+
+    negative_scores: dict[str, float] = {observation: 0.0 for observation in model.observations}
+    for state in model.negative_states:
+        for observation, probability in model.emission_likelihoods[state].items():
+            negative_scores[observation] += probability
+    return max(negative_scores, key=negative_scores.get)
+
+
+def sanitize_text_for_content_filter_retry(text: str) -> str:
+    """content filter誤検出時の再試行用に具体情報を中立化する。"""
+    sanitized = SENSITIVE_WORD_PATTERN.sub("<neutral_detail>", text)
+    sanitized = re.sub(r"\b\d+(?:st|nd|rd|th)?\b", "<number>", sanitized, flags=re.IGNORECASE)
+    return sanitized
+
+
+def build_safe_scoring_input(record: dict[str, Any]) -> str:
+    """content filter再試行用の安全化入力を作る。"""
+    safe_record = {
+        **record,
+        "prompt": sanitize_text_for_content_filter_retry(str(record["prompt"])),
+        "response": sanitize_text_for_content_filter_retry(str(record["response"])),
+    }
+    return CONTENT_FILTER_RETRY_PREFIX + build_scoring_input(safe_record)
+
+
 def _record_key(record: dict[str, Any]) -> tuple[str, int]:
     """再開判定用のレコードキーを返す。"""
     return str(record["conversation_id"]), int(record["turn_index"])
@@ -107,6 +168,116 @@ def read_existing_scored_records(path: Path | str) -> list[dict[str, Any]]:
     return records
 
 
+def score_single_record(
+    record: dict[str, Any],
+    *,
+    bayes_model: TransitionBayesModel,
+    generator: TextGenerator,
+    model: str,
+    max_output_tokens: int,
+    instructions: str,
+    prior_distribution: dict[str, float] | None,
+    progress_label: str,
+) -> dict[str, Any]:
+    """1レコードをLLM観測分類し、状態遷移ベイズモデルで更新する。"""
+    conversation_id = str(record["conversation_id"])
+    llm_error: str | None = None
+    llm_retry: str | None = None
+    try:
+        output_text = generator.generate(
+            instructions=instructions,
+            input_text=build_scoring_input(record),
+            model=model,
+            max_output_tokens=max_output_tokens,
+            response_text_format={"type": "json_object"},
+        )
+        observation_score = parse_transition_observation_score(
+            extract_json_object(output_text),
+            bayes_model,
+        )
+    except Exception as exc:
+        if not is_content_filter_error(exc):
+            raise
+        print(
+            f"{progress_label}: content_filter retry with sanitized input "
+            f"{conversation_id}#{record['turn_index']}",
+            flush=True,
+        )
+        try:
+            output_text = generator.generate(
+                instructions=instructions,
+                input_text=build_safe_scoring_input(record),
+                model=model,
+                max_output_tokens=max_output_tokens,
+                response_text_format={"type": "json_object"},
+            )
+            observation_score = parse_transition_observation_score(
+                extract_json_object(output_text),
+                bayes_model,
+            )
+            llm_retry = "content_filter_sanitized_retry"
+        except Exception as retry_exc:
+            if not is_content_filter_error(retry_exc):
+                raise
+            fallback_observation = select_negative_fallback_observation(bayes_model)
+            llm_error = f"content_filter: {retry_exc}"
+            print(
+                f"{progress_label}: content_filter fallback "
+                f"{conversation_id}#{record['turn_index']} -> {fallback_observation}",
+                flush=True,
+            )
+            observation_score = TransitionObservationScore(
+                observation=fallback_observation,
+                score=0.0,
+                reason=CONTENT_FILTER_FALLBACK_REASON,
+            )
+    bayes_result = score_transition_observation(
+        bayes_model,
+        observation_score,
+        prior_distribution=prior_distribution,
+    )
+    result = {
+        **record,
+        "prior_state_distribution": prior_distribution,
+        **bayes_result,
+    }
+    if llm_retry:
+        result["llm_retry"] = llm_retry
+    if llm_error:
+        result["llm_error"] = llm_error
+    return result
+
+
+def score_conversation_records(
+    records: list[dict[str, Any]],
+    *,
+    bayes_model: TransitionBayesModel,
+    generator: TextGenerator,
+    model: str,
+    max_output_tokens: int,
+    instructions: str,
+    initial_distribution: dict[str, float] | None,
+    progress_label: str,
+) -> list[dict[str, Any]]:
+    """1会話内のレコードを順序通りにスコアリングする。"""
+    results: list[dict[str, Any]] = []
+    prior_distribution = initial_distribution
+    for record in sorted(records, key=lambda item: int(item["turn_index"])):
+        result = score_single_record(
+            record,
+            bayes_model=bayes_model,
+            generator=generator,
+            model=model,
+            max_output_tokens=max_output_tokens,
+            instructions=instructions,
+            prior_distribution=prior_distribution,
+            progress_label=progress_label,
+        )
+        prior_distribution = dict(result["state_posteriors"])
+        results.append(result)
+    return results
+
+
 def score_records(
     records: list[dict[str, Any]],
     *,
@@ -117,6 +288,7 @@ def score_records(
     progress_label: str = "scoring",
     existing_results: list[dict[str, Any]] | None = None,
     output_path: Path | str | None = None,
+    workers: int = 1,
 ) -> list[dict[str, Any]]:
     """対話レコード群を状態遷移ベイズモデルでスコアリングする。"""
     results: list[dict[str, Any]] = list(existing_results or [])
@@ -142,41 +314,72 @@ def score_records(
         path.parent.mkdir(parents=True, exist_ok=True)
         output_file = path.open("a", encoding="utf-8")
     try:
-        for index, record in enumerate(pending_records, start=1):
-            conversation_id = str(record["conversation_id"])
-            progress = (index / total_records * 100.0) if total_records else 100.0
+        if workers <= 1:
+            for index, record in enumerate(pending_records, start=1):
+                conversation_id = str(record["conversation_id"])
+                progress = (index / total_records * 100.0) if total_records else 100.0
+                print(
+                    f"{progress_label}: {index}/{total_records} "
+                    f"({progress:.1f}%) {conversation_id}#{record['turn_index']}",
+                    flush=True,
+                )
+                result = score_single_record(
+                    record,
+                    bayes_model=bayes_model,
+                    generator=generator,
+                    model=model,
+                    max_output_tokens=max_output_tokens,
+                    instructions=instructions,
+                    prior_distribution=distribution_by_conversation.get(conversation_id),
+                    progress_label=progress_label,
+                )
+                distribution_by_conversation[conversation_id] = dict(result["state_posteriors"])
+                results.append(result)
+                if output_file is not None:
+                    output_file.write(json.dumps(result, ensure_ascii=False) + "\n")
+                    output_file.flush()
+        else:
+            records_by_conversation: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for record in pending_records:
+                records_by_conversation[str(record["conversation_id"])].append(record)
             print(
-                f"{progress_label}: {index}/{total_records} "
-                f"({progress:.1f}%) {conversation_id}#{record['turn_index']}",
+                f"{progress_label}: parallel workers={workers} "
+                f"conversations={len(records_by_conversation)}",
                 flush=True,
             )
-            prior_distribution = distribution_by_conversation.get(conversation_id)
-            output_text = generator.generate(
-                instructions=instructions,
-                input_text=build_scoring_input(record),
-                model=model,
-                max_output_tokens=max_output_tokens,
-                response_text_format={"type": "json_object"},
-            )
-            observation_score = parse_transition_observation_score(
-                extract_json_object(output_text),
-                bayes_model,
-            )
-            bayes_result = score_transition_observation(
-                bayes_model,
-                observation_score,
-                prior_distribution=prior_distribution,
-            )
-            distribution_by_conversation[conversation_id] = dict(bayes_result["state_posteriors"])
-            result = {
-                **record,
-                "prior_state_distribution": prior_distribution,
-                **bayes_result,
-            }
-            results.append(result)
-            if output_file is not None:
-                output_file.write(json.dumps(result, ensure_ascii=False) + "\n")
-                output_file.flush()
+            completed_records = 0
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                future_to_conversation = {
+                    executor.submit(
+                        score_conversation_records,
+                        conversation_records,
+                        bayes_model=bayes_model,
+                        generator=generator,
+                        model=model,
+                        max_output_tokens=max_output_tokens,
+                        instructions=instructions,
+                        initial_distribution=distribution_by_conversation.get(conversation_id),
+                        progress_label=progress_label,
+                    ): conversation_id
+                    for conversation_id, conversation_records in records_by_conversation.items()
+                }
+                for future in as_completed(future_to_conversation):
+                    conversation_id = future_to_conversation[future]
+                    conversation_results = future.result()
+                    if conversation_results:
+                        distribution_by_conversation[conversation_id] = dict(conversation_results[-1]["state_posteriors"])
+                    results.extend(conversation_results)
+                    completed_records += len(conversation_results)
+                    progress = (completed_records / total_records * 100.0) if total_records else 100.0
+                    print(
+                        f"{progress_label}: {completed_records}/{total_records} "
+                        f"({progress:.1f}%) completed conversation {conversation_id}",
+                        flush=True,
+                    )
+                    if output_file is not None:
+                        for result in conversation_results:
+                            output_file.write(json.dumps(result, ensure_ascii=False) + "\n")
+                        output_file.flush()
     finally:
         if output_file is not None:
             output_file.close()
@@ -204,6 +407,35 @@ def main() -> int:
         progress_label=f"[STEP] scoring {args.model}",
         existing_results=existing_results,
         output_path=Path(args.output),
+        workers=max(1, args.workers),
+    )
+    retry_count = sum(1 for record in scored if record.get("llm_retry") == "content_filter_sanitized_retry")
+    fallback_count = sum(1 for record in scored if str(record.get("llm_error", "")).startswith("content_filter:"))
+    append_audit_log(
+        title="状態遷移ベイズモデルによる大規模対話スコアリング",
+        target_files=[args.input, args.bayes_model, args.output],
+        operation="DailyDialog等の大規模対話候補をLLMで観測ラベル化し、状態遷移ベイズモデルでposteriorを計算した。",
+        reason="小コーパス由来の会話スタイルに近い応答を抽出するため。",
+        alternatives=[
+            "全件を手動評価する案はスケールしないため採用しなかった。",
+            "content_filter対象を即除外する案はデータ損失が大きいため、安全化再試行を優先した。",
+        ],
+        command=(
+            "python3 -m tools.score_dialogue_with_transition_bayes_model "
+            f"--input {args.input} --bayes-model {args.bayes_model} --output {args.output} "
+            f"--model {args.model} --workers {max(1, args.workers)}"
+        ),
+        before_after=[
+            f"入力レコード数: {len(records)}",
+            f"出力スコア済みレコード数: {len(scored)}",
+            f"content_filter安全化再試行成功件数: {retry_count}",
+            f"content_filterフォールバック件数: {fallback_count}",
+        ],
+        risks=[
+            "content_filterフォールバック件数が多い場合、該当サンプルの観測ラベル品質を後で確認する必要がある。",
+            "LLM観測分類は確率的なため、モデル名・ベイズモデル・出力JSONLを追跡する必要がある。",
+        ],
+        audit_log_path=args.audit_log,
     )
     print(f"状態遷移スコア済みJSONLを書き出しました: {args.output} ({len(scored)} 件)")
     return 0

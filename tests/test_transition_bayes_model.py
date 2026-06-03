@@ -30,7 +30,10 @@ class StubGenerator:
 
     def generate(self, **kwargs):
         self.calls.append(kwargs)
-        return self.outputs.pop(0)
+        output = self.outputs.pop(0)
+        if isinstance(output, Exception):
+            raise output
+        return output
 
 
 def make_transition_payload():
@@ -246,3 +249,55 @@ def test_transition_score_records_updates_distribution_per_conversation():
     assert scored[0]["posterior"] > scored[0]["prior"]
     assert scored[1]["posterior"] < scored[0]["posterior"]
     assert scored[1]["state_posteriors"] != scored[0]["state_posteriors"]
+
+
+def test_transition_score_records_retries_sanitized_input_on_content_filter():
+    model = parse_transition_bayes_model(make_transition_payload())
+    generator = StubGenerator(
+        [
+            RuntimeError("content_filter: prompt triggered content management policy"),
+            json.dumps({"observation": "followup", "score": 0.9, "reason": "安全化後に深める応答と判定"}, ensure_ascii=False),
+        ]
+    )
+    records = [
+        {
+            "conversation_id": "c1",
+            "turn_index": 1,
+            "prompt": "speaker_a: How old are you?\nspeaker_b: Nine.",
+            "response": "I will be ten in April.",
+        },
+    ]
+
+    scored = score_records(records, bayes_model=model, generator=generator, model="gpt-5.4", max_output_tokens=256)
+
+    assert len(generator.calls) == 2
+    assert "How old are you" in generator.calls[0]["input_text"]
+    assert "<neutral_detail>" in generator.calls[1]["input_text"]
+    assert scored[0]["observation"] == "followup"
+    assert scored[0]["llm_retry"] == "content_filter_sanitized_retry"
+    assert "llm_error" not in scored[0]
+
+
+def test_transition_score_records_falls_back_only_when_sanitized_retry_is_filtered():
+    model = parse_transition_bayes_model(make_transition_payload())
+    generator = StubGenerator(
+        [
+            RuntimeError("content_filter: prompt triggered content management policy"),
+            RuntimeError("content_filter: sanitized prompt triggered content management policy"),
+        ]
+    )
+    records = [
+        {
+            "conversation_id": "c1",
+            "turn_index": 1,
+            "prompt": "speaker_a: How old are you?",
+            "response": "Nine.",
+        },
+    ]
+
+    scored = score_records(records, bayes_model=model, generator=generator, model="gpt-5.4", max_output_tokens=256)
+
+    assert len(generator.calls) == 2
+    assert scored[0]["observation"] == "generic_shift"
+    assert scored[0]["observation_score"] == 0.0
+    assert scored[0]["llm_error"].startswith("content_filter:")
