@@ -28,9 +28,17 @@ logs/
 datasets/
 data/
 artifacts/bayes_models/
+artifacts/evaluations/
+artifacts/run_logs/
 artifacts/scored_dialogues/
 artifacts/datasets/
 artifacts/training_runs/
+*.safetensors
+*.bin
+*.pt
+*.pth
+wandb/
+outputs/
 
 # データセット内の一時・バックアップファイル
 datasets/**/*.stream~

@@ -173,16 +173,21 @@ GPUがない環境では、Qwenの実学習は行わず、`tools/train_qwen35_dp
 
 ## 作業ルール
 
-- このリポジトリの保存先は `https://github.com/ryunosuke-ai/Ryunosuke_Master.git`
+- このリポジトリの保存先は `git@github.com:ryunosuke-ai/Ryunosuke_Master2.git`
+- 旧リポジトリは `old-origin` として残し、新しい `origin` へpushする
 - 通常の作業ブランチは `master`
-- 変更後は関連テストを実行し、結果を報告する
+- 変更後は関連テストを実行し、commitし、新しい `origin` へpushする
+- push前には必ず `git status --short`, `git diff --stat`, `git diff --cached --stat` を確認する
+- `git add .` は使わず、stageは明示ファイルのみ行う
+- force pushは禁止。push拒否や認証エラーが出たら停止して報告する
 - コミットメッセージは次の形式にする
   - `feat: ○○機能を追加`
   - `fix: ○○のバグを修正`
   - `refactor: ○○をリファクタリング`
   - `docs: ○○のドキュメントを更新`
   - `chore: ○○`
-- `.env`、APIキー、個人情報を含むログ、大容量データ、学習済みモデル成果物はコミット禁止
+- `.env`、APIキー、個人情報を含むログ、大容量データ、学習済みモデル成果物、生JSONLはコミット・push禁止
+- `logs/`, `artifacts/run_logs/`, `artifacts/training_runs/`, `artifacts/datasets/`, `artifacts/evaluations/`, `artifacts/bayes_models/`, `hf_cache/` は原則pushしない。発表用評価結果は軽量な `summary.json` と `manifest.json` だけを `docs/results/` へコピーして管理する
 
 ## 旧Masterとの関係
 

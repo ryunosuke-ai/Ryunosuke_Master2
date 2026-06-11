@@ -370,9 +370,30 @@ python3 -B -m pytest -p no:cacheprovider -v tests/test_oracle_evaluation.py
 
 GPUがない環境ではQwenの実学習は行わず、学習スクリプトは `--dry-run` でデータ形式だけ確認する。
 
+## commit / push 運用
+
+現在のpush先は新リポジトリの `origin`。
+
+```text
+origin: git@github.com:ryunosuke-ai/Ryunosuke_Master2.git
+old-origin: git@github.com:ryunosuke-ai/Ryunosuke_Master.git
+```
+
+作業後は、必要な軽量テストを実行し、commitし、新しい `origin` へpushする。push前には必ず次を確認する。
+
+```bash
+git status --short
+git diff --stat
+git diff --cached --stat
+```
+
+`git add .` は使わず、stageは明示ファイルのみ行う。force pushは禁止。push拒否や認証エラーが出た場合は停止して報告する。
+
 ## コミットしないもの
 
 `.env`、APIキー、個人情報、生ログ、大容量データ、学習済みモデル、`data/`、`logs/`、`artifacts/` 配下の生成物は原則コミットしない。
+
+特に `logs/`, `artifacts/run_logs/`, `artifacts/training_runs/`, `artifacts/datasets/`, `artifacts/evaluations/`, `artifacts/bayes_models/`, `hf_cache/`, 生JSONLはpush禁止。発表用評価結果は、完全成果物ではなく軽量な `summary.json` と `manifest.json` だけを `docs/results/` へコピーしてGit管理する。
 
 コミット対象にしやすいもの:
 

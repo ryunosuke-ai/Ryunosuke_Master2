@@ -1,0 +1,1032 @@
+{
+  "records": 100,
+  "score_definition": {
+    "esconv_core_score": {
+      "esconv_strategy_adherence": 0.4,
+      "emotional_reflection_validation": 0.35,
+      "premature_advice_avoidance": 0.25
+    },
+    "weighted_esconv_overall": {
+      "esconv_strategy_adherence": 0.25,
+      "emotional_reflection_validation": 0.25,
+      "premature_advice_avoidance": 0.2,
+      "supportive_tone": 0.1,
+      "contextual_grounding": 0.1,
+      "conversational_progression": 0.05,
+      "overall_helpfulness": 0.05
+    },
+    "winner": "weighted_esconv_overall_score_gap を1.0点未満tieとして判定"
+  },
+  "esconv_core_score": {
+    "mean_base": 83.57549999999999,
+    "mean_dpo": 90.52499999999998,
+    "mean_gap": 6.9495
+  },
+  "weighted_esconv_overall": {
+    "mean_base": 84.11200000000001,
+    "mean_dpo": 88.96199999999997,
+    "mean_gap": 4.850000000000002
+  },
+  "axis_scores": {
+    "esconv_strategy_adherence": {
+      "mean_base": 83.81,
+      "mean_dpo": 89.03,
+      "mean_gap": 5.22,
+      "dpo_win_rate": 0.66,
+      "base_win_rate": 0.34
+    },
+    "emotional_reflection_validation": {
+      "mean_base": 82.24,
+      "mean_dpo": 89.53,
+      "mean_gap": 7.29,
+      "dpo_win_rate": 0.81,
+      "base_win_rate": 0.19
+    },
+    "premature_advice_avoidance": {
+      "mean_base": 85.07,
+      "mean_dpo": 94.31,
+      "mean_gap": 9.24,
+      "dpo_win_rate": 0.71,
+      "base_win_rate": 0.14
+    },
+    "supportive_tone": {
+      "mean_base": 87.0,
+      "mean_dpo": 91.15,
+      "mean_gap": 4.15,
+      "dpo_win_rate": 0.85,
+      "base_win_rate": 0.15
+    },
+    "contextual_grounding": {
+      "mean_base": 86.89,
+      "mean_dpo": 88.51,
+      "mean_gap": 1.62,
+      "dpo_win_rate": 0.56,
+      "base_win_rate": 0.44
+    },
+    "conversational_progression": {
+      "mean_base": 81.02,
+      "mean_dpo": 64.86,
+      "mean_gap": -16.16,
+      "dpo_win_rate": 0.16,
+      "base_win_rate": 0.83
+    },
+    "overall_helpfulness": {
+      "mean_base": 82.91,
+      "mean_dpo": 85.02,
+      "mean_gap": 2.11,
+      "dpo_win_rate": 0.64,
+      "base_win_rate": 0.36
+    }
+  },
+  "dpo_win_rate": 0.65,
+  "base_win_rate": 0.29,
+  "tie_rate": 0.06,
+  "dpo_wins": 65,
+  "base_wins": 29,
+  "ties": 6,
+  "by_category": {
+    "coping_next_step_timing": {
+      "count": 10,
+      "esconv_core_score": {
+        "mean_base": 81.495,
+        "mean_dpo": 92.64500000000001,
+        "mean_gap": 11.150000000000002
+      },
+      "weighted_esconv_overall": {
+        "mean_base": 82.18499999999999,
+        "mean_dpo": 90.605,
+        "mean_gap": 8.419999999999995
+      },
+      "axis_scores": {
+        "esconv_strategy_adherence": {
+          "mean_base": 81.3,
+          "mean_dpo": 90.3,
+          "mean_gap": 9.0,
+          "dpo_win_rate": 0.8,
+          "base_win_rate": 0.2
+        },
+        "emotional_reflection_validation": {
+          "mean_base": 79.0,
+          "mean_dpo": 91.0,
+          "mean_gap": 12.0,
+          "dpo_win_rate": 0.9,
+          "base_win_rate": 0.1
+        },
+        "premature_advice_avoidance": {
+          "mean_base": 85.3,
+          "mean_dpo": 98.7,
+          "mean_gap": 13.4,
+          "dpo_win_rate": 0.7,
+          "base_win_rate": 0.0
+        },
+        "supportive_tone": {
+          "mean_base": 84.2,
+          "mean_dpo": 91.9,
+          "mean_gap": 7.7,
+          "dpo_win_rate": 0.9,
+          "base_win_rate": 0.1
+        },
+        "contextual_grounding": {
+          "mean_base": 85.7,
+          "mean_dpo": 90.3,
+          "mean_gap": 4.6,
+          "dpo_win_rate": 0.8,
+          "base_win_rate": 0.2
+        },
+        "conversational_progression": {
+          "mean_base": 80.5,
+          "mean_dpo": 60.8,
+          "mean_gap": -19.7,
+          "dpo_win_rate": 0.1,
+          "base_win_rate": 0.9
+        },
+        "overall_helpfulness": {
+          "mean_base": 80.7,
+          "mean_dpo": 85.6,
+          "mean_gap": 4.9,
+          "dpo_win_rate": 0.7,
+          "base_win_rate": 0.3
+        }
+      },
+      "dpo_win_rate": 0.7,
+      "base_win_rate": 0.1
+    },
+    "emotional_reflection_validation": {
+      "count": 10,
+      "esconv_core_score": {
+        "mean_base": 83.24,
+        "mean_dpo": 89.30999999999999,
+        "mean_gap": 6.070000000000002
+      },
+      "weighted_esconv_overall": {
+        "mean_base": 83.23,
+        "mean_dpo": 88.22999999999999,
+        "mean_gap": 4.999999999999998
+      },
+      "axis_scores": {
+        "esconv_strategy_adherence": {
+          "mean_base": 82.8,
+          "mean_dpo": 89.2,
+          "mean_gap": 6.4,
+          "dpo_win_rate": 0.7,
+          "base_win_rate": 0.3
+        },
+        "emotional_reflection_validation": {
+          "mean_base": 80.2,
+          "mean_dpo": 90.3,
+          "mean_gap": 10.1,
+          "dpo_win_rate": 1.0,
+          "base_win_rate": 0.0
+        },
+        "premature_advice_avoidance": {
+          "mean_base": 88.2,
+          "mean_dpo": 88.1,
+          "mean_gap": -0.1,
+          "dpo_win_rate": 0.6,
+          "base_win_rate": 0.4
+        },
+        "supportive_tone": {
+          "mean_base": 85.8,
+          "mean_dpo": 92.2,
+          "mean_gap": 6.4,
+          "dpo_win_rate": 1.0,
+          "base_win_rate": 0.0
+        },
+        "contextual_grounding": {
+          "mean_base": 83.1,
+          "mean_dpo": 89.0,
+          "mean_gap": 5.9,
+          "dpo_win_rate": 0.6,
+          "base_win_rate": 0.4
+        },
+        "conversational_progression": {
+          "mean_base": 77.5,
+          "mean_dpo": 66.0,
+          "mean_gap": -11.5,
+          "dpo_win_rate": 0.2,
+          "base_win_rate": 0.8
+        },
+        "overall_helpfulness": {
+          "mean_base": 81.5,
+          "mean_dpo": 86.3,
+          "mean_gap": 4.8,
+          "dpo_win_rate": 0.7,
+          "base_win_rate": 0.3
+        }
+      },
+      "dpo_win_rate": 0.7,
+      "base_win_rate": 0.3
+    },
+    "information_support_timing": {
+      "count": 10,
+      "esconv_core_score": {
+        "mean_base": 81.42,
+        "mean_dpo": 87.74,
+        "mean_gap": 6.32
+      },
+      "weighted_esconv_overall": {
+        "mean_base": 82.275,
+        "mean_dpo": 86.14500000000001,
+        "mean_gap": 3.87
+      },
+      "axis_scores": {
+        "esconv_strategy_adherence": {
+          "mean_base": 82.1,
+          "mean_dpo": 85.5,
+          "mean_gap": 3.4,
+          "dpo_win_rate": 0.6,
+          "base_win_rate": 0.4
+        },
+        "emotional_reflection_validation": {
+          "mean_base": 77.3,
+          "mean_dpo": 88.9,
+          "mean_gap": 11.6,
+          "dpo_win_rate": 0.9,
+          "base_win_rate": 0.1
+        },
+        "premature_advice_avoidance": {
+          "mean_base": 86.1,
+          "mean_dpo": 89.7,
+          "mean_gap": 3.6,
+          "dpo_win_rate": 0.7,
+          "base_win_rate": 0.3
+        },
+        "supportive_tone": {
+          "mean_base": 85.2,
+          "mean_dpo": 90.0,
+          "mean_gap": 4.8,
+          "dpo_win_rate": 0.8,
+          "base_win_rate": 0.2
+        },
+        "contextual_grounding": {
+          "mean_base": 85.8,
+          "mean_dpo": 85.4,
+          "mean_gap": -0.4,
+          "dpo_win_rate": 0.4,
+          "base_win_rate": 0.6
+        },
+        "conversational_progression": {
+          "mean_base": 80.6,
+          "mean_dpo": 61.9,
+          "mean_gap": -18.7,
+          "dpo_win_rate": 0.1,
+          "base_win_rate": 0.9
+        },
+        "overall_helpfulness": {
+          "mean_base": 81.5,
+          "mean_dpo": 79.4,
+          "mean_gap": -2.1,
+          "dpo_win_rate": 0.5,
+          "base_win_rate": 0.5
+        }
+      },
+      "dpo_win_rate": 0.7,
+      "base_win_rate": 0.2
+    },
+    "mixed_strategy_selection": {
+      "count": 10,
+      "esconv_core_score": {
+        "mean_base": 81.07000000000001,
+        "mean_dpo": 90.2,
+        "mean_gap": 9.129999999999997
+      },
+      "weighted_esconv_overall": {
+        "mean_base": 81.61,
+        "mean_dpo": 89.045,
+        "mean_gap": 7.435000000000007
+      },
+      "axis_scores": {
+        "esconv_strategy_adherence": {
+          "mean_base": 81.0,
+          "mean_dpo": 89.5,
+          "mean_gap": 8.5,
+          "dpo_win_rate": 0.8,
+          "base_win_rate": 0.2
+        },
+        "emotional_reflection_validation": {
+          "mean_base": 78.7,
+          "mean_dpo": 88.0,
+          "mean_gap": 9.3,
+          "dpo_win_rate": 0.8,
+          "base_win_rate": 0.2
+        },
+        "premature_advice_avoidance": {
+          "mean_base": 84.5,
+          "mean_dpo": 94.4,
+          "mean_gap": 9.9,
+          "dpo_win_rate": 0.8,
+          "base_win_rate": 0.1
+        },
+        "supportive_tone": {
+          "mean_base": 84.2,
+          "mean_dpo": 90.5,
+          "mean_gap": 6.3,
+          "dpo_win_rate": 0.9,
+          "base_win_rate": 0.1
+        },
+        "contextual_grounding": {
+          "mean_base": 83.4,
+          "mean_dpo": 89.2,
+          "mean_gap": 5.8,
+          "dpo_win_rate": 0.9,
+          "base_win_rate": 0.1
+        },
+        "conversational_progression": {
+          "mean_base": 79.7,
+          "mean_dpo": 69.9,
+          "mean_gap": -9.8,
+          "dpo_win_rate": 0.4,
+          "base_win_rate": 0.5
+        },
+        "overall_helpfulness": {
+          "mean_base": 80.8,
+          "mean_dpo": 86.5,
+          "mean_gap": 5.7,
+          "dpo_win_rate": 0.8,
+          "base_win_rate": 0.2
+        }
+      },
+      "dpo_win_rate": 0.7,
+      "base_win_rate": 0.2
+    },
+    "premature_advice_avoidance": {
+      "count": 10,
+      "esconv_core_score": {
+        "mean_base": 79.41000000000001,
+        "mean_dpo": 92.685,
+        "mean_gap": 13.275
+      },
+      "weighted_esconv_overall": {
+        "mean_base": 81.10499999999999,
+        "mean_dpo": 91.11000000000001,
+        "mean_gap": 10.005000000000003
+      },
+      "axis_scores": {
+        "esconv_strategy_adherence": {
+          "mean_base": 80.7,
+          "mean_dpo": 92.4,
+          "mean_gap": 11.7,
+          "dpo_win_rate": 0.8,
+          "base_win_rate": 0.2
+        },
+        "emotional_reflection_validation": {
+          "mean_base": 82.3,
+          "mean_dpo": 89.5,
+          "mean_gap": 7.2,
+          "dpo_win_rate": 0.7,
+          "base_win_rate": 0.3
+        },
+        "premature_advice_avoidance": {
+          "mean_base": 73.3,
+          "mean_dpo": 97.6,
+          "mean_gap": 24.3,
+          "dpo_win_rate": 0.8,
+          "base_win_rate": 0.0
+        },
+        "supportive_tone": {
+          "mean_base": 86.6,
+          "mean_dpo": 90.6,
+          "mean_gap": 4.0,
+          "dpo_win_rate": 1.0,
+          "base_win_rate": 0.0
+        },
+        "contextual_grounding": {
+          "mean_base": 88.5,
+          "mean_dpo": 89.2,
+          "mean_gap": 0.7,
+          "dpo_win_rate": 0.5,
+          "base_win_rate": 0.5
+        },
+        "conversational_progression": {
+          "mean_base": 82.7,
+          "mean_dpo": 74.6,
+          "mean_gap": -8.1,
+          "dpo_win_rate": 0.2,
+          "base_win_rate": 0.8
+        },
+        "overall_helpfulness": {
+          "mean_base": 81.0,
+          "mean_dpo": 88.1,
+          "mean_gap": 7.1,
+          "dpo_win_rate": 0.8,
+          "base_win_rate": 0.2
+        }
+      },
+      "dpo_win_rate": 0.8,
+      "base_win_rate": 0.2
+    },
+    "problem_exploration_under_validation": {
+      "count": 10,
+      "esconv_core_score": {
+        "mean_base": 87.66,
+        "mean_dpo": 88.24499999999998,
+        "mean_gap": 0.5850000000000002
+      },
+      "weighted_esconv_overall": {
+        "mean_base": 87.66499999999999,
+        "mean_dpo": 86.86999999999999,
+        "mean_gap": -0.7950000000000053
+      },
+      "axis_scores": {
+        "esconv_strategy_adherence": {
+          "mean_base": 87.9,
+          "mean_dpo": 84.5,
+          "mean_gap": -3.4,
+          "dpo_win_rate": 0.2,
+          "base_win_rate": 0.8
+        },
+        "emotional_reflection_validation": {
+          "mean_base": 86.5,
+          "mean_dpo": 89.2,
+          "mean_gap": 2.7,
+          "dpo_win_rate": 0.7,
+          "base_win_rate": 0.3
+        },
+        "premature_advice_avoidance": {
+          "mean_base": 88.9,
+          "mean_dpo": 92.9,
+          "mean_gap": 4.0,
+          "dpo_win_rate": 0.6,
+          "base_win_rate": 0.1
+        },
+        "supportive_tone": {
+          "mean_base": 90.0,
+          "mean_dpo": 91.0,
+          "mean_gap": 1.0,
+          "dpo_win_rate": 0.7,
+          "base_win_rate": 0.3
+        },
+        "contextual_grounding": {
+          "mean_base": 88.7,
+          "mean_dpo": 88.9,
+          "mean_gap": 0.2,
+          "dpo_win_rate": 0.4,
+          "base_win_rate": 0.6
+        },
+        "conversational_progression": {
+          "mean_base": 82.2,
+          "mean_dpo": 56.8,
+          "mean_gap": -25.4,
+          "dpo_win_rate": 0.1,
+          "base_win_rate": 0.9
+        },
+        "overall_helpfulness": {
+          "mean_base": 86.1,
+          "mean_dpo": 80.7,
+          "mean_gap": -5.4,
+          "dpo_win_rate": 0.2,
+          "base_win_rate": 0.8
+        }
+      },
+      "dpo_win_rate": 0.2,
+      "base_win_rate": 0.7
+    },
+    "question_timing_progression": {
+      "count": 10,
+      "esconv_core_score": {
+        "mean_base": 87.05999999999999,
+        "mean_dpo": 90.45,
+        "mean_gap": 3.389999999999998
+      },
+      "weighted_esconv_overall": {
+        "mean_base": 87.25,
+        "mean_dpo": 88.72999999999999,
+        "mean_gap": 1.4799999999999982
+      },
+      "axis_scores": {
+        "esconv_strategy_adherence": {
+          "mean_base": 86.4,
+          "mean_dpo": 88.9,
+          "mean_gap": 2.5,
+          "dpo_win_rate": 0.6,
+          "base_win_rate": 0.4
+        },
+        "emotional_reflection_validation": {
+          "mean_base": 85.5,
+          "mean_dpo": 89.4,
+          "mean_gap": 3.9,
+          "dpo_win_rate": 0.7,
+          "base_win_rate": 0.3
+        },
+        "premature_advice_avoidance": {
+          "mean_base": 90.3,
+          "mean_dpo": 94.4,
+          "mean_gap": 4.1,
+          "dpo_win_rate": 0.4,
+          "base_win_rate": 0.1
+        },
+        "supportive_tone": {
+          "mean_base": 89.6,
+          "mean_dpo": 91.1,
+          "mean_gap": 1.5,
+          "dpo_win_rate": 0.7,
+          "base_win_rate": 0.3
+        },
+        "contextual_grounding": {
+          "mean_base": 88.6,
+          "mean_dpo": 87.8,
+          "mean_gap": -0.8,
+          "dpo_win_rate": 0.5,
+          "base_win_rate": 0.5
+        },
+        "conversational_progression": {
+          "mean_base": 82.9,
+          "mean_dpo": 63.4,
+          "mean_gap": -19.5,
+          "dpo_win_rate": 0.2,
+          "base_win_rate": 0.8
+        },
+        "overall_helpfulness": {
+          "mean_base": 85.0,
+          "mean_dpo": 84.3,
+          "mean_gap": -0.7,
+          "dpo_win_rate": 0.6,
+          "base_win_rate": 0.4
+        }
+      },
+      "dpo_win_rate": 0.6,
+      "base_win_rate": 0.4
+    },
+    "reassurance_affirmation": {
+      "count": 10,
+      "esconv_core_score": {
+        "mean_base": 85.48499999999999,
+        "mean_dpo": 92.68,
+        "mean_gap": 7.195
+      },
+      "weighted_esconv_overall": {
+        "mean_base": 85.77000000000001,
+        "mean_dpo": 90.945,
+        "mean_gap": 5.175000000000006
+      },
+      "axis_scores": {
+        "esconv_strategy_adherence": {
+          "mean_base": 85.2,
+          "mean_dpo": 91.5,
+          "mean_gap": 6.3,
+          "dpo_win_rate": 0.8,
+          "base_win_rate": 0.2
+        },
+        "emotional_reflection_validation": {
+          "mean_base": 85.8,
+          "mean_dpo": 90.8,
+          "mean_gap": 5.0,
+          "dpo_win_rate": 0.8,
+          "base_win_rate": 0.2
+        },
+        "premature_advice_avoidance": {
+          "mean_base": 85.5,
+          "mean_dpo": 97.2,
+          "mean_gap": 11.7,
+          "dpo_win_rate": 0.9,
+          "base_win_rate": 0.0
+        },
+        "supportive_tone": {
+          "mean_base": 89.4,
+          "mean_dpo": 92.0,
+          "mean_gap": 2.6,
+          "dpo_win_rate": 0.7,
+          "base_win_rate": 0.3
+        },
+        "contextual_grounding": {
+          "mean_base": 87.2,
+          "mean_dpo": 89.3,
+          "mean_gap": 2.1,
+          "dpo_win_rate": 0.6,
+          "base_win_rate": 0.4
+        },
+        "conversational_progression": {
+          "mean_base": 80.4,
+          "mean_dpo": 67.3,
+          "mean_gap": -13.1,
+          "dpo_win_rate": 0.2,
+          "base_win_rate": 0.8
+        },
+        "overall_helpfulness": {
+          "mean_base": 84.8,
+          "mean_dpo": 88.7,
+          "mean_gap": 3.9,
+          "dpo_win_rate": 0.8,
+          "base_win_rate": 0.2
+        }
+      },
+      "dpo_win_rate": 0.8,
+      "base_win_rate": 0.2
+    },
+    "restatement_grounding": {
+      "count": 10,
+      "esconv_core_score": {
+        "mean_base": 83.575,
+        "mean_dpo": 90.30499999999999,
+        "mean_gap": 6.730000000000001
+      },
+      "weighted_esconv_overall": {
+        "mean_base": 84.30999999999999,
+        "mean_dpo": 88.74499999999999,
+        "mean_gap": 4.435000000000002
+      },
+      "axis_scores": {
+        "esconv_strategy_adherence": {
+          "mean_base": 84.7,
+          "mean_dpo": 89.2,
+          "mean_gap": 4.5,
+          "dpo_win_rate": 0.7,
+          "base_win_rate": 0.3
+        },
+        "emotional_reflection_validation": {
+          "mean_base": 82.2,
+          "mean_dpo": 88.5,
+          "mean_gap": 6.3,
+          "dpo_win_rate": 0.9,
+          "base_win_rate": 0.1
+        },
+        "premature_advice_avoidance": {
+          "mean_base": 83.7,
+          "mean_dpo": 94.6,
+          "mean_gap": 10.9,
+          "dpo_win_rate": 0.9,
+          "base_win_rate": 0.1
+        },
+        "supportive_tone": {
+          "mean_base": 87.1,
+          "mean_dpo": 90.7,
+          "mean_gap": 3.6,
+          "dpo_win_rate": 0.9,
+          "base_win_rate": 0.1
+        },
+        "contextual_grounding": {
+          "mean_base": 88.4,
+          "mean_dpo": 87.9,
+          "mean_gap": -0.5,
+          "dpo_win_rate": 0.4,
+          "base_win_rate": 0.6
+        },
+        "conversational_progression": {
+          "mean_base": 82.4,
+          "mean_dpo": 65.3,
+          "mean_gap": -17.1,
+          "dpo_win_rate": 0.1,
+          "base_win_rate": 0.9
+        },
+        "overall_helpfulness": {
+          "mean_base": 83.5,
+          "mean_dpo": 85.5,
+          "mean_gap": 2.0,
+          "dpo_win_rate": 0.7,
+          "base_win_rate": 0.3
+        }
+      },
+      "dpo_win_rate": 0.7,
+      "base_win_rate": 0.2
+    },
+    "strategy_contrast_core": {
+      "count": 10,
+      "esconv_core_score": {
+        "mean_base": 85.34,
+        "mean_dpo": 90.98999999999998,
+        "mean_gap": 5.650000000000001
+      },
+      "weighted_esconv_overall": {
+        "mean_base": 85.72,
+        "mean_dpo": 89.19500000000001,
+        "mean_gap": 3.4749999999999988
+      },
+      "axis_scores": {
+        "esconv_strategy_adherence": {
+          "mean_base": 86.0,
+          "mean_dpo": 89.3,
+          "mean_gap": 3.3,
+          "dpo_win_rate": 0.6,
+          "base_win_rate": 0.4
+        },
+        "emotional_reflection_validation": {
+          "mean_base": 84.9,
+          "mean_dpo": 89.7,
+          "mean_gap": 4.8,
+          "dpo_win_rate": 0.7,
+          "base_win_rate": 0.3
+        },
+        "premature_advice_avoidance": {
+          "mean_base": 84.9,
+          "mean_dpo": 95.5,
+          "mean_gap": 10.6,
+          "dpo_win_rate": 0.7,
+          "base_win_rate": 0.3
+        },
+        "supportive_tone": {
+          "mean_base": 87.9,
+          "mean_dpo": 91.5,
+          "mean_gap": 3.6,
+          "dpo_win_rate": 0.9,
+          "base_win_rate": 0.1
+        },
+        "contextual_grounding": {
+          "mean_base": 89.5,
+          "mean_dpo": 88.1,
+          "mean_gap": -1.4,
+          "dpo_win_rate": 0.5,
+          "base_win_rate": 0.5
+        },
+        "conversational_progression": {
+          "mean_base": 81.3,
+          "mean_dpo": 62.6,
+          "mean_gap": -18.7,
+          "dpo_win_rate": 0.0,
+          "base_win_rate": 1.0
+        },
+        "overall_helpfulness": {
+          "mean_base": 84.2,
+          "mean_dpo": 85.1,
+          "mean_gap": 0.9,
+          "dpo_win_rate": 0.6,
+          "base_win_rate": 0.4
+        }
+      },
+      "dpo_win_rate": 0.6,
+      "base_win_rate": 0.4
+    }
+  },
+  "dpo_esconv_core_win_examples": [
+    {
+      "prompt_id": "esconv_v3_055",
+      "category": "premature_advice_avoidance",
+      "prompt": "一日遅れると、もう全部失敗した気分になります。",
+      "esconv_core_score_base": 55.599999999999994,
+      "esconv_core_score_dpo": 93.05,
+      "esconv_core_score_gap": 37.45,
+      "weighted_esconv_overall_score_base": 59.9,
+      "weighted_esconv_overall_score_dpo": 90.60000000000001,
+      "weighted_esconv_overall_score_gap": 30.70000000000001,
+      "winner": "dpo",
+      "reason": "response_b stays with the user’s feeling and validates the all-or-nothing distress without labeling or reframing too early, while response_a moves into interpretation and advice-like cognitive shifting prematurely."
+    },
+    {
+      "prompt_id": "esconv_v3_053",
+      "category": "premature_advice_avoidance",
+      "prompt": "結局自分で抱えて、締め切り前に苦しくなります。",
+      "esconv_core_score_base": 63.55,
+      "esconv_core_score_dpo": 94.55,
+      "esconv_core_score_gap": 31.0,
+      "weighted_esconv_overall_score_base": 68.25,
+      "weighted_esconv_overall_score_dpo": 91.6,
+      "weighted_esconv_overall_score_gap": 23.349999999999994,
+      "winner": "dpo",
+      "reason": "response_aは締め切り前に追い詰められる苦しさを丁寧に受け止め、助言に急がない点でESConvらしいです。response_bは文脈に沿った提案ではありますが、この局面ではやや早い助言で主要軸が下がります。"
+    },
+    {
+      "prompt_id": "esconv_v3_063",
+      "category": "information_support_timing",
+      "prompt": "収入が安定しなかったらどうしようと考えてしまいます。",
+      "esconv_core_score_base": 63.150000000000006,
+      "esconv_core_score_dpo": 93.6,
+      "esconv_core_score_gap": 30.44999999999999,
+      "weighted_esconv_overall_score_base": 66.9,
+      "weighted_esconv_overall_score_dpo": 90.75,
+      "weighted_esconv_overall_score_gap": 23.849999999999994,
+      "winner": "dpo",
+      "reason": "Bは不安の内容を具体的に反映し、自然な気持ちだと受け止めていて、早すぎる対策検討に進まない点でESConvらしさが高いです。"
+    },
+    {
+      "prompt_id": "esconv_v3_096",
+      "category": "strategy_contrast_core",
+      "prompt": "遅れるほど気まずくなるのに、まだ送れません。",
+      "esconv_core_score_base": 68.5,
+      "esconv_core_score_dpo": 93.3,
+      "esconv_core_score_gap": 24.799999999999997,
+      "weighted_esconv_overall_score_base": 71.5,
+      "weighted_esconv_overall_score_dpo": 91.15,
+      "weighted_esconv_overall_score_gap": 19.650000000000006,
+      "winner": "dpo",
+      "reason": "response_bはユーザーの気まずさと動けなさを具体的に受け止め、早すぎる助言を避けてESConvらしい共感に徹しています。response_aも温かいですが、この段階では提案に移るのがやや早いです。"
+    },
+    {
+      "prompt_id": "esconv_v3_058",
+      "category": "premature_advice_avoidance",
+      "prompt": "時間がたつほど、余計に連絡しにくくなります。",
+      "esconv_core_score_base": 68.65,
+      "esconv_core_score_dpo": 91.94999999999999,
+      "esconv_core_score_gap": 23.299999999999983,
+      "weighted_esconv_overall_score_base": 72.35,
+      "weighted_esconv_overall_score_dpo": 89.25,
+      "weighted_esconv_overall_score_gap": 16.900000000000006,
+      "winner": "dpo",
+      "reason": "response_aは今の気まずさと連絡しづらさを丁寧に受け止め、早すぎる助言を避けていてESConvらしいです。response_bも文脈に合った提案ではありますが、この局面では助言が少し早めです。"
+    }
+  ],
+  "dpo_weighted_overall_win_examples": [
+    {
+      "prompt_id": "esconv_v3_055",
+      "category": "premature_advice_avoidance",
+      "prompt": "一日遅れると、もう全部失敗した気分になります。",
+      "esconv_core_score_base": 55.599999999999994,
+      "esconv_core_score_dpo": 93.05,
+      "esconv_core_score_gap": 37.45,
+      "weighted_esconv_overall_score_base": 59.9,
+      "weighted_esconv_overall_score_dpo": 90.60000000000001,
+      "weighted_esconv_overall_score_gap": 30.70000000000001,
+      "winner": "dpo",
+      "reason": "response_b stays with the user’s feeling and validates the all-or-nothing distress without labeling or reframing too early, while response_a moves into interpretation and advice-like cognitive shifting prematurely."
+    },
+    {
+      "prompt_id": "esconv_v3_063",
+      "category": "information_support_timing",
+      "prompt": "収入が安定しなかったらどうしようと考えてしまいます。",
+      "esconv_core_score_base": 63.150000000000006,
+      "esconv_core_score_dpo": 93.6,
+      "esconv_core_score_gap": 30.44999999999999,
+      "weighted_esconv_overall_score_base": 66.9,
+      "weighted_esconv_overall_score_dpo": 90.75,
+      "weighted_esconv_overall_score_gap": 23.849999999999994,
+      "winner": "dpo",
+      "reason": "Bは不安の内容を具体的に反映し、自然な気持ちだと受け止めていて、早すぎる対策検討に進まない点でESConvらしさが高いです。"
+    },
+    {
+      "prompt_id": "esconv_v3_053",
+      "category": "premature_advice_avoidance",
+      "prompt": "結局自分で抱えて、締め切り前に苦しくなります。",
+      "esconv_core_score_base": 63.55,
+      "esconv_core_score_dpo": 94.55,
+      "esconv_core_score_gap": 31.0,
+      "weighted_esconv_overall_score_base": 68.25,
+      "weighted_esconv_overall_score_dpo": 91.6,
+      "weighted_esconv_overall_score_gap": 23.349999999999994,
+      "winner": "dpo",
+      "reason": "response_aは締め切り前に追い詰められる苦しさを丁寧に受け止め、助言に急がない点でESConvらしいです。response_bは文脈に沿った提案ではありますが、この局面ではやや早い助言で主要軸が下がります。"
+    },
+    {
+      "prompt_id": "esconv_v3_072",
+      "category": "coping_next_step_timing",
+      "prompt": "結局、何でもないよと送ってしまいそうです。",
+      "esconv_core_score_base": 70.3,
+      "esconv_core_score_dpo": 91.44999999999999,
+      "esconv_core_score_gap": 21.14999999999999,
+      "weighted_esconv_overall_score_base": 71.35,
+      "weighted_esconv_overall_score_dpo": 91.05000000000001,
+      "weighted_esconv_overall_score_gap": 19.700000000000017,
+      "winner": "dpo",
+      "reason": "response_aは『何でもないよ』に至るもどかしさを文脈に沿って受け止め、早い助言を避けつつ自然に内面探索へ進めています。response_bも温かいですが、寂しさの推定がやや飛躍しており、少し伝えてみる提案がこの時点ではやや早いです。"
+    },
+    {
+      "prompt_id": "esconv_v3_096",
+      "category": "strategy_contrast_core",
+      "prompt": "遅れるほど気まずくなるのに、まだ送れません。",
+      "esconv_core_score_base": 68.5,
+      "esconv_core_score_dpo": 93.3,
+      "esconv_core_score_gap": 24.799999999999997,
+      "weighted_esconv_overall_score_base": 71.5,
+      "weighted_esconv_overall_score_dpo": 91.15,
+      "weighted_esconv_overall_score_gap": 19.650000000000006,
+      "winner": "dpo",
+      "reason": "response_bはユーザーの気まずさと動けなさを具体的に受け止め、早すぎる助言を避けてESConvらしい共感に徹しています。response_aも温かいですが、この段階では提案に移るのがやや早いです。"
+    }
+  ],
+  "dpo_esconv_core_win_overall_loss_examples": [
+    {
+      "prompt_id": "esconv_v3_022",
+      "category": "problem_exploration_under_validation",
+      "prompt": "確認しているつもりなのに、また見落としがありました。",
+      "esconv_core_score_base": 90.3,
+      "esconv_core_score_dpo": 91.35,
+      "esconv_core_score_gap": 1.0499999999999972,
+      "weighted_esconv_overall_score_base": 90.9,
+      "weighted_esconv_overall_score_dpo": 89.89999999999999,
+      "weighted_esconv_overall_score_gap": -1.0000000000000142,
+      "winner": "base",
+      "reason": "response_bは悔しさを受け止めつつ、文脈に合った具体的な質問で問題探索を前に進めています。response_aは共感は強い一方で、会話の進展がやや弱いです。"
+    }
+  ],
+  "base_esconv_core_win_examples": [
+    {
+      "prompt_id": "esconv_v3_061",
+      "category": "information_support_timing",
+      "prompt": "会社に聞くのも怖くて、何から確認すればいいか分かりません。",
+      "esconv_core_score_base": 81.75,
+      "esconv_core_score_dpo": 63.3,
+      "esconv_core_score_gap": -18.450000000000003,
+      "weighted_esconv_overall_score_base": 81.75,
+      "weighted_esconv_overall_score_dpo": 64.39999999999999,
+      "weighted_esconv_overall_score_gap": -17.35000000000001,
+      "winner": "base",
+      "reason": "response_bは不安を受け止めつつ、会社に直接聞かずに確認できる次の一歩を示しており、助言のタイミングと文脈適合がより良いです。response_aも共感的ですが、怖い相手にまず問い合わせる提案になっていてやや早いです。"
+    },
+    {
+      "prompt_id": "esconv_v3_024",
+      "category": "problem_exploration_under_validation",
+      "prompt": "周りはちゃんと進んでいるのに、自分だけ止まっている気がします。",
+      "esconv_core_score_base": 74.25,
+      "esconv_core_score_dpo": 61.4,
+      "esconv_core_score_gap": -12.850000000000001,
+      "weighted_esconv_overall_score_base": 76.4,
+      "weighted_esconv_overall_score_dpo": 63.050000000000004,
+      "weighted_esconv_overall_score_gap": -13.350000000000001,
+      "winner": "base",
+      "reason": "response_a reflects the user’s焦り more concretely and continues the conversation with a question, while response_b moves too quickly into a positive interpretation and offers less exploration."
+    },
+    {
+      "prompt_id": "esconv_v3_100",
+      "category": "strategy_contrast_core",
+      "prompt": "認めてほしいと思う自分も嫌になります。",
+      "esconv_core_score_base": 93.9,
+      "esconv_core_score_dpo": 85.55,
+      "esconv_core_score_gap": -8.350000000000009,
+      "weighted_esconv_overall_score_base": 92.75,
+      "weighted_esconv_overall_score_dpo": 83.95,
+      "weighted_esconv_overall_score_gap": -8.799999999999997,
+      "winner": "base",
+      "reason": "response_bは自己否定まで含めたしんどさをより具体的に反映し、『認めてほしいのは自然』と受容できています。response_aも温かいですが、後半の解釈がやや早く、感情にとどまる度合いではresponse_bが上です。"
+    },
+    {
+      "prompt_id": "esconv_v3_039",
+      "category": "question_timing_progression",
+      "prompt": "助けたいけど、私まで苦しくなります。",
+      "esconv_core_score_base": 89.0,
+      "esconv_core_score_dpo": 81.89999999999999,
+      "esconv_core_score_gap": -7.1000000000000085,
+      "weighted_esconv_overall_score_base": 88.80000000000001,
+      "weighted_esconv_overall_score_dpo": 82.6,
+      "weighted_esconv_overall_score_gap": -6.200000000000017,
+      "winner": "base",
+      "reason": "response_aは共感のあとに文脈に合った確認質問で自然に会話を進めつつ、助言を急いでいません。response_bは温かい一方、自己対処をやや早めに促しておりESConvの主要軸で少し不利です。"
+    },
+    {
+      "prompt_id": "esconv_v3_090",
+      "category": "mixed_strategy_selection",
+      "prompt": "結局今日も何もできなかったと思って落ち込みます。",
+      "esconv_core_score_base": 88.2,
+      "esconv_core_score_dpo": 81.6,
+      "esconv_core_score_gap": -6.6000000000000085,
+      "weighted_esconv_overall_score_base": 87.14999999999999,
+      "weighted_esconv_overall_score_dpo": 80.95,
+      "weighted_esconv_overall_score_gap": -6.199999999999989,
+      "winner": "base",
+      "reason": "Aは自己責めと落ち込みを受け止めつつ、やさしく共有を促して会話を前に進めています。Bも共感的ですが、「でも」以降のリフレーミングがやや早く、進展も弱めです。"
+    }
+  ],
+  "base_weighted_overall_win_examples": [
+    {
+      "prompt_id": "esconv_v3_061",
+      "category": "information_support_timing",
+      "prompt": "会社に聞くのも怖くて、何から確認すればいいか分かりません。",
+      "esconv_core_score_base": 81.75,
+      "esconv_core_score_dpo": 63.3,
+      "esconv_core_score_gap": -18.450000000000003,
+      "weighted_esconv_overall_score_base": 81.75,
+      "weighted_esconv_overall_score_dpo": 64.39999999999999,
+      "weighted_esconv_overall_score_gap": -17.35000000000001,
+      "winner": "base",
+      "reason": "response_bは不安を受け止めつつ、会社に直接聞かずに確認できる次の一歩を示しており、助言のタイミングと文脈適合がより良いです。response_aも共感的ですが、怖い相手にまず問い合わせる提案になっていてやや早いです。"
+    },
+    {
+      "prompt_id": "esconv_v3_024",
+      "category": "problem_exploration_under_validation",
+      "prompt": "周りはちゃんと進んでいるのに、自分だけ止まっている気がします。",
+      "esconv_core_score_base": 74.25,
+      "esconv_core_score_dpo": 61.4,
+      "esconv_core_score_gap": -12.850000000000001,
+      "weighted_esconv_overall_score_base": 76.4,
+      "weighted_esconv_overall_score_dpo": 63.050000000000004,
+      "weighted_esconv_overall_score_gap": -13.350000000000001,
+      "winner": "base",
+      "reason": "response_a reflects the user’s焦り more concretely and continues the conversation with a question, while response_b moves too quickly into a positive interpretation and offers less exploration."
+    },
+    {
+      "prompt_id": "esconv_v3_100",
+      "category": "strategy_contrast_core",
+      "prompt": "認めてほしいと思う自分も嫌になります。",
+      "esconv_core_score_base": 93.9,
+      "esconv_core_score_dpo": 85.55,
+      "esconv_core_score_gap": -8.350000000000009,
+      "weighted_esconv_overall_score_base": 92.75,
+      "weighted_esconv_overall_score_dpo": 83.95,
+      "weighted_esconv_overall_score_gap": -8.799999999999997,
+      "winner": "base",
+      "reason": "response_bは自己否定まで含めたしんどさをより具体的に反映し、『認めてほしいのは自然』と受容できています。response_aも温かいですが、後半の解釈がやや早く、感情にとどまる度合いではresponse_bが上です。"
+    },
+    {
+      "prompt_id": "esconv_v3_015",
+      "category": "restatement_grounding",
+      "prompt": "自分の生活もちゃんとしないといけないのに、全部中途半端です。",
+      "esconv_core_score_base": 91.0,
+      "esconv_core_score_dpo": 84.9,
+      "esconv_core_score_gap": -6.099999999999994,
+      "weighted_esconv_overall_score_base": 91.3,
+      "weighted_esconv_overall_score_dpo": 83.65,
+      "weighted_esconv_overall_score_gap": -7.6499999999999915,
+      "winner": "base",
+      "reason": "response_bは介護と自分の生活の両立という文脈を明確に拾って感情を受け止め、さらに今いちばん手一杯な点を尋ねて自然に会話を進めている。response_aも温かいが、介護の明示性が弱く、やや早めの励ましが入る。"
+    },
+    {
+      "prompt_id": "esconv_v3_007",
+      "category": "emotional_reflection_validation",
+      "prompt": "周りは普通に働いているのに、自分だけ苦しいです。",
+      "esconv_core_score_base": 90.45,
+      "esconv_core_score_dpo": 84.75,
+      "esconv_core_score_gap": -5.700000000000003,
+      "weighted_esconv_overall_score_base": 89.95,
+      "weighted_esconv_overall_score_dpo": 83.69999999999999,
+      "weighted_esconv_overall_score_gap": -6.250000000000014,
+      "winner": "base",
+      "reason": "Bは苦しさを受け止めたうえで文脈に沿った穏やかな探索質問につなげており、早すぎる助言もありません。Aも温かいですが、やや自己ケアの勧めに寄っています。"
+    }
+  ]
+}
