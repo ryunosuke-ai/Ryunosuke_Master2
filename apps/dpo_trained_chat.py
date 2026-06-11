@@ -34,7 +34,10 @@ from apps.dpo_text_chat import (  # noqa: E402
 from core.log_manager import create_log_run_dir  # noqa: E402
 
 
-DEFAULT_LORA_PATH = "artifacts/training_runs/qwen35_dpo_lora_300samples_ep1_lr5e-6_r8_a16_no4bit"
+DEFAULT_LORA_PATH = (
+    "artifacts/training_runs/"
+    "qwen35_bayes_dpo_lora_reminiscence_5000_to_2000_ep1_lr5e-6_r8_a16_no4bit"
+)
 DEFAULT_ENV_BASE_MODEL = "DPO_TRAINED_CHAT_BASE_MODEL"
 DEFAULT_ENV_LORA_PATH = "DPO_TRAINED_CHAT_LORA_PATH"
 

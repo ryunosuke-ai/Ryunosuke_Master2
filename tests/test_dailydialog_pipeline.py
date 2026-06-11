@@ -6,13 +6,20 @@ from pathlib import Path
 from core.transition_bayes_model import parse_transition_bayes_model
 from tools.audit_dpo_preferences import audit_records, build_audit_instructions, parse_audit_payload
 from tools.compare_scoring_models import compare_scored_records, spearman_rank_correlation, top_k_overlap
-from tools.extract_high_posterior_dialogues import select_high_posterior_records
+from tools.extract_high_posterior_dialogues import derive_selection_labels_from_model, select_high_posterior_records
 from tools.prepare_dailydialog_for_scoring import build_context_prompt, convert_dailydialog_rows
+from tools.score_dialogue_with_transition_bayes_model import (
+    build_transition_scoring_instructions,
+    score_single_record,
+)
+from tools.stream_dpo_from_scored import StreamDpoConfig, read_jsonl_if_exists, run_stream_once
 from tools.translate_and_generate_dpo import (
     PROMPT_TEMPLATE_VERSION,
     build_dpo_records,
     build_translation_rejected_instructions,
     build_translation_rejected_input,
+    passes_thresholds,
+    read_existing_skipped_records,
     validate_translation_payload,
 )
 
@@ -114,6 +121,25 @@ def test_prepare_dailydialog_builds_context_records():
     assert records[0]["response"] == "Hello."
     assert records[2]["prompt"] == "speaker_b: Hello.\nspeaker_a: I visited Kyoto long ago."
     assert records[2]["metadata"]["context_turns"] == 2
+
+
+def test_prepare_dailydialog_can_start_from_dialogue_offset():
+    rows = [
+        {"dialog": ["a0", "b0"]},
+        {"dialog": ["a1", "b1", "a1-2"]},
+        {"dialog": ["a2", "b2"]},
+    ]
+
+    records = convert_dailydialog_rows(
+        rows,
+        split="train",
+        start_dialogue=1,
+        max_dialogues=1,
+        max_context_turns=2,
+    )
+
+    assert {record["conversation_id"] for record in records} == {"train_000001"}
+    assert len(records) == 2
 
 
 def test_prepare_dailydialog_accepts_convlab_turns_format():
@@ -243,6 +269,44 @@ def test_select_high_posterior_records_limits_per_dialogue():
     assert [record["turn_index"] for record in selected] == [1, 1]
 
 
+def test_derive_selection_labels_from_transition_model():
+    model = parse_transition_bayes_model(make_transition_payload())
+
+    labels = derive_selection_labels_from_model(model)
+
+    assert labels["prefer_states"] == "deepening"
+    assert labels["exclude_states"] == "off_style"
+    assert "followup" in labels["prefer_observations"]
+    assert "generic_shift" in labels["exclude_observations"]
+
+
+def test_score_single_record_falls_back_on_json_error():
+    model = parse_transition_bayes_model(make_transition_payload())
+    generator = StubGenerator(["JSONではない応答"])
+    record = {
+        "conversation_id": "c1",
+        "turn_index": 1,
+        "prompt": "speaker_a: I went to Kyoto.",
+        "response": "Nice.",
+    }
+
+    result = score_single_record(
+        record,
+        bayes_model=model,
+        generator=generator,
+        model="gpt-5.4",
+        max_output_tokens=512,
+        instructions=build_transition_scoring_instructions(model),
+        prior_distribution=None,
+        progress_label="[TEST] scoring",
+        fallback_on_errors=True,
+    )
+
+    assert result["observation"] == "generic_shift"
+    assert result["observation_score"] == 0.0
+    assert "ValueError" in result["llm_error"]
+
+
 def test_validate_translation_payload_requires_candidates():
     payload = {
         "translated_prompt": "昔の旅行の話ですね。",
@@ -282,6 +346,18 @@ def test_translation_rejected_prompt_controls_natural_low_score_candidates():
     assert "過去の経験" in instructions
     assert "思い出の情景" in instructions
     assert "昔の経験や情景を深めない" in instructions
+
+
+def test_translation_rejected_prompt_has_esconv_support_preset():
+    model = parse_transition_bayes_model(make_transition_payload())
+
+    instructions = build_translation_rejected_instructions(model, style_preset="esconv_support")
+
+    assert "style_preset: esconv_support" in instructions
+    assert "支援的対話" in instructions
+    assert "感情の受け止め" in instructions
+    assert "早すぎる助言" in instructions
+    assert "思い出の情景" not in instructions
 
 
 def test_build_dpo_records_keeps_research_tracking_top_level_keys(tmp_path: Path):
@@ -342,6 +418,11 @@ def test_build_dpo_records_keeps_research_tracking_top_level_keys(tmp_path: Path
     assert len(records) == 1
     record = records[0]
     assert record["source_dataset"] == "DailyDialog"
+    assert record["prompt"].startswith("以下の会話の次のAI返答を生成してください。")
+    assert "User: 昔、京都に行ったことがあります。" in record["prompt"]
+    assert record["prompt"].endswith("\n\nAI:")
+    assert record["raw_translated_prompt"] == "speaker_a: 昔、京都に行ったことがあります。"
+    assert record["dpo_prompt_template_version"] == "dpo_user_ai_instruction.v1"
     assert record["history_turns"] == 2
     assert record["model_used_for_scoring"] == "gpt-5.4"
     assert record["model_used_for_translation"] == "gpt-5.4"
@@ -354,7 +435,200 @@ def test_build_dpo_records_keeps_research_tracking_top_level_keys(tmp_path: Path
     assert record["rejected"] == "そうなんですね。旅行は楽しいですよね。"
 
 
-def test_build_dpo_records_skips_content_filter_generation(tmp_path: Path):
+def test_build_dpo_records_saves_and_promotes_high_rejected_skips(tmp_path: Path):
+    payload = make_transition_payload()
+    model_path = tmp_path / "transition_model.json"
+    model_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    model = parse_transition_bayes_model(payload)
+    skipped_path = tmp_path / "dpo_skipped.jsonl"
+    output_path = tmp_path / "dpo.jsonl"
+    selected_records = [
+        {
+            "conversation_id": "train_skip",
+            "turn_index": 3,
+            "prompt": "speaker_a: I went to Kyoto long ago.",
+            "response": "What scenery do you remember most?",
+            "posterior": 0.91,
+            "metadata": {
+                "source_dataset": "DailyDialog",
+                "source_split": "train",
+                "context_turns": 2,
+            },
+        }
+    ]
+    generator = StubGenerator(
+        [
+            json.dumps(
+                {
+                    "translated_prompt": "speaker_a: 昔、京都に行ったことがあります。",
+                    "translated_chosen": "その京都で、特に印象に残っている景色はありますか。",
+                    "rejected_candidates": [
+                        "京都は有名な観光地ですよね。",
+                        "そうなんですね。旅行は楽しいですよね。",
+                    ],
+                    "translation_quality_score": 0.92,
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps({"observation": "followup", "score": 0.93, "reason": "具体的に深めている"}, ensure_ascii=False),
+            json.dumps({"observation": "reflection", "score": 0.65, "reason": "受け止め中心"}, ensure_ascii=False),
+            json.dumps({"observation": "generic_shift", "score": 0.88, "reason": "一般論に寄っている"}, ensure_ascii=False),
+        ]
+    )
+
+    strict_records = build_dpo_records(
+        selected_records,
+        bayes_model=model,
+        bayes_model_path=model_path,
+        generator=generator,
+        model="gpt-5.4",
+        score_model="gpt-5.4",
+        max_output_tokens=512,
+        candidates=2,
+        min_score_gap=0.0,
+        min_chosen_posterior=0.0,
+        max_rejected_posterior=0.0,
+        seed=42,
+        max_records=None,
+        output_path=output_path,
+        skipped_output_path=skipped_path,
+    )
+
+    assert strict_records == []
+    skipped_records = read_existing_skipped_records(skipped_path)
+    assert len(skipped_records) == 1
+    assert skipped_records[0]["skip_reason"] == "high_rejected"
+    assert skipped_records[0]["score_rejected"] > 0.0
+
+    promote_generator = StubGenerator([])
+    promoted_records = build_dpo_records(
+        selected_records,
+        bayes_model=model,
+        bayes_model_path=model_path,
+        generator=promote_generator,
+        model="gpt-5.4",
+        score_model="gpt-5.4",
+        max_output_tokens=512,
+        candidates=2,
+        min_score_gap=0.0,
+        min_chosen_posterior=0.0,
+        max_rejected_posterior=1.0,
+        seed=42,
+        max_records=None,
+        output_path=output_path,
+        skipped_output_path=skipped_path,
+        existing_skipped_records=skipped_records,
+    )
+
+    assert len(promoted_records) == 1
+    assert promoted_records[0]["source_dialogue_id"] == "train_skip"
+    assert "skip_reason" not in promoted_records[0]
+    assert promote_generator.calls == []
+
+
+def test_gap_rescue_threshold_accepts_only_large_gap_candidates():
+    base = {
+        "score_chosen": 0.98,
+        "score_rejected": 0.64,
+        "score_gap": 0.34,
+    }
+
+    assert passes_thresholds(
+        base,
+        min_score_gap=0.25,
+        min_chosen_posterior=0.70,
+        max_rejected_posterior=0.55,
+        gap_rescue_max_rejected_posterior=0.65,
+        gap_rescue_min_score_gap=0.30,
+    ) == "gap_rescue"
+    assert passes_thresholds(
+        {**base, "score_rejected": 0.54, "score_gap": 0.26},
+        min_score_gap=0.25,
+        min_chosen_posterior=0.70,
+        max_rejected_posterior=0.55,
+        gap_rescue_max_rejected_posterior=0.65,
+        gap_rescue_min_score_gap=0.30,
+    ) == "strict"
+    assert passes_thresholds(
+        {**base, "score_gap": 0.20},
+        min_score_gap=0.25,
+        min_chosen_posterior=0.70,
+        max_rejected_posterior=0.55,
+        gap_rescue_max_rejected_posterior=0.65,
+        gap_rescue_min_score_gap=0.30,
+    ) is None
+    assert passes_thresholds(
+        {**base, "score_rejected": 0.70, "score_gap": 0.40},
+        min_score_gap=0.25,
+        min_chosen_posterior=0.70,
+        max_rejected_posterior=0.55,
+        gap_rescue_max_rejected_posterior=0.65,
+        gap_rescue_min_score_gap=0.30,
+    ) is None
+
+
+def test_build_dpo_records_promotes_gap_rescue_skips_without_generation(tmp_path: Path):
+    payload = make_transition_payload()
+    model_path = tmp_path / "transition_model.json"
+    model_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    model = parse_transition_bayes_model(payload)
+    skipped_record = {
+        "prompt": "以下の会話の次のAI返答を生成してください。\n\nUser: つらいです。\n\nAI:",
+        "chosen": "そのつらさを一緒に整理していきましょう。",
+        "rejected": "まずは気分転換をしてみるとよいかもしれません。",
+        "score_chosen": 0.98,
+        "score_rejected": 0.64,
+        "score_gap": 0.34,
+        "source_dataset": "DailyDialog",
+        "source_dialogue_id": "train_gap_rescue",
+        "turn_index": 4,
+        "metadata": {"source_dataset": "DailyDialog"},
+        "skip_reason": "high_rejected",
+        "acceptance_thresholds": {
+            "min_score_gap": 0.25,
+            "min_chosen_posterior": 0.70,
+            "max_rejected_posterior": 0.55,
+        },
+    }
+    selected_records = [
+        {
+            "conversation_id": "train_gap_rescue",
+            "turn_index": 4,
+            "prompt": "speaker_a: I feel bad.",
+            "response": "Let us sort it out together.",
+            "posterior": 0.91,
+        }
+    ]
+    generator = StubGenerator([])
+
+    records = build_dpo_records(
+        selected_records,
+        bayes_model=model,
+        bayes_model_path=model_path,
+        generator=generator,
+        model="gpt-5.4",
+        score_model="gpt-5.4",
+        max_output_tokens=512,
+        candidates=2,
+        min_score_gap=0.25,
+        min_chosen_posterior=0.70,
+        max_rejected_posterior=0.55,
+        seed=42,
+        max_records=None,
+        gap_rescue_max_rejected_posterior=0.65,
+        gap_rescue_min_score_gap=0.30,
+        existing_skipped_records=[skipped_record],
+    )
+
+    assert len(records) == 1
+    assert records[0]["source_dialogue_id"] == "train_gap_rescue"
+    assert records[0]["acceptance_rule"] == "gap_rescue"
+    assert records[0]["metadata"]["acceptance_rule"] == "gap_rescue"
+    assert "skip_reason" not in records[0]
+    assert generator.calls == []
+
+
+def test_build_dpo_records_retries_content_filter_generation(tmp_path: Path):
     payload = make_transition_payload()
     model_path = tmp_path / "transition_model.json"
     model_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -362,6 +636,64 @@ def test_build_dpo_records_skips_content_filter_generation(tmp_path: Path):
     generator = StubGenerator(
         [
             RuntimeError("content_filter: prompt triggered content management policy"),
+            json.dumps(
+                {
+                    "translated_prompt": "speaker_a: 昔、京都に行ったことがあります。",
+                    "translated_chosen": "その京都で、特に印象に残っている景色はありますか。",
+                    "rejected_candidates": [
+                        "京都は有名な観光地ですよね。",
+                        "そうなんですね。旅行は楽しいですよね。",
+                    ],
+                    "translation_quality_score": 0.92,
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps({"observation": "followup", "score": 0.93, "reason": "具体的に深めている"}, ensure_ascii=False),
+            json.dumps({"observation": "reflection", "score": 0.65, "reason": "受け止め中心"}, ensure_ascii=False),
+            json.dumps({"observation": "generic_shift", "score": 0.88, "reason": "一般論に寄っている"}, ensure_ascii=False),
+        ]
+    )
+    selected_records = [
+        {
+            "conversation_id": "train_cf",
+            "turn_index": 1,
+            "prompt": "speaker_a: filtered source",
+            "response": "filtered response",
+            "posterior": 0.90,
+            "metadata": {"source_dataset": "DailyDialog", "context_turns": 1},
+        },
+    ]
+
+    records = build_dpo_records(
+        selected_records,
+        bayes_model=model,
+        bayes_model_path=model_path,
+        generator=generator,
+        model="gpt-5.4",
+        score_model="gpt-5.4",
+        max_output_tokens=512,
+        candidates=2,
+        min_score_gap=0.0,
+        min_chosen_posterior=0.0,
+        max_rejected_posterior=1.0,
+        seed=42,
+        max_records=None,
+    )
+
+    assert len(records) == 1
+    assert records[0]["source_dialogue_id"] == "train_cf"
+    assert records[0]["generation_retry"] == "content_filter_sanitized_retry"
+
+
+def test_build_dpo_records_skips_content_filter_after_retry_failure(tmp_path: Path):
+    payload = make_transition_payload()
+    model_path = tmp_path / "transition_model.json"
+    model_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    model = parse_transition_bayes_model(payload)
+    generator = StubGenerator(
+        [
+            RuntimeError("content_filter: prompt triggered content management policy"),
+            RuntimeError("content_filter: sanitized input also blocked"),
             json.dumps(
                 {
                     "translated_prompt": "speaker_a: 昔、京都に行ったことがあります。",
@@ -412,6 +744,71 @@ def test_build_dpo_records_skips_content_filter_generation(tmp_path: Path):
         max_rejected_posterior=1.0,
         seed=42,
         max_records=None,
+    )
+
+    assert len(records) == 1
+    assert records[0]["source_dialogue_id"] == "train_ok"
+
+
+def test_build_dpo_records_skip_sample_errors_continues(tmp_path: Path):
+    payload = make_transition_payload()
+    model_path = tmp_path / "transition_model.json"
+    model_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    model = parse_transition_bayes_model(payload)
+    generator = StubGenerator(
+        [
+            RuntimeError("temporary API error"),
+            json.dumps(
+                {
+                    "translated_prompt": "speaker_a: 昔、京都に行ったことがあります。",
+                    "translated_chosen": "その京都で、特に印象に残っている景色はありますか。",
+                    "rejected_candidates": [
+                        "京都は有名な観光地ですよね。",
+                        "そうなんですね。旅行は楽しいですよね。",
+                    ],
+                    "translation_quality_score": 0.92,
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps({"observation": "followup", "score": 0.93, "reason": "具体的に深めている"}, ensure_ascii=False),
+            json.dumps({"observation": "reflection", "score": 0.65, "reason": "受け止め中心"}, ensure_ascii=False),
+            json.dumps({"observation": "generic_shift", "score": 0.88, "reason": "一般論に寄っている"}, ensure_ascii=False),
+        ]
+    )
+    selected_records = [
+        {
+            "conversation_id": "train_error",
+            "turn_index": 1,
+            "prompt": "speaker_a: source",
+            "response": "response",
+            "posterior": 0.90,
+            "metadata": {"source_dataset": "DailyDialog", "context_turns": 1},
+        },
+        {
+            "conversation_id": "train_ok",
+            "turn_index": 2,
+            "prompt": "speaker_a: I went to Kyoto long ago.",
+            "response": "What scenery do you remember most?",
+            "posterior": 0.91,
+            "metadata": {"source_dataset": "DailyDialog", "context_turns": 1},
+        },
+    ]
+
+    records = build_dpo_records(
+        selected_records,
+        bayes_model=model,
+        bayes_model_path=model_path,
+        generator=generator,
+        model="gpt-5.4",
+        score_model="gpt-5.4",
+        max_output_tokens=512,
+        candidates=2,
+        min_score_gap=0.0,
+        min_chosen_posterior=0.0,
+        max_rejected_posterior=1.0,
+        seed=42,
+        max_records=None,
+        skip_sample_errors=True,
     )
 
     assert len(records) == 1
@@ -480,6 +877,235 @@ def test_build_dpo_records_stops_at_target_records(tmp_path: Path):
 
     assert len(records) == 1
     assert len(generator.calls) == 4
+
+
+def test_stream_dpo_from_existing_scored_rows_generates_without_rescoring(tmp_path: Path):
+    payload = make_transition_payload()
+    model_path = tmp_path / "transition_model.json"
+    model_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    scored_path = tmp_path / "scored.jsonl"
+    selected_path = tmp_path / "selected.jsonl"
+    dpo_path = tmp_path / "dpo.jsonl"
+    ledger_path = tmp_path / "dpo.progress.jsonl"
+    scored_records = [
+        {
+            "conversation_id": "low",
+            "turn_index": 1,
+            "prompt": "speaker_a: I went to Kyoto.",
+            "response": "Nice.",
+            "posterior": 0.30,
+            "most_likely_state": "setting_sensory_detail",
+            "observation": "sensory_setting_focus",
+            "metadata": {"context_turns": 2},
+        },
+        {
+            "conversation_id": "high",
+            "turn_index": 2,
+            "prompt": "speaker_a: I went to Kyoto long ago.",
+            "response": "What scenery do you remember most?",
+            "posterior": 0.91,
+            "most_likely_state": "setting_sensory_detail",
+            "observation": "sensory_setting_focus",
+            "metadata": {"source_dataset": "DailyDialog", "context_turns": 2},
+        },
+    ]
+    scored_path.write_text(
+        "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in scored_records),
+        encoding="utf-8",
+    )
+    generator = StubGenerator(
+        [
+            json.dumps(
+                {
+                    "translated_prompt": "speaker_a: 昔、京都に行ったことがあります。",
+                    "translated_chosen": "その京都で、特に印象に残っている景色はありますか。",
+                    "rejected_candidates": [
+                        "京都は有名な観光地ですよね。",
+                        "そうなんですね。旅行は楽しいですよね。",
+                    ],
+                    "translation_quality_score": 0.92,
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps({"observation": "followup", "score": 0.93, "reason": "具体的に深めている"}, ensure_ascii=False),
+            json.dumps({"observation": "reflection", "score": 0.65, "reason": "受け止め中心"}, ensure_ascii=False),
+            json.dumps({"observation": "generic_shift", "score": 0.88, "reason": "一般論に寄っている"}, ensure_ascii=False),
+        ]
+    )
+
+    status = run_stream_once(
+        StreamDpoConfig(
+            scored_input=scored_path,
+            selected_output=selected_path,
+            dpo_output=dpo_path,
+            bayes_model_path=model_path,
+            generation_model="gpt-5.4",
+            score_model="gpt-5.4",
+            target_records=1,
+            candidates=2,
+            min_score_gap=0.0,
+            min_chosen_posterior=0.0,
+            max_rejected_posterior=1.0,
+            min_posterior=0.75,
+            min_context_turns=1,
+            per_dialogue_limit=3,
+            require_preferred=True,
+            ledger_path=ledger_path,
+        ),
+        generator=generator,
+    )
+
+    assert status == 0
+    assert len(generator.calls) == 4
+    assert [record["conversation_id"] for record in read_jsonl_if_exists(selected_path)] == ["high"]
+    dpo_records = read_jsonl_if_exists(dpo_path)
+    assert len(dpo_records) == 1
+    assert dpo_records[0]["source_dialogue_id"] == "high"
+    assert read_jsonl_if_exists(ledger_path)[0]["status"] == "accepted"
+
+
+def test_read_jsonl_if_exists_skips_invalid_existing_lines(tmp_path: Path):
+    path = tmp_path / "existing.jsonl"
+    path.write_text(
+        '{"conversation_id":"ok1","turn_index":1}\n'
+        'not json\n'
+        '{"conversation_id":"ok2","turn_index":2}\n',
+        encoding="utf-8",
+    )
+
+    records = read_jsonl_if_exists(path)
+
+    assert [record["conversation_id"] for record in records] == ["ok1", "ok2"]
+
+
+def test_stream_dpo_skips_records_already_in_ledger(tmp_path: Path):
+    payload = make_transition_payload()
+    model_path = tmp_path / "transition_model.json"
+    model_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    scored_path = tmp_path / "scored.jsonl"
+    selected_path = tmp_path / "selected.jsonl"
+    dpo_path = tmp_path / "dpo.jsonl"
+    ledger_path = tmp_path / "dpo.progress.jsonl"
+    scored_path.write_text(
+        json.dumps(
+            {
+                "conversation_id": "done",
+                "turn_index": 1,
+                "prompt": "speaker_a: I went to Kyoto.",
+                "response": "What scenery do you remember?",
+                "posterior": 0.91,
+                "most_likely_state": "setting_sensory_detail",
+                "observation": "sensory_setting_focus",
+                "metadata": {"context_turns": 2},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    ledger_path.write_text(
+        json.dumps(
+            {
+                "conversation_id": "done",
+                "turn_index": 1,
+                "status": "skipped",
+                "skip_reason": "low_chosen",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    generator = StubGenerator([])
+
+    status = run_stream_once(
+        StreamDpoConfig(
+            scored_input=scored_path,
+            selected_output=selected_path,
+            dpo_output=dpo_path,
+            bayes_model_path=model_path,
+            generation_model="gpt-5.4",
+            score_model="gpt-5.4",
+            target_records=1,
+            candidates=2,
+            min_posterior=0.75,
+            require_preferred=True,
+            ledger_path=ledger_path,
+        ),
+        generator=generator,
+    )
+
+    assert status == 0
+    assert generator.calls == []
+    assert read_jsonl_if_exists(selected_path) == []
+    assert read_jsonl_if_exists(dpo_path) == []
+
+
+def test_stream_dpo_skips_dpo_generation_exception(tmp_path: Path):
+    payload = make_transition_payload()
+    model_path = tmp_path / "transition_model.json"
+    model_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    scored_path = tmp_path / "scored.jsonl"
+    selected_path = tmp_path / "selected.jsonl"
+    dpo_path = tmp_path / "dpo.jsonl"
+    ledger_path = tmp_path / "dpo.progress.jsonl"
+    scored_path.write_text(
+        json.dumps(
+            {
+                "conversation_id": "invalid-json",
+                "turn_index": 1,
+                "prompt": "speaker_a: I went to Kyoto.",
+                "response": "What scenery do you remember?",
+                "posterior": 0.91,
+                "most_likely_state": "setting_sensory_detail",
+                "observation": "sensory_setting_focus",
+                "metadata": {"context_turns": 2},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    generator = StubGenerator(
+        [
+            json.dumps(
+                {
+                    "translated_prompt": "speaker_a: 昔、京都に行ったことがあります。",
+                    "translated_chosen": "その京都で、特に印象に残っている景色はありますか。",
+                    "rejected_candidates": [
+                        "京都は有名な観光地ですよね。",
+                        "そうなんですね。旅行は楽しいですよね。",
+                    ],
+                    "translation_quality_score": 0.92,
+                },
+                ensure_ascii=False,
+            ),
+            "JSONではない応答",
+        ]
+    )
+
+    status = run_stream_once(
+        StreamDpoConfig(
+            scored_input=scored_path,
+            selected_output=selected_path,
+            dpo_output=dpo_path,
+            bayes_model_path=model_path,
+            generation_model="gpt-5.4",
+            score_model="gpt-5.4",
+            target_records=1,
+            candidates=2,
+            min_posterior=0.75,
+            require_preferred=True,
+            ledger_path=ledger_path,
+        ),
+        generator=generator,
+    )
+
+    assert status == 0
+    assert read_jsonl_if_exists(dpo_path) == []
+    ledger_records = read_jsonl_if_exists(ledger_path)
+    assert ledger_records[0]["status"] == "skipped"
+    assert ledger_records[0]["skip_reason"] == "dpo_generation_error"
 
 
 def test_parse_audit_payload_requires_quality_thresholds():

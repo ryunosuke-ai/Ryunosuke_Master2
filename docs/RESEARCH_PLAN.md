@@ -1,5 +1,30 @@
 # Master2 研究計画
 
+## 現在の主実験
+
+現在の研究は回想法ではなく、ESConvを用いた支援対話スタイル学習実験に移行している。既存成果物名の一部に `reminiscence_5000_to_2000` が残っているが、これは過去のRUN_TAGを引き継いだESConv実験成果物であり、発表準備では削除・リネームしない。
+
+発表用の主な比較は次の3系統で行う。
+
+1. base Qwen3.5-27B
+2. ESConv Bayes-DPO LoRA
+3. Random-DPO LoRA
+
+保持すべき成果物一覧は `artifacts/ESCONV_MANIFEST.md` にまとめる。発表前は大規模成果物のパスを変更せず、名前の不一致はREADMEやmanifestで補足する。
+
+ESConv実験の中心パイプラインは次の通り。
+
+```text
+ESConv小コーパス
+  -> GPT-5.4-proで会話状態・会話戦略・状態遷移を分析
+  -> ESConv transition Bayes modelを生成
+  -> DailyDialog候補をGPT-5.4で観測ラベル評価
+  -> posteriorで高スコア応答を抽出
+  -> DailyDialog DPO + ESConv gold DPOを混合
+  -> Qwen3.5-27BをLoRA/DPO学習
+  -> base Qwen、Bayes-DPO、Random-DPOをOracle評価で比較
+```
+
 ## 目的
 
 小さい会話コーパスから、LLMで会話特徴・観測ラベル・会話戦略を分析し、そのコーパスらしさを表すベイズモデルを自動生成する。生成したベイズモデルで大きな対話データを評価し、高スコア応答と低スコア応答の組をDPOデータに変換する。最後にQwenをLoRA/DPO学習し、小さいコーパスに近い会話戦略を再現できるか検証する。

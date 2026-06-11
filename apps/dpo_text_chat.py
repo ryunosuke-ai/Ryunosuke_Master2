@@ -22,6 +22,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from core.dpo_prompting import (  # noqa: E402
+    DEFAULT_MAX_HISTORY_TURNS,
+    build_dpo_prompt as build_shared_dpo_prompt,
+)
 from core.local_llm_utils import build_qwen_generation_prompt, extract_qwen_final_text  # noqa: E402
 from core.log_manager import build_model_segment, create_log_run_dir  # noqa: E402
 
@@ -29,12 +33,14 @@ from core.log_manager import build_model_segment, create_log_run_dir  # noqa: E4
 load_dotenv()
 
 DEFAULT_BASE_MODEL_ID = "Qwen/Qwen3.5-27B"
-DEFAULT_LORA_PATH = "artifacts/training_runs/qwen35_dpo_lora_100samples_ep1_lr5e-6_r8_a16"
+DEFAULT_LORA_PATH = (
+    "artifacts/training_runs/"
+    "qwen35_bayes_dpo_lora_reminiscence_5000_to_2000_ep1_lr5e-6_r8_a16_no4bit"
+)
 DEFAULT_MAX_NEW_TOKENS = 192
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_TOP_P = 0.8
 DEFAULT_REPETITION_PENALTY = 1.0
-DEFAULT_MAX_HISTORY_TURNS = 10
 
 
 @dataclass(frozen=True)
@@ -163,31 +169,11 @@ def build_dpo_prompt(
     max_history_turns: int = DEFAULT_MAX_HISTORY_TURNS,
 ) -> str:
     """学習データと同じ形式のpromptを作る。"""
-    lines = [
-        "以下の会話の次のAI返答を生成してください。",
-        "返答は日本語で1〜2文にしてください。",
-        "ユーザーが話し続けやすいように、共感や具体語の拾いを使い、必要な時だけ質問を1つ添えてください。",
-        "",
-        "これまでの会話:",
-    ]
-    
-    """
-    lines = [
-        "以下の会話の次のAI返答を生成してください。",
-        "返答は日本語で1〜2文にしてください。共感や具体語を1つ拾い、質問する場合は1つまでにしてください。",
-        "長い説明、一般論、過剰な推測は避けてください。",
-        "",
-        "これまでの会話:",
-    ]
-    """
-    for turn in (history_turns or [])[-max_history_turns:]:
-        speaker = str(turn.get("speaker", "")).strip()
-        text = str(turn.get("text", "")).strip()
-        if speaker and text:
-            lines.append(f"{speaker}: {text}")
-    lines.append(f"User: {user_text.strip()}")
-    lines.extend(["", "AI:"])
-    return "\n".join(lines)
+    return build_shared_dpo_prompt(
+        user_text,
+        history_turns=history_turns,
+        max_history_turns=max_history_turns,
+    )
 
 
 def append_prompt_history_turn(
@@ -233,6 +219,9 @@ def cleanup_generated_text(decoded_text: str, prompt_text: str) -> str:
 
 def load_training_modules() -> dict[str, object]:
     """重い依存を遅延読み込みする。"""
+    from core.hf_kernel_compat import disable_hub_kernel_integration
+
+    disable_hub_kernel_integration()
     try:
         import torch
         from peft import PeftModel

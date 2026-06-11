@@ -72,7 +72,7 @@ def test_write_streamlit_session_header_records_compare_log_metadata(tmp_path):
     content = history_file.read_text(encoding="utf-8")
     assert "# mode: streamlit_compare" in content
     assert "# base_model_id: Qwen/Qwen3.5-27B" in content
-    assert "# lora_path: artifacts/training_runs/qwen35_dpo_lora_200samples_ep1_lr5e-6_r8_a16_no4bit" in content
+    assert f"# lora_path: {DEFAULT_LORA_PATH}" in content
     assert "# thinking: disabled" in content
     assert "# conversation_mode: independent" in content
     assert "# prompt_history: independent_per_model" in content
@@ -155,7 +155,10 @@ def test_cleanup_generated_text_removes_qwen_special_tokens():
 
 def test_default_paths():
     assert DEFAULT_BASE_MODEL_ID == "Qwen/Qwen3.5-27B"
-    assert DEFAULT_LORA_PATH == "artifacts/training_runs/qwen35_dpo_lora_200samples_ep1_lr5e-6_r8_a16_no4bit"
+    assert DEFAULT_LORA_PATH == (
+        "artifacts/training_runs/"
+        "qwen35_bayes_dpo_lora_reminiscence_5000_to_2000_ep1_lr5e-6_r8_a16_no4bit"
+    )
     assert DEFAULT_MAX_NEW_TOKENS == 192
 
 

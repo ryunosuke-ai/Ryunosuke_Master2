@@ -51,6 +51,7 @@ load_dotenv()
 
 DEFAULT_ENV_BASE_MODEL = "DPO_COMPARE_BASE_MODEL"
 DEFAULT_ENV_LORA_PATH = "DPO_COMPARE_LORA_PATH"
+DEFAULT_ENV_MAX_MEMORY = "DPO_COMPARE_MAX_MEMORY"
 
 ROLE_MARKER_PATTERN = re.compile(
     r"(?<!\w)(?:User|AI|assistant|system|ユーザー|アシスタント)\s*[:：]",
@@ -86,6 +87,24 @@ def create_run_dir_with_compare_logs(
         base_model_id=base_model_id,
         lora_path=lora_path,
     )
+
+
+def parse_max_memory_env(value: str) -> dict[int | str, str] | None:
+    """`0=46GiB,1=46GiB,cpu=0GiB` 形式のメモリ上限指定を辞書へ変換する。"""
+    value = value.strip()
+    if not value:
+        return None
+    max_memory: dict[int | str, str] = {}
+    for item in value.split(","):
+        key, separator, memory = item.partition("=")
+        if not separator:
+            raise ValueError(f"{DEFAULT_ENV_MAX_MEMORY} は `0=46GiB,1=46GiB,cpu=0GiB` の形式で指定してください。")
+        device = key.strip()
+        memory = memory.strip()
+        if not device or not memory:
+            raise ValueError(f"{DEFAULT_ENV_MAX_MEMORY} に空のデバイス名またはメモリ値があります。")
+        max_memory[int(device) if device.isdigit() else device] = memory
+    return max_memory or None
 
 
 def setup_logger(run_dir: str, timestamp: str) -> logging.Logger:
@@ -249,6 +268,9 @@ def load_compare_bundle(base_model_id: str, lora_path: str, *, use_4bit: bool) -
         "trust_remote_code": True,
         "device_map": "auto",
     }
+    max_memory = parse_max_memory_env(os.getenv(DEFAULT_ENV_MAX_MEMORY, ""))
+    if max_memory is not None:
+        model_kwargs["max_memory"] = max_memory
     if use_4bit:
         try:
             from transformers import BitsAndBytesConfig

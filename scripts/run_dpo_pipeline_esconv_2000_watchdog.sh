@@ -5,7 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-RUN_TAG="${RUN_TAG:-esconv_support_mixed_8000_to_2500}"
+# 発表用の既存ESConv成果物は過去RUN_TAGを引き継いでいる。
+# 名前にreminiscenceを含むが、実体はESConv支援対話スタイル学習実験。
+RUN_TAG="${RUN_TAG:-reminiscence_5000_to_2000}"
 PIPELINE_SCRIPT="${PIPELINE_SCRIPT:-${SCRIPT_DIR}/run_dpo_pipeline_esconv_2000_chunked.sh}"
 CHUNK_DIR="${CHUNK_DIR:-artifacts/run_logs/${RUN_TAG}/chunks}"
 DPO_DATA="${FINAL_DPO_DATA:-artifacts/datasets/esconv_mixed_ja_dpo_preferences_${RUN_TAG}.jsonl}"

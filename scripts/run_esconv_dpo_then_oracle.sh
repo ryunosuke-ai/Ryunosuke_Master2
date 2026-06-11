@@ -5,7 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-RUN_TAG="${RUN_TAG:-esconv_support_mixed_8000_to_2500}"
+# 発表用の既存ESConv成果物は過去RUN_TAGを引き継いでいる。
+# 名前にreminiscenceを含むが、実体はESConv支援対話スタイル学習実験。
+RUN_TAG="${RUN_TAG:-reminiscence_5000_to_2000}"
 DPO_WATCHDOG_SCRIPT="${DPO_WATCHDOG_SCRIPT:-${SCRIPT_DIR}/run_dpo_pipeline_esconv_2000_watchdog.sh}"
 ORACLE_SCRIPT="${ORACLE_SCRIPT:-${SCRIPT_DIR}/run_oracle_evaluation_esconv.sh}"
 AUDIT_LOG="${AUDIT_LOG:-audit_log.md}"

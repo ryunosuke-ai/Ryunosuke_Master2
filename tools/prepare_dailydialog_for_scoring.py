@@ -21,6 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-name", default=DEFAULT_DATASET_NAME, help=f"Hugging Face dataset名（既定: {DEFAULT_DATASET_NAME}）。")
     parser.add_argument("--split", default=DEFAULT_SPLIT, help=f"読み込むsplit（既定: {DEFAULT_SPLIT}）。")
     parser.add_argument("--output", default=DEFAULT_OUTPUT_PATH, help=f"出力JSONL（既定: {DEFAULT_OUTPUT_PATH}）。")
+    parser.add_argument("--start-dialogue", type=int, default=0, help="読み込みを開始する対話index。チャンク処理用。")
     parser.add_argument("--max-dialogues", type=int, default=None, help="処理する対話数の上限。")
     parser.add_argument("--max-context-turns", type=int, default=DEFAULT_MAX_CONTEXT_TURNS, help="promptに含める直前発話数。")
     parser.add_argument("--dry-run", action="store_true", help="書き出さず、作成件数だけ確認します。")
@@ -115,11 +116,16 @@ def convert_dailydialog_rows(
     split: str,
     max_dialogues: int | None,
     max_context_turns: int,
+    start_dialogue: int = 0,
 ) -> list[dict[str, Any]]:
     """DailyDialog行を既存スコアリング用JSONLレコードへ変換する。"""
+    if start_dialogue < 0:
+        raise ValueError("`start_dialogue` は0以上である必要があります。")
     records: list[dict[str, Any]] = []
     for row_index, row in enumerate(rows):
-        if max_dialogues is not None and row_index >= max_dialogues:
+        if row_index < start_dialogue:
+            continue
+        if max_dialogues is not None and row_index >= start_dialogue + max_dialogues:
             break
         row_dict = dict(row)
         dialogue = _normalise_dialogue(row_dict, row_index=row_index)
@@ -166,6 +172,7 @@ def main() -> int:
     records = convert_dailydialog_rows(
         dataset,
         split=args.split,
+        start_dialogue=args.start_dialogue,
         max_dialogues=args.max_dialogues,
         max_context_turns=args.max_context_turns,
     )
@@ -173,6 +180,7 @@ def main() -> int:
         print("DailyDialog変換 dry-run")
         print(f"  dataset: {args.dataset_name}")
         print(f"  split: {args.split}")
+        print(f"  start_dialogue: {args.start_dialogue}")
         print(f"  records: {len(records)}")
         return 0
     write_jsonl(records, args.output)

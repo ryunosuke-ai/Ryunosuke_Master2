@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-PIPELINE_LOG_DIR="${PIPELINE_LOG_DIR:-logs/dpo_pipeline}"
+PIPELINE_LOG_DIR="${PIPELINE_LOG_DIR:-logs/dpo_pipeline/legacy}"
 mkdir -p "$PIPELINE_LOG_DIR"
 mkdir -p artifacts/datasets
 mkdir -p artifacts/training_runs
@@ -16,6 +16,7 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 
 echo "========================================"
 echo "DPO pipeline started at $(date)"
+echo "WARNING: this is a legacy DailyDialog 500 pipeline, not the current ESConv presentation pipeline."
 echo "Log file: $LOG_FILE"
 echo "========================================"
 

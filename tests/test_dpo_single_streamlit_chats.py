@@ -73,7 +73,7 @@ def test_trained_run_dir_uses_dpo_code_and_lora_segment(monkeypatch, tmp_path):
     assert Path(history_file).parent == Path(run_dir)
     assert Path(run_dir).parts[-3:-1] == (
         "dpo_trained_chat",
-        "dpo__Qwen_Qwen3.5-27B__qwen35_dpo_lora_300samples_ep1_lr5e-6_r8_a16_no4bit",
+        f"dpo__Qwen_Qwen3.5-27B__{Path(DEFAULT_LORA_PATH).name}",
     )
     assert (Path(run_dir) / "run_meta.json").exists()
 

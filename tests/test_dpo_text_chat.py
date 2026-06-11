@@ -109,7 +109,10 @@ def test_cleanup_generated_text_removes_qwen_special_tokens():
 
 def test_default_paths():
     assert DEFAULT_BASE_MODEL_ID == "Qwen/Qwen3.5-27B"
-    assert DEFAULT_LORA_PATH == "artifacts/training_runs/qwen35_dpo_lora_100samples_ep1_lr5e-6_r8_a16"
+    assert DEFAULT_LORA_PATH == (
+        "artifacts/training_runs/"
+        "qwen35_bayes_dpo_lora_reminiscence_5000_to_2000_ep1_lr5e-6_r8_a16_no4bit"
+    )
     assert DEFAULT_MAX_NEW_TOKENS == 192
 
 
@@ -155,7 +158,7 @@ def test_write_session_header_writes_metadata(tmp_path):
 
     content = history_file.read_text(encoding="utf-8")
     assert "# base_model_id: Qwen/Qwen3.5-27B" in content
-    assert "# lora_path: artifacts/training_runs/qwen35_dpo_lora_100samples_ep1_lr5e-6_r8_a16" in content
+    assert f"# lora_path: {DEFAULT_LORA_PATH}" in content
     assert "# use_4bit: False" in content
     assert "# thinking: disabled" in content
     assert "# max_new_tokens: 192" in content
@@ -168,5 +171,8 @@ def test_create_run_dir_creates_log_dir(monkeypatch, tmp_path):
 
     assert Path(run_dir).exists()
     assert Path(history_file).parent == Path(run_dir)
-    assert Path(run_dir).parts[-3:-1] == ("dpo_text_chat", "dpo__Qwen_Qwen3.5-27B__qwen35_dpo_lora_100samples_ep1_lr5e-6_r8_a16")
+    assert Path(run_dir).parts[-3:-1] == (
+        "dpo_text_chat",
+        f"dpo__Qwen_Qwen3.5-27B__{Path(DEFAULT_LORA_PATH).name}",
+    )
     assert (Path(run_dir) / "run_meta.json").exists()

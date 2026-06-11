@@ -8,6 +8,9 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from core.transition_bayes_model import TransitionBayesModel, load_transition_bayes_model
+from tools.jsonl_utils import read_jsonl_records
+
 
 DEFAULT_INPUT_PATH = "artifacts/scored_dialogues/dailydialog_transition_scored.jsonl"
 DEFAULT_OUTPUT_PATH = "artifacts/datasets/dailydialog_selected_en.jsonl"
@@ -32,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="高posteriorの文脈付き応答を抽出します。")
     parser.add_argument("--input", default=DEFAULT_INPUT_PATH, help=f"入力スコア済みJSONL（既定: {DEFAULT_INPUT_PATH}）。")
     parser.add_argument("--output", default=DEFAULT_OUTPUT_PATH, help=f"出力JSONL（既定: {DEFAULT_OUTPUT_PATH}）。")
+    parser.add_argument("--bayes-model", default="", help="指定時はpositive/negative statesから優先・除外ラベルを自動導出します。")
     parser.add_argument("--min-posterior", type=float, default=DEFAULT_MIN_POSTERIOR, help="抽出するposteriorの下限。")
     parser.add_argument("--min-context-turns", type=int, default=0, help="promptに含まれる文脈ターン数の下限。")
     parser.add_argument("--max-records", type=int, default=None, help="出力件数の上限。")
@@ -51,20 +55,15 @@ def parse_args() -> argparse.Namespace:
 
 def read_jsonl(path: Path | str) -> list[dict[str, Any]]:
     """JSONLを読み込む。"""
-    input_path = Path(path)
-    records: list[dict[str, Any]] = []
-    try:
-        with input_path.open("r", encoding="utf-8") as file:
-            for line_number, line in enumerate(file, start=1):
-                if not line.strip():
-                    continue
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError as exc:
-                    raise ValueError(f"{line_number}行目をJSONとして読めません: {exc}") from exc
-    except FileNotFoundError as exc:
-        raise FileNotFoundError(f"入力JSONLが見つかりません: {input_path}") from exc
-    return records
+    records, skipped = read_jsonl_records(
+        path,
+        missing_ok=False,
+        strict=False,
+        label="スコア済み入力JSONL",
+    )
+    if skipped:
+        print(f"[WARN] スコア済み入力JSONLの壊れた行をskipしました: skipped={skipped}", flush=True)
+    return [record for record in records if isinstance(record, dict)]
 
 
 def _posterior(record: dict[str, Any]) -> float:
@@ -82,6 +81,70 @@ def _label_set(value: str | tuple[str, ...] | list[str] | None) -> set[str]:
     if isinstance(value, str):
         return {item.strip() for item in value.split(",") if item.strip()}
     return {str(item).strip() for item in value if str(item).strip()}
+
+
+def _label_text(value: set[str]) -> str:
+    """ラベル集合をCLI互換のカンマ区切り文字列へ変換する。"""
+    return ",".join(sorted(value))
+
+
+def derive_selection_labels_from_model(model: TransitionBayesModel) -> dict[str, str]:
+    """状態遷移ベイズモデルから抽出優先・除外ラベルを導出する。"""
+    positive_states = set(model.positive_states)
+    negative_states = set(model.negative_states)
+    observation_scores: dict[str, float] = {}
+    for observation in model.observations:
+        positive_mean = sum(model.emission_likelihoods[state][observation] for state in positive_states) / max(1, len(positive_states))
+        negative_mean = sum(model.emission_likelihoods[state][observation] for state in negative_states) / max(1, len(negative_states))
+        observation_scores[observation] = positive_mean - negative_mean
+
+    preferred_observations = {
+        observation
+        for observation, score in sorted(observation_scores.items(), key=lambda item: item[1], reverse=True)
+        if score > 0.0
+    }
+    if len(preferred_observations) > 4:
+        preferred_observations = {
+            observation
+            for observation, _ in sorted(observation_scores.items(), key=lambda item: item[1], reverse=True)[:4]
+        }
+
+    excluded_observations = {
+        observation
+        for observation, score in sorted(observation_scores.items(), key=lambda item: item[1])
+        if score < 0.0
+    }
+    if len(excluded_observations) > 4:
+        excluded_observations = {
+            observation
+            for observation, _ in sorted(observation_scores.items(), key=lambda item: item[1])[:4]
+        }
+
+    return {
+        "prefer_states": _label_text(positive_states),
+        "prefer_observations": _label_text(preferred_observations),
+        "low_priority_states": "",
+        "exclude_states": _label_text(negative_states),
+        "exclude_observations": _label_text(excluded_observations),
+    }
+
+
+def apply_bayes_model_defaults(args: argparse.Namespace) -> argparse.Namespace:
+    """bayes-model指定時、未変更の既定ラベルだけをモデル由来値で置換する。"""
+    if not args.bayes_model:
+        return args
+    labels = derive_selection_labels_from_model(load_transition_bayes_model(args.bayes_model))
+    if args.prefer_states == ",".join(DEFAULT_PREFERRED_STATES):
+        args.prefer_states = labels["prefer_states"]
+    if args.prefer_observations == ",".join(DEFAULT_PREFERRED_OBSERVATIONS):
+        args.prefer_observations = labels["prefer_observations"]
+    if args.low_priority_states == ",".join(DEFAULT_LOW_PRIORITY_STATES):
+        args.low_priority_states = labels["low_priority_states"]
+    if args.exclude_states == ",".join(DEFAULT_EXCLUDED_STATES):
+        args.exclude_states = labels["exclude_states"]
+    if args.exclude_observations == ",".join(DEFAULT_EXCLUDED_OBSERVATIONS):
+        args.exclude_observations = labels["exclude_observations"]
+    return args
 
 
 def _context_turns(record: dict[str, Any]) -> int:
@@ -251,7 +314,7 @@ def write_jsonl(records: list[dict[str, Any]], path: Path | str) -> None:
 
 def main() -> int:
     """CLIエントリポイント。"""
-    args = parse_args()
+    args = apply_bayes_model_defaults(parse_args())
     records = read_jsonl(args.input)
     selected = select_high_posterior_records(
         records,
@@ -277,6 +340,12 @@ def main() -> int:
         print(f"  min_context_turns: {args.min_context_turns}")
         print(f"  target_records: {args.target_records}")
         print(f"  per_dialogue_limit: {args.per_dialogue_limit}")
+        if args.bayes_model:
+            print(f"  bayes_model: {args.bayes_model}")
+            print(f"  prefer_states: {args.prefer_states}")
+            print(f"  prefer_observations: {args.prefer_observations}")
+            print(f"  exclude_states: {args.exclude_states}")
+            print(f"  exclude_observations: {args.exclude_observations}")
         return 0
     write_jsonl(selected, args.output)
     print(f"高posterior応答を書き出しました: {args.output} ({len(selected)} 件)")

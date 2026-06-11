@@ -33,6 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID, help=f"ベースモデルIDまたはパス（既定: {DEFAULT_MODEL_ID}）。")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help=f"LoRA出力先（既定: {DEFAULT_OUTPUT_DIR}）。")
     parser.add_argument("--num-train-epochs", type=float, default=3.0, help="学習エポック数。")
+    parser.add_argument("--max-steps", type=int, default=-1, help="最大学習step数。正の値ならepoch数より優先します。")
     parser.add_argument("--learning-rate", type=float, default=5e-6, help="学習率。")
     parser.add_argument("--beta", type=float, default=0.1, help="DPO beta。")
     parser.add_argument("--max-length", type=int, default=1024, help="prompt + 応答の最大トークン長。")
@@ -44,7 +45,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank。")
     parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha。")
     parser.add_argument("--lora-dropout", type=float, default=0.05, help="LoRA dropout。")
-    parser.add_argument("--no-4bit", action="store_true", help="4bit量子化を無効化し、FP16/BF16で読み込みます。")
+    quantization_group = parser.add_mutually_exclusive_group()
+    quantization_group.add_argument(
+        "--use-4bit",
+        dest="no_4bit",
+        action="store_false",
+        default=False,
+        help="4bit量子化を有効化してQLoRAで読み込みます（既定）。",
+    )
+    quantization_group.add_argument(
+        "--no-4bit",
+        dest="no_4bit",
+        action="store_true",
+        help="4bit量子化を無効化し、FP16/BF16で読み込みます。",
+    )
+    parser.add_argument(
+        "--device-map",
+        choices=("auto", "single", "none"),
+        default=None,
+        help="モデル配置。未指定時は4bitならauto、no-4bitならsingleです。",
+    )
+    parser.add_argument("--force-single-gpu", action="store_true", help="単一GPUへの全載せを強制します。")
+    parser.add_argument(
+        "--max-memory",
+        default=None,
+        help="device_map=auto用の最大メモリ指定。例: 0=46GiB,cpu=0GiB",
+    )
+    parser.add_argument("--load-check", action="store_true", help="モデル配置を検証し、学習せず終了します。")
     parser.add_argument("--dry-run", action="store_true", help="学習せず、データと設定だけ確認します。")
     parser.add_argument("--logging-steps", type=int, default=1, help="ログ出力間隔。")
     parser.add_argument("--save-steps", type=int, default=25, help="チェックポイント保存間隔。")
@@ -124,6 +151,9 @@ def print_dry_run_summary(args: argparse.Namespace, split: PreferenceDatasetSpli
     print(f"  max_chosen_chars: {stats['max_chosen_chars']}")
     print(f"  max_rejected_chars: {stats['max_rejected_chars']}")
     print(f"  4bit: {'無効' if args.no_4bit else '有効'}")
+    print(f"  device_map: {resolve_device_map_mode(args)}")
+    if args.max_memory:
+        print(f"  max_memory: {args.max_memory}")
     sample = split.train[0]
     print("  sample:")
     print(f"    prompt: {sample['prompt'][:120]!r}")
@@ -133,6 +163,9 @@ def print_dry_run_summary(args: argparse.Namespace, split: PreferenceDatasetSpli
 
 def load_training_dependencies() -> dict[str, Any]:
     """DPO学習に必要な依存関係を遅延読み込みする。"""
+    from core.hf_kernel_compat import disable_hub_kernel_integration
+
+    disable_hub_kernel_integration()
     try:
         import torch
         from datasets import Dataset
@@ -176,16 +209,54 @@ def load_tokenizer(model_id: str, deps: dict[str, Any]):
     return tokenizer
 
 
-def load_model(args: argparse.Namespace, deps: dict[str, Any]):
-    """DPO学習用のQwen3.5モデルを読み込む。"""
+def resolve_device_map_mode(args: argparse.Namespace) -> str:
+    """CLI指定から実際に使うdevice_mapモードを決める。"""
+    if getattr(args, "force_single_gpu", False):
+        return "single"
+    if args.device_map:
+        return args.device_map
+    return "single" if args.no_4bit else "auto"
+
+
+def parse_max_memory(value: str | None) -> dict[int | str, str] | None:
+    """`0=46GiB,cpu=0GiB` 形式のmax_memory指定を辞書へ変換する。"""
+    if value is None:
+        return None
+    result: dict[int | str, str] = {}
+    for part in value.split(","):
+        item = part.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise ValueError("`--max-memory` は `0=46GiB,cpu=0GiB` の形式で指定してください。")
+        raw_key, raw_memory = item.split("=", 1)
+        key_text = raw_key.strip()
+        memory = raw_memory.strip()
+        if not key_text or not memory:
+            raise ValueError("`--max-memory` に空のデバイス名またはメモリ値があります。")
+        key: int | str = int(key_text) if key_text.isdecimal() else key_text
+        result[key] = memory
+    if not result:
+        raise ValueError("`--max-memory` に有効な指定がありません。")
+    return result
+
+
+def build_model_kwargs(args: argparse.Namespace, deps: dict[str, Any], *, dtype: Any) -> dict[str, Any]:
+    """from_pretrainedへ渡すモデル読み込み設定を作る。"""
     torch = deps["torch"]
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA対応GPUが見つかりません。Qwen3.5-27B のDPO学習にはGPU環境が必要です。")
-    dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    model_kwargs: dict[str, Any] = {
-        "trust_remote_code": True,
-        "device_map": "auto",
-    }
+    device_map_mode = resolve_device_map_mode(args)
+    model_kwargs: dict[str, Any] = {"trust_remote_code": True}
+    if device_map_mode == "auto":
+        model_kwargs["device_map"] = "auto"
+    elif device_map_mode == "single":
+        model_kwargs["device_map"] = {"": torch.cuda.current_device()}
+    elif device_map_mode != "none":
+        raise ValueError(f"未対応のdevice_map指定です: {device_map_mode}")
+
+    max_memory = parse_max_memory(args.max_memory)
+    if max_memory is not None:
+        model_kwargs["max_memory"] = max_memory
+
     if args.no_4bit:
         model_kwargs["torch_dtype"] = dtype
     else:
@@ -195,11 +266,70 @@ def load_model(args: argparse.Namespace, deps: dict[str, Any]):
             bnb_4bit_quant_type="nf4",
             bnb_4bit_compute_dtype=dtype,
         )
+    return model_kwargs
+
+
+def _device_name(device: Any) -> str:
+    """torch.deviceやdevice_mapの値を比較用文字列にする。"""
+    if isinstance(device, int):
+        return f"cuda:{device}"
+    return str(device)
+
+
+def validate_model_device_placement(model: Any) -> None:
+    """CPU/meta/disk offloadされたモデルで学習へ進まないよう検証する。"""
+    bad_map_entries: list[str] = []
+    device_map = getattr(model, "hf_device_map", None)
+    if isinstance(device_map, dict):
+        for module_name, device in device_map.items():
+            device_name = _device_name(device).lower()
+            if device_name in {"cpu", "disk", "meta"}:
+                bad_map_entries.append(f"{module_name}:{device_name}")
+    if bad_map_entries:
+        sample = ", ".join(bad_map_entries[:8])
+        raise RuntimeError(
+            "モデルの一部がCPU/meta/diskへoffloadされています。"
+            f" DPO LoRA学習は中止します: {sample}"
+        )
+
+    bad_parameters: list[str] = []
+    for name, parameter in model.named_parameters():
+        device_name = _device_name(parameter.device).lower()
+        if device_name == "meta" or device_name == "cpu":
+            bad_parameters.append(f"{name}:{device_name}")
+    if bad_parameters:
+        sample = ", ".join(bad_parameters[:8])
+        raise RuntimeError(
+            "モデルparameterがGPU以外に配置されています。"
+            f" DPO LoRA学習は中止します: {sample}"
+        )
+
+    meta_buffers = [
+        f"{name}:{_device_name(buffer.device).lower()}"
+        for name, buffer in model.named_buffers()
+        if _device_name(buffer.device).lower() == "meta"
+    ]
+    if meta_buffers:
+        sample = ", ".join(meta_buffers[:8])
+        raise RuntimeError(
+            "モデルbufferがmeta deviceに配置されています。"
+            f" DPO LoRA学習は中止します: {sample}"
+        )
+
+
+def load_model(args: argparse.Namespace, deps: dict[str, Any]):
+    """DPO学習用のQwen3.5モデルを読み込む。"""
+    torch = deps["torch"]
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA対応GPUが見つかりません。Qwen3.5-27B のDPO学習にはGPU環境が必要です。")
+    dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    model_kwargs = build_model_kwargs(args, deps, dtype=dtype)
     model = deps["ModelClass"].from_pretrained(args.model_id, **model_kwargs)
     if hasattr(model, "config"):
         model.config.use_cache = False
     if not args.no_4bit:
         model = deps["prepare_model_for_kbit_training"](model)
+    validate_model_device_placement(model)
     return model, dtype
 
 
@@ -241,6 +371,7 @@ def build_training_args(args: argparse.Namespace, deps: dict[str, Any], *, dtype
     kwargs: dict[str, Any] = {
         "output_dir": args.output_dir,
         "num_train_epochs": args.num_train_epochs,
+        "max_steps": args.max_steps,
         "learning_rate": args.learning_rate,
         "beta": args.beta,
         "max_length": args.max_length,
@@ -279,6 +410,9 @@ def train(args: argparse.Namespace, split: PreferenceDatasetSplit) -> None:
         disable_peft_bitsandbytes_dispatch()
     tokenizer = load_tokenizer(args.model_id, deps)
     model, dtype = load_model(args, deps)
+    if args.load_check:
+        print("モデル配置チェックに成功しました。")
+        return
     lora_config = build_lora_config(args, deps)
     train_dataset = deps["Dataset"].from_list(split.train)
     eval_dataset = deps["Dataset"].from_list(split.eval) if split.eval else None
@@ -319,7 +453,7 @@ def main() -> int:
 
     try:
         train(args, split)
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         print(f"エラー: {exc}", file=sys.stderr)
         return 1
     return 0

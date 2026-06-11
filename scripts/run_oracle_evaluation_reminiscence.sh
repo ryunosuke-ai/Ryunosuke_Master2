@@ -6,14 +6,18 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 RUN_TAG="${RUN_TAG:-reminiscence_5000_to_2000}"
-PROMPTS="${PROMPTS:-configs/evaluation_prompts/reminiscence_oracle_eval_v1.jsonl}"
+PROMPTS="${PROMPTS:-configs/evaluation_prompts/reminiscence_oracle_eval_v2_100.jsonl}"
 SMALL_CORPUS="${SMALL_CORPUS:-data/small_corpus.jsonl}"
 BAYES_MODEL="${BAYES_MODEL:-artifacts/bayes_models/generated_transition_bayes_model.json}"
 BASE_MODEL_ID="${LOCAL_QWEN_MODEL_ID:-Qwen/Qwen3.5-27B}"
 LORA_PATH="${DPO_COMPARE_LORA_PATH:-artifacts/training_runs/qwen35_bayes_dpo_lora_${RUN_TAG}_ep1_lr5e-6_r8_a16_no4bit}"
 ORACLE_MODEL="${ORACLE_MODEL:-gpt-5.4-pro}"
-OUTPUT_DIR="${OUTPUT_DIR:-artifacts/evaluations/oracle_eval_runs/${RUN_TAG}_oracle_v1}"
+ORACLE_WORKERS="${ORACLE_WORKERS:-2}"
+OUTPUT_DIR="${OUTPUT_DIR:-artifacts/evaluations/oracle_eval_runs/${RUN_TAG}_oracle_v2}"
 MAX_PROMPTS="${MAX_PROMPTS:-}"
+SKIP_PROMPTS="${SKIP_PROMPTS:-}"
+CATEGORIES="${CATEGORIES:-}"
+LOCAL_PROMPT_MODE="${LOCAL_PROMPT_MODE:-instruction}"
 
 LOG_DIR="${ORACLE_LOG_DIR:-logs/oracle_evaluation}"
 mkdir -p "$LOG_DIR" "$OUTPUT_DIR"
@@ -22,6 +26,7 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 
 echo "========================================"
 echo "Oracle evaluation started at $(date)"
+echo "WARNING: this script is deprecated for the current presentation. Use ESConv Oracle scripts unless reproducing old reminiscence evaluation."
 echo "run_tag: $RUN_TAG"
 echo "prompts: $PROMPTS"
 echo "small_corpus: $SMALL_CORPUS"
@@ -29,7 +34,11 @@ echo "bayes_model: $BAYES_MODEL"
 echo "base_model_id: $BASE_MODEL_ID"
 echo "lora_path: $LORA_PATH"
 echo "oracle_model: $ORACLE_MODEL"
+echo "oracle_workers: $ORACLE_WORKERS"
 echo "output_dir: $OUTPUT_DIR"
+echo "skip_prompts: ${SKIP_PROMPTS:-0}"
+echo "categories: ${CATEGORIES:-all}"
+echo "local_prompt_mode: $LOCAL_PROMPT_MODE"
 echo "log_file: $LOG_FILE"
 echo "========================================"
 
@@ -41,17 +50,25 @@ args=(
   --base-model-id "$BASE_MODEL_ID"
   --lora-path "$LORA_PATH"
   --oracle-model "$ORACLE_MODEL"
+  --oracle-workers "$ORACLE_WORKERS"
   --output-dir "$OUTPUT_DIR"
   --seed 42
   --max-new-tokens 192
   --temperature 0.7
   --top-p 0.8
   --repetition-penalty 1.0
+  --local-prompt-mode "$LOCAL_PROMPT_MODE"
   --no-4bit
 )
 
 if [ -n "$MAX_PROMPTS" ]; then
   args+=(--max-prompts "$MAX_PROMPTS")
+fi
+if [ -n "$SKIP_PROMPTS" ]; then
+  args+=(--skip-prompts "$SKIP_PROMPTS")
+fi
+if [ -n "$CATEGORIES" ]; then
+  args+=(--categories "$CATEGORIES")
 fi
 
 "${args[@]}"

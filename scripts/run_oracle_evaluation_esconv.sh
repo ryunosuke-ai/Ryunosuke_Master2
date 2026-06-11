@@ -5,7 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-RUN_TAG="${RUN_TAG:-esconv_support_mixed_8000_to_2500}"
+# 発表用の既存ESConv成果物は過去RUN_TAGを引き継いでいる。
+# 名前にreminiscenceを含むが、実体はESConv支援対話スタイル学習実験。
+RUN_TAG="${RUN_TAG:-reminiscence_5000_to_2000}"
 PROMPTS="${PROMPTS:-configs/evaluation_prompts/esconv_oracle_eval_v2_100.jsonl}"
 SMALL_CORPUS="${SMALL_CORPUS:-data/esconv_analysis_corpus_${RUN_TAG}.jsonl}"
 BAYES_MODEL="${BAYES_MODEL:-artifacts/bayes_models/generated_transition_bayes_model_esconv_${RUN_TAG}.json}"

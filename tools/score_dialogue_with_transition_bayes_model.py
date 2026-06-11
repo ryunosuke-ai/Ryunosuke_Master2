@@ -29,6 +29,7 @@ from tools.score_dialogue_with_bayes_model import (
     write_jsonl,
 )
 from tools.audit_logging import DEFAULT_AUDIT_LOG_PATH, append_audit_log
+from tools.jsonl_utils import ensure_jsonl_append_boundary, read_jsonl_records
 
 
 DEFAULT_INPUT_PATH = "data/large_dialogue.jsonl"
@@ -36,6 +37,10 @@ DEFAULT_MODEL_PATH = "artifacts/bayes_models/generated_transition_bayes_model.js
 DEFAULT_OUTPUT_PATH = "artifacts/scored_dialogues/transition_bayes_scored_dialogue.jsonl"
 CONTENT_FILTER_FALLBACK_REASON = (
     "LLM評価APIのcontent filterにより観測ラベルを直接判定できなかったため、"
+    "大量処理継続用にnegative/off_style寄りの観測へフォールバックしました。"
+)
+ERROR_FALLBACK_REASON = (
+    "LLM評価APIまたはJSON解析の一時的な失敗により観測ラベルを安定判定できなかったため、"
     "大量処理継続用にnegative/off_style寄りの観測へフォールバックしました。"
 )
 CONTENT_FILTER_RETRY_PREFIX = (
@@ -65,6 +70,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default=default_model, help=f"評価LLMモデルまたはAzure deployment名（既定: {default_model}）。")
     parser.add_argument("--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS, help="最大出力トークン数。")
     parser.add_argument("--workers", type=int, default=1, help="会話単位で並列評価するworker数。1なら逐次処理。")
+    parser.add_argument(
+        "--fallback-on-errors",
+        action="store_true",
+        help="content_filter以外のAPI/JSON失敗もnegative寄り観測へフォールバックして処理を継続します。",
+    )
     parser.add_argument("--audit-log", default=DEFAULT_AUDIT_LOG_PATH, help="重要操作の要約を追記するaudit_log.mdのパス。")
     parser.add_argument("--dry-run", action="store_true", help="APIを呼ばず、入力件数だけ確認します。")
     return parser.parse_args()
@@ -153,19 +163,60 @@ def _record_key(record: dict[str, Any]) -> tuple[str, int]:
 
 def read_existing_scored_records(path: Path | str) -> list[dict[str, Any]]:
     """既存のスコア済みJSONLを読み込む。"""
-    output_path = Path(path)
-    if not output_path.exists():
-        return []
-    records: list[dict[str, Any]] = []
-    with output_path.open("r", encoding="utf-8") as file:
-        for line_number, line in enumerate(file, start=1):
-            if not line.strip():
-                continue
-            try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"既存出力の{line_number}行目をJSONとして読めません: {exc}") from exc
-    return records
+    records, skipped = read_jsonl_records(
+        path,
+        missing_ok=True,
+        strict=False,
+        label="既存スコア済み出力",
+    )
+    if skipped:
+        print(f"[WARN] 既存スコア済み出力の壊れた行をskipしました: skipped={skipped}", flush=True)
+    valid_records: list[dict[str, Any]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        try:
+            _record_key(record)
+        except (KeyError, TypeError, ValueError):
+            print("[WARN] 既存スコア済み出力の再開キー欠落行をskipしました", flush=True)
+            continue
+        valid_records.append(record)
+    return valid_records
+
+
+def build_fallback_scoring_result(
+    record: dict[str, Any],
+    *,
+    bayes_model: TransitionBayesModel,
+    prior_distribution: dict[str, float] | None,
+    reason: str,
+    error_label: str,
+    progress_label: str,
+) -> dict[str, Any]:
+    """LLM判定不能時のnegative寄りフォールバック結果を作る。"""
+    fallback_observation = select_negative_fallback_observation(bayes_model)
+    conversation_id = str(record["conversation_id"])
+    print(
+        f"{progress_label}: fallback {conversation_id}#{record['turn_index']} "
+        f"-> {fallback_observation} ({error_label})",
+        flush=True,
+    )
+    observation_score = TransitionObservationScore(
+        observation=fallback_observation,
+        score=0.0,
+        reason=reason,
+    )
+    bayes_result = score_transition_observation(
+        bayes_model,
+        observation_score,
+        prior_distribution=prior_distribution,
+    )
+    return {
+        **record,
+        "prior_state_distribution": prior_distribution,
+        **bayes_result,
+        "llm_error": error_label,
+    }
 
 
 def score_single_record(
@@ -178,6 +229,7 @@ def score_single_record(
     instructions: str,
     prior_distribution: dict[str, float] | None,
     progress_label: str,
+    fallback_on_errors: bool = False,
 ) -> dict[str, Any]:
     """1レコードをLLM観測分類し、状態遷移ベイズモデルで更新する。"""
     conversation_id = str(record["conversation_id"])
@@ -197,7 +249,16 @@ def score_single_record(
         )
     except Exception as exc:
         if not is_content_filter_error(exc):
-            raise
+            if not fallback_on_errors:
+                raise
+            return build_fallback_scoring_result(
+                record,
+                bayes_model=bayes_model,
+                prior_distribution=prior_distribution,
+                reason=ERROR_FALLBACK_REASON,
+                error_label=f"{type(exc).__name__}: {exc}",
+                progress_label=progress_label,
+            )
         print(
             f"{progress_label}: content_filter retry with sanitized input "
             f"{conversation_id}#{record['turn_index']}",
@@ -218,18 +279,24 @@ def score_single_record(
             llm_retry = "content_filter_sanitized_retry"
         except Exception as retry_exc:
             if not is_content_filter_error(retry_exc):
-                raise
-            fallback_observation = select_negative_fallback_observation(bayes_model)
+                if not fallback_on_errors:
+                    raise
+                return build_fallback_scoring_result(
+                    record,
+                    bayes_model=bayes_model,
+                    prior_distribution=prior_distribution,
+                    reason=ERROR_FALLBACK_REASON,
+                    error_label=f"content_filter_retry_error: {type(retry_exc).__name__}: {retry_exc}",
+                    progress_label=progress_label,
+                )
             llm_error = f"content_filter: {retry_exc}"
-            print(
-                f"{progress_label}: content_filter fallback "
-                f"{conversation_id}#{record['turn_index']} -> {fallback_observation}",
-                flush=True,
-            )
-            observation_score = TransitionObservationScore(
-                observation=fallback_observation,
-                score=0.0,
+            return build_fallback_scoring_result(
+                record,
+                bayes_model=bayes_model,
+                prior_distribution=prior_distribution,
                 reason=CONTENT_FILTER_FALLBACK_REASON,
+                error_label=llm_error,
+                progress_label=progress_label,
             )
     bayes_result = score_transition_observation(
         bayes_model,
@@ -258,6 +325,7 @@ def score_conversation_records(
     instructions: str,
     initial_distribution: dict[str, float] | None,
     progress_label: str,
+    fallback_on_errors: bool = False,
 ) -> list[dict[str, Any]]:
     """1会話内のレコードを順序通りにスコアリングする。"""
     results: list[dict[str, Any]] = []
@@ -272,6 +340,7 @@ def score_conversation_records(
             instructions=instructions,
             prior_distribution=prior_distribution,
             progress_label=progress_label,
+            fallback_on_errors=fallback_on_errors,
         )
         prior_distribution = dict(result["state_posteriors"])
         results.append(result)
@@ -289,6 +358,7 @@ def score_records(
     existing_results: list[dict[str, Any]] | None = None,
     output_path: Path | str | None = None,
     workers: int = 1,
+    fallback_on_errors: bool = False,
 ) -> list[dict[str, Any]]:
     """対話レコード群を状態遷移ベイズモデルでスコアリングする。"""
     results: list[dict[str, Any]] = list(existing_results or [])
@@ -312,6 +382,7 @@ def score_records(
     if output_path is not None:
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_jsonl_append_boundary(path)
         output_file = path.open("a", encoding="utf-8")
     try:
         if workers <= 1:
@@ -332,6 +403,7 @@ def score_records(
                     instructions=instructions,
                     prior_distribution=distribution_by_conversation.get(conversation_id),
                     progress_label=progress_label,
+                    fallback_on_errors=fallback_on_errors,
                 )
                 distribution_by_conversation[conversation_id] = dict(result["state_posteriors"])
                 results.append(result)
@@ -360,6 +432,7 @@ def score_records(
                         instructions=instructions,
                         initial_distribution=distribution_by_conversation.get(conversation_id),
                         progress_label=progress_label,
+                        fallback_on_errors=fallback_on_errors,
                     ): conversation_id
                     for conversation_id, conversation_records in records_by_conversation.items()
                 }
@@ -408,6 +481,7 @@ def main() -> int:
         existing_results=existing_results,
         output_path=Path(args.output),
         workers=max(1, args.workers),
+        fallback_on_errors=args.fallback_on_errors,
     )
     retry_count = sum(1 for record in scored if record.get("llm_retry") == "content_filter_sanitized_retry")
     fallback_count = sum(1 for record in scored if str(record.get("llm_error", "")).startswith("content_filter:"))

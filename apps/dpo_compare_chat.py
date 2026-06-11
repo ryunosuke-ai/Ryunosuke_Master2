@@ -27,7 +27,10 @@ from apps.dpo_text_chat import (  # noqa: E402
 
 
 DEFAULT_BASE_MODEL_ID = "Qwen/Qwen3.5-27B"
-DEFAULT_LORA_PATH = "artifacts/training_runs/qwen35_dpo_lora_200samples_ep1_lr5e-6_r8_a16_no4bit"
+DEFAULT_LORA_PATH = (
+    "artifacts/training_runs/"
+    "qwen35_bayes_dpo_lora_reminiscence_5000_to_2000_ep1_lr5e-6_r8_a16_no4bit"
+)
 TRAINING_RUNS_DIR = Path("artifacts/training_runs")
 DEFAULT_MAX_NEW_TOKENS = 192
 DEFAULT_TEMPERATURE = 0.7
@@ -243,6 +246,9 @@ def adapter_disabled(model: object) -> Iterator[None]:
 
 def load_training_modules() -> dict[str, object]:
     """重い依存を遅延読み込みする。"""
+    from core.hf_kernel_compat import disable_hub_kernel_integration
+
+    disable_hub_kernel_integration()
     try:
         import torch
         from peft import PeftModel
