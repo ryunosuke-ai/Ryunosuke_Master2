@@ -34,6 +34,13 @@ from tools.run_oracle_evaluation import (
     run_with_retry,
     summarize_judgments,
 )
+from tools.run_oracle_evaluation_prompt_only import (
+    FewShotExample,
+    build_prompt_only_fewshot_prompt,
+    parse_single_judge_payload,
+    select_balanced_fewshot_examples,
+    summarize_prompt_only_judgments,
+)
 
 
 def make_transition_payload():
@@ -282,6 +289,119 @@ def test_build_local_model_prompt_context_only_avoids_instruction_bias():
     assert "返答は日本語で1〜2文" in instruction
 
 
+def test_prompt_only_fewshot_selection_is_seeded_and_strategy_balanced():
+    examples = [
+        FewShotExample(f"e{i}", strategy, f"User: 入力{i}\nAI:", f"良い返答{i}")
+        for i, strategy in enumerate(
+            [
+                "Reflection of feelings",
+                "Reflection of feelings",
+                "Question",
+                "Question",
+                "Information",
+                "Self-disclosure",
+            ],
+            start=1,
+        )
+    ]
+
+    first = select_balanced_fewshot_examples(examples, count=4, seed=42)
+    second = select_balanced_fewshot_examples(examples, count=4, seed=42)
+    other_seed = select_balanced_fewshot_examples(examples, count=4, seed=7)
+
+    assert [item.example_id for item in first] == [item.example_id for item in second]
+    assert [item.example_id for item in first] != [item.example_id for item in other_seed]
+    assert len({item.source_strategy for item in first}) == 4
+
+
+def test_prompt_only_fewshot_prompt_uses_only_chosen_examples():
+    prompt = EvaluationPrompt(
+        prompt_id="p1",
+        category="emotional_reflection_validation",
+        history=(
+            {"speaker": "User", "text": "仕事のことを考えるだけで苦しいです。"},
+            {"speaker": "AI", "text": "かなり張りつめているのですね。"},
+        ),
+        prompt="スマホを見るのも怖いです。",
+        axis_focus=("emotional_reflection_validation",),
+    )
+    fewshot_examples = [
+        FewShotExample(
+            "esconv_train_000000:4",
+            "Reflection of feelings",
+            (
+                "以下の会話の次のAI返答を生成してください。\n"
+                "返答は日本語で1〜2文にしてください。\n\n"
+                "これまでの会話:\n"
+                "User: 仕事を失ってしまうんじゃないかと思って、不安です。\n"
+                "\nAI:"
+            ),
+            "仕事を失うかもしれないと思うと、すごく不安になりますよね。",
+        )
+    ]
+
+    model_prompt = build_prompt_only_fewshot_prompt(prompt, fewshot_examples)
+
+    assert "仕事を失うかもしれないと思うと、すごく不安になりますよね。" in model_prompt
+    assert "仕事のことを考えるだけで苦しいです。" in model_prompt
+    assert "スマホを見るのも怖いです。" in model_prompt
+    assert "rejected" not in model_prompt
+    assert "posterior" not in model_prompt
+    assert "score_chosen" not in model_prompt
+    assert "reward_breakdown" not in model_prompt
+
+
+def test_parse_single_judge_payload_maps_v3_scores():
+    payload = {
+        "scores": {
+            "esconv_strategy_adherence": 90,
+            "emotional_reflection_validation": 80,
+            "premature_advice_avoidance": 70,
+            "supportive_tone": 60,
+            "contextual_grounding": 50,
+            "conversational_progression": 40,
+            "overall_helpfulness": 30,
+        },
+        "reason": "感情反映はあるが進行は控えめ。",
+    }
+
+    result = parse_single_judge_payload(payload)
+
+    assert result["axis_scores"]["esconv_strategy_adherence"] == 90
+    assert result["esconv_core_score"] == pytest.approx(81.5)
+    assert result["weighted_esconv_overall_score"] == pytest.approx(71.0)
+    assert result["reason"] == "感情反映はあるが進行は控えめ。"
+
+
+def test_summarize_prompt_only_judgments_reports_axes_and_baseline_gap():
+    judgments = [
+        make_prompt_only_judgment("p1", "emotion", core=80, overall=75, axis_value=70),
+        make_prompt_only_judgment("p2", "emotion", core=90, overall=85, axis_value=80),
+    ]
+    baseline_summary = {
+        "esconv_core_score": {"mean_dpo": 90},
+        "weighted_esconv_overall": {"mean_dpo": 88},
+        "axis_scores": {
+            axis_key: {"mean_dpo": 82}
+            for axis_key in ESCONV_STRATEGY_V3_AXIS_KEYS
+        },
+    }
+
+    summary = summarize_prompt_only_judgments(
+        judgments,
+        baseline_summary=baseline_summary,
+        baseline_summary_path="baseline/summary.json",
+    )
+
+    assert summary["records"] == 2
+    assert summary["esconv_core_score"]["mean_prompt_only"] == pytest.approx(85)
+    assert summary["weighted_esconv_overall"]["mean_prompt_only"] == pytest.approx(80)
+    assert summary["axis_scores"]["supportive_tone"]["mean_prompt_only"] == pytest.approx(75)
+    assert summary["by_category"]["emotion"]["count"] == 2
+    assert summary["baseline_comparison"]["esconv_core_score"]["gap"] == pytest.approx(-5)
+    assert summary["baseline_comparison"]["weighted_esconv_overall"]["gap"] == pytest.approx(-8)
+
+
 def test_parse_args_defaults_to_instruction_prompt_mode(monkeypatch):
     monkeypatch.setattr("sys.argv", ["tools.run_oracle_evaluation"])
 
@@ -452,6 +572,24 @@ def make_v3_judgment(prompt_id, category, *, core_gap, weighted_gap, winner):
         "score_gap": weighted_gap,
         "winner": winner,
         "reason": "summary用の理由。",
+    }
+
+
+def make_prompt_only_judgment(prompt_id, category, *, core, overall, axis_value):
+    """prompt-only summaryテスト用judgmentを返す。"""
+    axis_scores = {
+        axis_key: axis_value
+        for axis_key in ESCONV_STRATEGY_V3_AXIS_KEYS
+    }
+    return {
+        "prompt_id": prompt_id,
+        "category": category,
+        "prompt": "つらいです。",
+        "axis_scores": axis_scores,
+        "esconv_core_score": core,
+        "weighted_esconv_overall_score": overall,
+        "score_prompt_only": overall,
+        "reason": "prompt-only summary用の理由。",
     }
 
 
