@@ -59,6 +59,9 @@ report
 - Solは4〜7 states、4〜8 observationsを持つ`transition_bayes_network`を直接生成する。
 - JSON構文が壊れた場合は修復を1回行う。
 - schema、確率範囲、各確率行の合計、positive/negative stateを検証する。
+- 各正負stateに反対群よりemissionが0.10以上高い識別観測を要求する。
+- negative優勢観測を2種類以上要求し、早すぎる解答と文脈不一致を分離する。
+- 不合格候補は`rejected_models.jsonl`へ隔離し、canonical modelにはしない。
 - 80会話を途中で切らない。入力文字数上限を超えた場合は停止する。
 
 主出力:
@@ -70,6 +73,8 @@ report
 - `basis_model/mathdial_transition_bayes_model.json`
 - `basis_model/mathdial_transition_compat.json`
 - `basis_model/mathdial_transition_bayes_model.manifest.json`
+- `basis_model/mathdial_model_quality.json`
+- `basis_model/rejected_models.jsonl`（不合格候補があった場合）
 
 ### 2.3 `extract_wildchat`
 
@@ -84,6 +89,10 @@ report
 ### 2.4 `score_wildchat`
 
 - Terraで各応答を生成ベイズモデルのobservationへ分類する。
+- MathDial presetではstate名やdataset hypothesisをTerraへ見せず、observationだけを分類候補にする。
+- 未知ラベルやJSON不正は、許可observationだけを示す短いpromptで最大2回再判定する。
+- 最初の200応答をpilotとし、fallback率・不正出力率が各1%以下、かつ有効観測2種類以上であることを確認する。
+- pilot通過後に同じJSONLをresumeして20,000応答まで処理する。
 - conversation内はturn順を維持してposteriorを逐次更新する。
 - conversation単位で並列化し、結果を逐次JSONLへ追記する。
 - 既存結果のconversation/turn keyはresume時にskipする。
@@ -94,6 +103,7 @@ report
 
 - `domain_random`、`topic_similarity_top`、`basis_top`を同条件で作る。
 - positive/negative statesとemission差から優先・除外observationを自動導出する。
+- MathDialでは各観測の`max positive emission - max negative emission`を使い、±0.05で優先・中立・除外に分ける。
 - 生成モデル固有のラベル名へ依存しない。
 - posterior、観測、文脈長、会話単位上限、MMRを既存ESConv選別器で扱う。
 
@@ -179,7 +189,8 @@ API/GPUなしの確認:
 無人本実行:
 
 ```bash
-RUN_TAG=mathdial_wildchat_gpt56_v2 \
+RUN_TAG=mathdial_wildchat_gpt56_v3 \
+REUSE_DATA_RUN_TAG=mathdial_wildchat_gpt56_v2 \
 WORKERS=8 \
 PYTHONUNBUFFERED=1 \
 ./scripts/run_mathdial_wildchat_watchdog.sh
@@ -190,7 +201,8 @@ watchdogは30秒ごとに進捗を確認し、既定300秒停止した再開可�
 段階実行:
 
 ```bash
-RUN_TAG=mathdial_wildchat_gpt56_v2 \
+RUN_TAG=mathdial_wildchat_gpt56_v3 \
+REUSE_DATA_RUN_TAG=mathdial_wildchat_gpt56_v2 \
 START_STAGE=preprocess \
 END_STAGE=build_dpo \
 WORKERS=8 \
@@ -200,7 +212,7 @@ WORKERS=8 \
 単一stageの明示再実行:
 
 ```bash
-RUN_TAG=mathdial_wildchat_gpt56_v2 \
+RUN_TAG=mathdial_wildchat_gpt56_v3 \
 STAGE=score_wildchat \
 FORCE_STAGE=score_wildchat \
 ./scripts/run_mathdial_wildchat_watchdog.sh
@@ -211,7 +223,7 @@ FORCE_STAGE=score_wildchat \
 watchdogを前面実行している端末では`Ctrl+C`でwatchdogを止める。watchdogは子pipelineのprocess group全体へTERMを送り、必要ならKILLする。tmux外から特定runだけ停止する場合は次を使う。
 
 ```bash
-kill -TERM "$(cat artifacts/mathdial_wildchat/runs/mathdial_wildchat_gpt56_v2/watchdog/watchdog.pid)"
+kill -TERM "$(cat artifacts/mathdial_wildchat/runs/mathdial_wildchat_gpt56_v3/watchdog/watchdog.pid)"
 ```
 
 watchdog script名や広い`python`を条件にした`pkill`は、他の実験を巻き込むため使わない。

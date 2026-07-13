@@ -78,8 +78,9 @@ API/GPUを使用しない全stage接続確認:
 本実験はstage単位で停止・再開できる。
 
 ```bash
-RUN_TAG=mathdial_wildchat_gpt56_v2 \
-START_STAGE=build_basis END_STAGE=build_dpo \
+RUN_TAG=mathdial_wildchat_gpt56_v3 \
+REUSE_DATA_RUN_TAG=mathdial_wildchat_gpt56_v2 \
+START_STAGE=preprocess END_STAGE=build_dpo \
 WORKERS=8 \
 ./scripts/run_mathdial_wildchat_watchdog.sh
 ```

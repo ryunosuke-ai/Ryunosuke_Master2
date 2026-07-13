@@ -462,6 +462,7 @@ def score_japanese_response(
     generator: TextGenerator,
     score_model: str,
     max_output_tokens: int,
+    style_preset: str = DEFAULT_STYLE_PRESET,
 ) -> dict[str, Any]:
     """日本語prompt/responseを観測ラベル化し、ベイズスコアを計算する。"""
     scoring_record = {
@@ -470,15 +471,22 @@ def score_japanese_response(
         "prompt": record["prompt"],
         "response": response,
     }
+    scoring_preset = (
+        "mathdial_tutoring" if style_preset == "mathdial_tutoring" else "legacy"
+    )
     return score_single_record(
         scoring_record,
         bayes_model=bayes_model,
         generator=generator,
         model=score_model,
         max_output_tokens=max_output_tokens,
-        instructions=build_transition_scoring_instructions(bayes_model),
+        instructions=build_transition_scoring_instructions(
+            bayes_model, scoring_preset=scoring_preset
+        ),
         prior_distribution=record.get("prior_state_distribution"),
         progress_label="[STEP 5/6] japanese rescore",
+        scoring_preset=scoring_preset,
+        invalid_observation_retries=2 if scoring_preset == "mathdial_tutoring" else 0,
     )
 
 
@@ -561,6 +569,7 @@ def choose_rejected(
     generator: TextGenerator,
     score_model: str,
     max_output_tokens: int,
+    style_preset: str = DEFAULT_STYLE_PRESET,
 ) -> tuple[str, dict[str, Any], float]:
     """複数rejected候補を再スコアリングし、score_gap最大の候補を選ぶ。"""
     best_text = ""
@@ -577,6 +586,7 @@ def choose_rejected(
             generator=generator,
             score_model=score_model,
             max_output_tokens=max_output_tokens,
+            style_preset=style_preset,
         )
         gap = chosen_posterior - float(rejected_score["posterior"])
         if gap > best_gap:
@@ -689,6 +699,7 @@ def build_one_dpo_record(
         generator=generator,
         score_model=score_model,
         max_output_tokens=max_output_tokens,
+        style_preset=style_preset,
     )
     rejected_text, rejected_score, score_gap = choose_rejected(
         base_record=japanese_record,
@@ -698,6 +709,7 @@ def build_one_dpo_record(
         generator=generator,
         score_model=score_model,
         max_output_tokens=max_output_tokens,
+        style_preset=style_preset,
     )
     dpo_prompt = (
         build_mathdial_dpo_prompt_from_context_text(translation_payload["translated_prompt"])

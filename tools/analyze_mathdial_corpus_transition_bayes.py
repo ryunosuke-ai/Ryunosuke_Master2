@@ -23,6 +23,17 @@ from tools.analyze_small_corpus_transition_bayes import build_json_repair_instru
 
 DEFAULT_MAX_OUTPUT_TOKENS = 24_000
 DEFAULT_MAX_INPUT_CHARS = 300_000
+DEFAULT_EMISSION_MARGIN = 0.10
+DEFAULT_MIN_NEGATIVE_OBSERVATIONS = 2
+
+
+class MathDialModelQualityError(ValueError):
+    """生成候補がMathDial固有の識別性要件を満たさない場合の例外。"""
+
+    def __init__(self, message: str, *, candidate: dict[str, Any], diagnostics: dict[str, Any]):
+        super().__init__(message)
+        self.candidate = candidate
+        self.diagnostics = diagnostics
 
 
 def read_analysis_jsonl(path: Path | str) -> list[dict[str, Any]]:
@@ -97,6 +108,7 @@ Teacher move利用方針:
 - probingとfocusが、誤り診断、焦点化、段階的推論、自己修正へどう使い分けられるかを分析する。
 - tellingは、診断後の必要な説明・訂正と、情報不足のまま答えを与える早すぎるtellingを区別する。
 - genericは、励まし・会話管理として有効な場合と、学習状態に根拠づけられない場合を区別する。
+- 診断後に学習者の誤りへ対応して行う説明・訂正は、正の指導戦略として明確に表現する。
 
 モデル設計方針:
 1. 状態は会話の進行局面を表す4〜7個とし、単なる数学トピックや表現技法にしない。
@@ -105,6 +117,10 @@ Teacher move利用方針:
 4. observationsはprompt/responseから後段LLMが安定分類できるassistant応答戦略を4〜8個作る。
 5. initial_state_prior、P(next_state|current_state)、P(observation|state)をコーパス本文とannotationに基づいて設定する。
 6. 低頻度・曖昧で区別しにくいラベルは統合する。
+7. premature direct answerとは別に、反復、文脈不一致、根拠のない称賛などを表すoff-style observationを必ず作る。
+8. 各positive stateと各negative stateに、反対群よりemissionが0.10以上高く、その状態を識別できるobservationを最低1つ持たせる。
+9. negative群が優勢なobservationを最低2種類作る。早すぎる直接解答と、文脈不一致・根拠なし応答を同じobservationへ統合しない。
+10. stateは潜在的な会話局面、observationは応答から直接分類する機能である。state名とobservation名を同一または機能的に重複させない。
 
 出力制約:
 - JSON objectのみを出力し、Markdownや説明文を付けない。
@@ -124,47 +140,128 @@ def mock_model() -> dict[str, Any]:
         "diagnosing_need",
         "guided_scaffolding",
         "verified_understanding",
-        "off_style_telling",
+        "premature_telling",
+        "stalled_misalignment",
     ]
     observations = [
-        "diagnostic_question",
+        "elicit_reasoning",
         "focused_hint",
+        "diagnosed_explanation",
         "understanding_check",
         "premature_answer",
+        "context_misaligned_response",
+        "ungrounded_praise",
     ]
     return {
         "name": "mathdial_tutoring_transition_model",
         "model_type": "transition_bayes_network",
         "states": states,
         "positive_states": states[:3],
-        "negative_states": [states[3]],
+        "negative_states": states[3:],
         "observations": observations,
-        "initial_state_prior": dict(zip(states, [0.55, 0.25, 0.10, 0.10])),
+        "initial_state_prior": dict(zip(states, [0.40, 0.30, 0.12, 0.10, 0.08])),
         "transition_likelihoods": {
-            states[0]: dict(zip(states, [0.20, 0.60, 0.10, 0.10])),
-            states[1]: dict(zip(states, [0.10, 0.45, 0.35, 0.10])),
-            states[2]: dict(zip(states, [0.10, 0.20, 0.60, 0.10])),
-            states[3]: dict(zip(states, [0.15, 0.15, 0.10, 0.60])),
+            states[0]: dict(zip(states, [0.25, 0.50, 0.10, 0.08, 0.07])),
+            states[1]: dict(zip(states, [0.10, 0.45, 0.32, 0.07, 0.06])),
+            states[2]: dict(zip(states, [0.08, 0.17, 0.60, 0.07, 0.08])),
+            states[3]: dict(zip(states, [0.12, 0.13, 0.10, 0.55, 0.10])),
+            states[4]: dict(zip(states, [0.15, 0.15, 0.10, 0.10, 0.50])),
         },
         "emission_likelihoods": {
-            states[0]: dict(zip(observations, [0.60, 0.20, 0.10, 0.10])),
-            states[1]: dict(zip(observations, [0.20, 0.60, 0.15, 0.05])),
-            states[2]: dict(zip(observations, [0.15, 0.20, 0.60, 0.05])),
-            states[3]: dict(zip(observations, [0.10, 0.10, 0.10, 0.70])),
+            states[0]: dict(zip(observations, [0.50, 0.15, 0.15, 0.08, 0.04, 0.04, 0.04])),
+            states[1]: dict(zip(observations, [0.14, 0.43, 0.20, 0.12, 0.03, 0.04, 0.04])),
+            states[2]: dict(zip(observations, [0.10, 0.10, 0.22, 0.45, 0.03, 0.04, 0.06])),
+            states[3]: dict(zip(observations, [0.08, 0.07, 0.12, 0.06, 0.55, 0.06, 0.06])),
+            states[4]: dict(zip(observations, [0.06, 0.06, 0.08, 0.06, 0.06, 0.42, 0.26])),
         },
         "state_descriptions": {
             states[0]: "学習者の試行や誤りを確認して支援方針を定める状態。",
             states[1]: "質問や段階的ヒントで学習者自身の推論を進める状態。",
             states[2]: "自己修正や理解を確認して解決へまとめる状態。",
-            states[3]: "十分な診断なしに答えを与えるなど目的から外れた状態。",
+            states[3]: "十分な診断や足場かけなしに答えを与える状態。",
+            states[4]: "学習者の直前発話と対応しない反復や根拠のない称賛で進行が停滞する状態。",
         },
         "observation_descriptions": {
             observations[0]: "学習者の考え方や誤りの理由を尋ねる応答。",
             observations[1]: "答えを明かさず次の一歩へ焦点を当てる質問やヒント。",
-            observations[2]: "学習者自身に理解や修正結果を確認させる応答。",
-            observations[3]: "情報不足のまま最終答えや全手順を提示する応答。",
+            observations[2]: "診断した誤りに対応して必要な説明や訂正を行う応答。",
+            observations[3]: "学習者自身に理解や修正結果を確認させる応答。",
+            observations[4]: "情報不足のまま最終答えや全手順を提示する応答。",
+            observations[5]: "直前の学習者発話と対応しない反復・一般論・別文脈の応答。",
+            observations[6]: "学習内容の根拠なしに称賛や会話管理だけを行う応答。",
         },
         "dataset_hypothesis": "学習者状態を診断し、質問と足場かけで自己修正へ導く個別指導対話。",
+    }
+
+
+def evaluate_emission_quality(
+    payload: dict[str, Any],
+    *,
+    margin: float = DEFAULT_EMISSION_MARGIN,
+    min_negative_observations: int = DEFAULT_MIN_NEGATIVE_OBSERVATIONS,
+) -> dict[str, Any]:
+    """正負状態を観測から識別できるか検証し、診断情報を返す。"""
+    model = parse_transition_bayes_model(payload)
+    positive_rows: dict[str, Any] = {}
+    negative_rows: dict[str, Any] = {}
+    for state in model.positive_states:
+        candidates = {
+            observation: model.emission_likelihoods[state][observation]
+            - max(model.emission_likelihoods[other][observation] for other in model.negative_states)
+            for observation in model.observations
+        }
+        best = max(candidates, key=candidates.get)
+        positive_rows[state] = {
+            "best_observation": best,
+            "margin": candidates[best],
+            "passed": candidates[best] >= margin,
+        }
+    for state in model.negative_states:
+        candidates = {
+            observation: model.emission_likelihoods[state][observation]
+            - max(model.emission_likelihoods[other][observation] for other in model.positive_states)
+            for observation in model.observations
+        }
+        best = max(candidates, key=candidates.get)
+        negative_rows[state] = {
+            "best_observation": best,
+            "margin": candidates[best],
+            "passed": candidates[best] >= margin,
+        }
+    negative_dominant = []
+    for observation in model.observations:
+        negative_max = max(
+            model.emission_likelihoods[state][observation]
+            for state in model.negative_states
+        )
+        positive_max = max(
+            model.emission_likelihoods[state][observation]
+            for state in model.positive_states
+        )
+        if negative_max - positive_max >= margin:
+            negative_dominant.append(
+                {
+                    "observation": observation,
+                    "negative_max": negative_max,
+                    "positive_max": positive_max,
+                    "margin": negative_max - positive_max,
+                }
+            )
+    overlapping_names = sorted(set(model.states) & set(model.observations))
+    passed = (
+        all(row["passed"] for row in positive_rows.values())
+        and all(row["passed"] for row in negative_rows.values())
+        and len(negative_dominant) >= min_negative_observations
+        and not overlapping_names
+    )
+    return {
+        "passed": passed,
+        "required_margin": margin,
+        "minimum_negative_dominant_observations": min_negative_observations,
+        "positive_state_discriminators": positive_rows,
+        "negative_state_discriminators": negative_rows,
+        "negative_dominant_observations": negative_dominant,
+        "overlapping_state_observation_names": overlapping_names,
     }
 
 
@@ -176,6 +273,8 @@ def generate_model(
     max_output_tokens: int,
     max_input_chars: int,
     mock: bool,
+    emission_margin: float = DEFAULT_EMISSION_MARGIN,
+    min_negative_observations: int = DEFAULT_MIN_NEGATIVE_OBSERVATIONS,
     progress: Callable[[str], None] | None = None,
 ) -> tuple[dict[str, Any], str, str]:
     instructions = build_mathdial_analysis_instructions()
@@ -206,11 +305,24 @@ def generate_model(
                 response_text_format={"type": "json_object"},
             )
             payload = extract_json_object(repaired)
-    parsed = parse_transition_bayes_model(payload)
-    if not 4 <= len(parsed.states) <= 7:
-        raise ValueError(f"MathDialモデルのstate数が範囲外です: {len(parsed.states)}")
-    if not 4 <= len(parsed.observations) <= 8:
-        raise ValueError(f"MathDialモデルのobservation数が範囲外です: {len(parsed.observations)}")
+    try:
+        parsed = parse_transition_bayes_model(payload)
+        if not 4 <= len(parsed.states) <= 7:
+            raise ValueError(f"MathDialモデルのstate数が範囲外です: {len(parsed.states)}")
+        if not 4 <= len(parsed.observations) <= 8:
+            raise ValueError(f"MathDialモデルのobservation数が範囲外です: {len(parsed.observations)}")
+        diagnostics = evaluate_emission_quality(
+            payload,
+            margin=emission_margin,
+            min_negative_observations=min_negative_observations,
+        )
+        if not diagnostics["passed"]:
+            raise ValueError("MathDialモデルのemission識別性gateに不合格です。")
+    except ValueError as exc:
+        diagnostics = locals().get("diagnostics", {"passed": False, "schema_error": str(exc)})
+        raise MathDialModelQualityError(
+            str(exc), candidate=payload, diagnostics=diagnostics
+        ) from exc
     return payload, instructions, corpus_text
 
 
@@ -228,6 +340,26 @@ def _write_json_atomic(payload: dict[str, Any], path: Path | str) -> None:
     temporary.replace(output)
 
 
+def _append_rejected_model(
+    path: Path | str,
+    *,
+    error: Exception,
+    model: str,
+    candidate: dict[str, Any],
+    diagnostics: dict[str, Any],
+) -> None:
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "analysis_model": model,
+        "error": f"{type(error).__name__}: {error}",
+        "diagnostics": diagnostics,
+        "candidate": candidate,
+    }
+    with output.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 def main() -> int:
     load_env_file()
     parser = argparse.ArgumentParser(description="MathDialから遷移ベイズモデルを直接生成")
@@ -237,9 +369,17 @@ def main() -> int:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--prompt-output", required=True)
     parser.add_argument("--input-text-output", required=True)
+    parser.add_argument("--quality-report-output", required=True)
+    parser.add_argument("--rejected-models-output", required=True)
     parser.add_argument("--model", default=resolve_analysis_model())
     parser.add_argument("--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS)
     parser.add_argument("--max-input-chars", type=int, default=DEFAULT_MAX_INPUT_CHARS)
+    parser.add_argument("--emission-margin", type=float, default=DEFAULT_EMISSION_MARGIN)
+    parser.add_argument(
+        "--min-negative-observations",
+        type=int,
+        default=DEFAULT_MIN_NEGATIVE_OBSERVATIONS,
+    )
     parser.add_argument("--mock", action="store_true")
     args = parser.parse_args()
     started = time.monotonic()
@@ -248,20 +388,38 @@ def main() -> int:
         print(f"[{time.monotonic() - started:6.1f}s] {message}", flush=True)
 
     records = read_analysis_jsonl(args.input)
-    payload, instructions, corpus_text = generate_model(
-        records,
-        generator=None if args.mock else OpenAIResponsesGenerator(),
-        model=args.model,
-        max_output_tokens=args.max_output_tokens,
-        max_input_chars=args.max_input_chars,
-        mock=args.mock,
-        progress=report,
+    try:
+        payload, instructions, corpus_text = generate_model(
+            records,
+            generator=None if args.mock else OpenAIResponsesGenerator(),
+            model=args.model,
+            max_output_tokens=args.max_output_tokens,
+            max_input_chars=args.max_input_chars,
+            mock=args.mock,
+            emission_margin=args.emission_margin,
+            min_negative_observations=args.min_negative_observations,
+            progress=report,
+        )
+    except MathDialModelQualityError as exc:
+        _append_rejected_model(
+            args.rejected_models_output,
+            error=exc,
+            model=args.model,
+            candidate=exc.candidate,
+            diagnostics=exc.diagnostics,
+        )
+        raise
+    quality = evaluate_emission_quality(
+        payload,
+        margin=args.emission_margin,
+        min_negative_observations=args.min_negative_observations,
     )
     _write_json_atomic(payload, args.output)
     if args.compat_output:
         _write_json_atomic(payload, args.compat_output)
     Path(args.prompt_output).write_text(instructions + "\n", encoding="utf-8")
     Path(args.input_text_output).write_text(corpus_text + "\n", encoding="utf-8")
+    _write_json_atomic(quality, args.quality_report_output)
     moves = Counter(
         move
         for row in records for turn in row["dialog"]
@@ -280,6 +438,7 @@ def main() -> int:
         "analysis_text_sha256": _sha256_text(corpus_text),
         "max_input_chars": args.max_input_chars,
         "max_output_tokens": args.max_output_tokens,
+        "emission_quality": quality,
     }
     _write_json_atomic(manifest, args.manifest)
     report(f"MathDial遷移ベイズモデルを書き出しました: {args.output}")

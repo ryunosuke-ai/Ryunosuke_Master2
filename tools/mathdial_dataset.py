@@ -137,17 +137,28 @@ def download_mathdial_files(dataset_name: str, revision: str) -> tuple[dict[str,
         )
         for split in ("train", "test")
     }
-    info = HfApi().dataset_info(repo_id=dataset_name, revision=revision)
-    card_data = getattr(info, "card_data", None)
-    license_value = getattr(card_data, "license", None) if card_data is not None else None
+    metadata_error = None
+    try:
+        info = HfApi().dataset_info(repo_id=dataset_name, revision=revision)
+        card_data = getattr(info, "card_data", None)
+        license_value = getattr(card_data, "license", None) if card_data is not None else None
+        resolved_revision = getattr(info, "sha", revision)
+    except Exception as exc:
+        # データ本体がrevision固定cacheから得られた場合、補助的なcard照会だけで
+        # 前処理を失敗させない。snapshotディレクトリ名を解決revisionとして残す。
+        info = None
+        license_value = None
+        resolved_revision = paths["train"].parent.name or revision
+        metadata_error = f"{type(exc).__name__}: {exc}"
     return paths, {
         "dataset_name": dataset_name,
         "source_url": f"https://huggingface.co/datasets/{dataset_name}",
         "official_github_url": "https://github.com/eth-nlped/mathdial",
         "retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
         "requested_revision": revision,
-        "resolved_revision": getattr(info, "sha", revision),
+        "resolved_revision": resolved_revision,
         "huggingface_license": license_value,
+        "metadata_lookup_error": metadata_error,
         "source_files": {
             split: {"filename": path.name, "sha256": sha256_file(path)}
             for split, path in paths.items()

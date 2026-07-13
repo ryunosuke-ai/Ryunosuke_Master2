@@ -13,6 +13,7 @@ from typing import Any
 
 from core.transition_bayes_model import load_transition_bayes_model
 from tools.extract_high_posterior_dialogues import (
+    derive_selection_label_diagnostics,
     derive_selection_labels_from_model,
     select_high_posterior_records,
 )
@@ -87,6 +88,8 @@ def select_groups(
     random_count: int,
     seed: int,
     bayes_model_path: Path | str | None = None,
+    label_derivation_method: str = "state_specific_margin",
+    selection_margin: float = 0.05,
 ) -> dict[str, list[dict[str, Any]]]:
     """既存posterior抽出を用いて3比較群を作る。"""
     deduped = {}
@@ -112,7 +115,9 @@ def select_groups(
     topic = sorted(pool, key=lambda row: row["topic_similarity_score"], reverse=True)[:count]
     if bayes_model_path:
         labels = derive_selection_labels_from_model(
-            load_transition_bayes_model(bayes_model_path)
+            load_transition_bayes_model(bayes_model_path),
+            method=label_derivation_method,
+            minimum_margin=selection_margin,
         )
     else:
         labels = {
@@ -160,11 +165,19 @@ def main() -> int:
     parser.add_argument("--count", type=int, default=2000)
     parser.add_argument("--random-count", type=int, default=2500)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--label-derivation-method",
+        choices=("mean_difference", "state_specific_margin"),
+        default="state_specific_margin",
+    )
+    parser.add_argument("--selection-margin", type=float, default=0.05)
     args = parser.parse_args()
     groups = select_groups(
         read_jsonl(args.scored), read_jsonl(args.mathdial_conversations),
         count=args.count, random_count=args.random_count, seed=args.seed,
         bayes_model_path=args.bayes_model,
+        label_derivation_method=args.label_derivation_method,
+        selection_margin=args.selection_margin,
     )
     shortages = {
         name: (len(rows), args.random_count if name == "domain_random" else args.count)
@@ -177,7 +190,16 @@ def main() -> int:
     output = Path(args.output_dir)
     for name, rows in groups.items():
         write_jsonl(rows, output / f"{name}.jsonl")
-    (output / "selection_report.json").write_text(json.dumps(diagnostics(groups), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    report = diagnostics(groups)
+    report["label_derivation"] = derive_selection_label_diagnostics(
+        load_transition_bayes_model(args.bayes_model),
+        method=args.label_derivation_method,
+        minimum_margin=args.selection_margin,
+    )
+    (output / "selection_report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     return 0
 
 

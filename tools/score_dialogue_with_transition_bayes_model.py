@@ -35,6 +35,7 @@ from tools.jsonl_utils import ensure_jsonl_append_boundary, read_jsonl_records
 DEFAULT_INPUT_PATH = "data/large_dialogue.jsonl"
 DEFAULT_MODEL_PATH = "artifacts/bayes_models/generated_transition_bayes_model.json"
 DEFAULT_OUTPUT_PATH = "artifacts/scored_dialogues/transition_bayes_scored_dialogue.jsonl"
+SCORING_PRESETS = ("legacy", "mathdial_tutoring")
 CONTENT_FILTER_FALLBACK_REASON = (
     "LLM評価APIのcontent filterにより観測ラベルを直接判定できなかったため、"
     "大量処理継続用にnegative/off_style寄りの観測へフォールバックしました。"
@@ -80,6 +81,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="content_filter以外のAPI/JSON失敗もnegative寄り観測へフォールバックして処理を継続します。",
     )
+    parser.add_argument(
+        "--scoring-preset",
+        choices=SCORING_PRESETS,
+        default="legacy",
+        help="観測分類指示。既定legacyは既存ESConv互換、mathdial_tutoringはMathDial専用です。",
+    )
+    parser.add_argument(
+        "--invalid-observation-retries",
+        type=int,
+        default=0,
+        help="未知ラベル・JSON不正時に許可観測だけで再判定する回数。legacyの既定は0です。",
+    )
     parser.add_argument("--audit-log", default=DEFAULT_AUDIT_LOG_PATH, help="重要操作の要約を追記するaudit_log.mdのパス。")
     parser.add_argument("--dry-run", action="store_true", help="APIを呼ばず、入力件数だけ確認します。")
     return parser.parse_args()
@@ -105,8 +118,16 @@ def limit_records_by_conversation(
     return selected
 
 
-def build_transition_scoring_instructions(model: TransitionBayesModel) -> str:
+def build_transition_scoring_instructions(
+    model: TransitionBayesModel,
+    *,
+    scoring_preset: str = "legacy",
+) -> str:
     """状態遷移モデル用の観測ラベル判定指示を作る。"""
+    if scoring_preset == "mathdial_tutoring":
+        return build_mathdial_scoring_instructions(model)
+    if scoring_preset != "legacy":
+        raise ValueError(f"未知のscoring presetです: {scoring_preset}")
     observation_lines = "\n".join(f"- {name}: {model.observation_descriptions[name]}" for name in model.observations)
     state_lines = "\n".join(f"- {name}: {model.state_descriptions[name]}" for name in model.states)
     return (
@@ -125,6 +146,50 @@ def build_transition_scoring_instructions(model: TransitionBayesModel) -> str:
         f"推定されたデータセット目的:\n{model.dataset_hypothesis}\n\n"
         f"会話状態:\n{state_lines}\n\n"
         f"観測ラベル:\n{observation_lines}"
+    )
+
+
+def build_mathdial_scoring_instructions(model: TransitionBayesModel) -> str:
+    """state情報を見せずにMathDialの応答戦略だけを分類する指示を作る。"""
+    observation_lines = "\n".join(
+        f"- {name}: {model.observation_descriptions[name]}"
+        for name in model.observations
+    )
+    allowed = ", ".join(model.observations)
+    return (
+        "あなたは個別指導対話のassistant応答戦略を分類する評価者です。"
+        "数学知識や話題の一致ではなく、promptの学習者状態に対してresponseが果たす機能を判定してください。\n\n"
+        "判定手順:\n"
+        "1. promptから、学習者の試行、誤り、混乱、理解の進展を読む。\n"
+        "2. responseが診断、焦点化、段階的ヒント、説明、理解確認、または目的外応答のどれに最も近いか判断する。\n"
+        "3. 診断後に必要な説明や誤概念訂正を行うことは、正当な個別指導戦略になり得る。"
+        "最終答えを示すこと自体ではなく、十分な診断や足場かけなしに答えを与えたかで区別する。\n"
+        "4. 下記の観測ラベルから必ず1つだけ選ぶ。state名や新しいラベルは絶対に出力しない。\n\n"
+        "出力はJSON objectのみとし、observation, score, reasonを含める。"
+        "observationは許可ラベルと完全一致させる。scoreは0.0〜1.0の分類確信度、"
+        "reasonは文脈と応答機能に基づく簡潔な日本語とする。\n\n"
+        f"許可されるobservation: {allowed}\n\n"
+        f"観測ラベル:\n{observation_lines}"
+    )
+
+
+def build_invalid_observation_retry_instructions(
+    model: TransitionBayesModel,
+    *,
+    error: Exception,
+) -> str:
+    """未知ラベル・JSON不正を許可観測だけで修正する短い指示を作る。"""
+    observation_lines = "\n".join(
+        f"- {name}: {model.observation_descriptions[name]}"
+        for name in model.observations
+    )
+    return (
+        "直前の出力は観測分類schemaに適合しませんでした。"
+        "会話を再判定し、下記のobservation名から必ず1つだけを選んでください。"
+        "state名、新しいラベル、Markdownは出力禁止です。\n"
+        f"不適合種別: {type(error).__name__}\n\n"
+        "出力schema: {\"observation\": \"許可ラベル\", \"score\": 0.0, \"reason\": \"簡潔な根拠\"}\n\n"
+        f"許可観測:\n{observation_lines}"
     )
 
 
@@ -216,6 +281,7 @@ def build_fallback_scoring_result(
     prior_distribution: dict[str, float] | None,
     reason: str,
     error_label: str,
+    error_kind: str = "api_or_json",
     progress_label: str,
 ) -> dict[str, Any]:
     """LLM判定不能時のnegative寄りフォールバック結果を作る。"""
@@ -241,7 +307,69 @@ def build_fallback_scoring_result(
         "prior_state_distribution": prior_distribution,
         **bayes_result,
         "llm_error": error_label,
+        "llm_error_kind": error_kind,
     }
+
+
+def _generate_observation_score(
+    record: dict[str, Any],
+    *,
+    bayes_model: TransitionBayesModel,
+    generator: TextGenerator,
+    model: str,
+    max_output_tokens: int,
+    instructions: str,
+    input_text: str,
+) -> TransitionObservationScore:
+    """LLMへ1回分類を依頼して、検証済み観測へ変換する。"""
+    output_text = generator.generate(
+        instructions=instructions,
+        input_text=input_text,
+        model=model,
+        max_output_tokens=max_output_tokens,
+        response_text_format={"type": "json_object"},
+    )
+    return parse_transition_observation_score(
+        extract_json_object(output_text),
+        bayes_model,
+    )
+
+
+def _retry_invalid_observation(
+    record: dict[str, Any],
+    *,
+    initial_error: Exception,
+    attempts: int,
+    bayes_model: TransitionBayesModel,
+    generator: TextGenerator,
+    model: str,
+    max_output_tokens: int,
+    progress_label: str,
+) -> TransitionObservationScore:
+    """許可観測だけを示し、schema不正な分類を再判定する。"""
+    retry_error = initial_error
+    for retry_index in range(max(0, attempts)):
+        print(
+            f"{progress_label}: invalid observation retry "
+            f"{retry_index + 1}/{attempts} "
+            f"{record['conversation_id']}#{record['turn_index']}",
+            flush=True,
+        )
+        try:
+            return _generate_observation_score(
+                record,
+                bayes_model=bayes_model,
+                generator=generator,
+                model=model,
+                max_output_tokens=max_output_tokens,
+                instructions=build_invalid_observation_retry_instructions(
+                    bayes_model, error=retry_error
+                ),
+                input_text=build_scoring_input(record),
+            )
+        except Exception as exc:
+            retry_error = exc
+    raise retry_error
 
 
 def score_single_record(
@@ -255,55 +383,51 @@ def score_single_record(
     prior_distribution: dict[str, float] | None,
     progress_label: str,
     fallback_on_errors: bool = False,
+    scoring_preset: str = "legacy",
+    invalid_observation_retries: int = 0,
 ) -> dict[str, Any]:
     """1レコードをLLM観測分類し、状態遷移ベイズモデルで更新する。"""
     conversation_id = str(record["conversation_id"])
     llm_error: str | None = None
     llm_retry: str | None = None
     try:
-        output_text = generator.generate(
-            instructions=instructions,
-            input_text=build_scoring_input(record),
+        observation_score = _generate_observation_score(
+            record,
+            bayes_model=bayes_model,
+            generator=generator,
             model=model,
             max_output_tokens=max_output_tokens,
-            response_text_format={"type": "json_object"},
-        )
-        observation_score = parse_transition_observation_score(
-            extract_json_object(output_text),
-            bayes_model,
+            instructions=instructions,
+            input_text=build_scoring_input(record),
         )
     except Exception as exc:
         if not is_content_filter_error(exc):
-            if not fallback_on_errors:
-                raise
-            return build_fallback_scoring_result(
-                record,
-                bayes_model=bayes_model,
-                prior_distribution=prior_distribution,
-                reason=ERROR_FALLBACK_REASON,
-                error_label=f"{type(exc).__name__}: {exc}",
-                progress_label=progress_label,
-            )
-        print(
-            f"{progress_label}: content_filter retry with sanitized input "
-            f"{conversation_id}#{record['turn_index']}",
-            flush=True,
-        )
-        try:
-            output_text = generator.generate(
-                instructions=instructions,
-                input_text=build_safe_scoring_input(record),
-                model=model,
-                max_output_tokens=max_output_tokens,
-                response_text_format={"type": "json_object"},
-            )
-            observation_score = parse_transition_observation_score(
-                extract_json_object(output_text),
-                bayes_model,
-            )
-            llm_retry = "content_filter_sanitized_retry"
-        except Exception as retry_exc:
-            if not is_content_filter_error(retry_exc):
+            if scoring_preset == "mathdial_tutoring" and isinstance(exc, ValueError):
+                try:
+                    observation_score = _retry_invalid_observation(
+                        record,
+                        initial_error=exc,
+                        attempts=invalid_observation_retries,
+                        bayes_model=bayes_model,
+                        generator=generator,
+                        model=model,
+                        max_output_tokens=max_output_tokens,
+                        progress_label=progress_label,
+                    )
+                    llm_retry = "invalid_observation_retry"
+                except Exception as retry_error:
+                    if not fallback_on_errors:
+                        raise retry_error
+                    return build_fallback_scoring_result(
+                        record,
+                        bayes_model=bayes_model,
+                        prior_distribution=prior_distribution,
+                        reason=ERROR_FALLBACK_REASON,
+                        error_label=f"{type(retry_error).__name__}: {retry_error}",
+                        error_kind="invalid_observation",
+                        progress_label=progress_label,
+                    )
+            else:
                 if not fallback_on_errors:
                     raise
                 return build_fallback_scoring_result(
@@ -311,18 +435,87 @@ def score_single_record(
                     bayes_model=bayes_model,
                     prior_distribution=prior_distribution,
                     reason=ERROR_FALLBACK_REASON,
-                    error_label=f"content_filter_retry_error: {type(retry_exc).__name__}: {retry_exc}",
+                    error_label=f"{type(exc).__name__}: {exc}",
+                    error_kind="api_or_json",
                     progress_label=progress_label,
                 )
-            llm_error = f"content_filter: {retry_exc}"
-            return build_fallback_scoring_result(
-                record,
-                bayes_model=bayes_model,
-                prior_distribution=prior_distribution,
-                reason=CONTENT_FILTER_FALLBACK_REASON,
-                error_label=llm_error,
-                progress_label=progress_label,
+        else:
+            print(
+                f"{progress_label}: content_filter retry with sanitized input "
+                f"{conversation_id}#{record['turn_index']}",
+                flush=True,
             )
+            try:
+                observation_score = _generate_observation_score(
+                    record,
+                    bayes_model=bayes_model,
+                    generator=generator,
+                    model=model,
+                    max_output_tokens=max_output_tokens,
+                    instructions=instructions,
+                    input_text=build_safe_scoring_input(record),
+                )
+                llm_retry = "content_filter_sanitized_retry"
+            except Exception as retry_exc:
+                if not is_content_filter_error(retry_exc):
+                    if (
+                        scoring_preset == "mathdial_tutoring"
+                        and isinstance(retry_exc, ValueError)
+                    ):
+                        try:
+                            observation_score = _retry_invalid_observation(
+                                record,
+                                initial_error=retry_exc,
+                                attempts=invalid_observation_retries,
+                                bayes_model=bayes_model,
+                                generator=generator,
+                                model=model,
+                                max_output_tokens=max_output_tokens,
+                                progress_label=progress_label,
+                            )
+                            llm_retry = "invalid_observation_retry"
+                        except Exception as semantic_error:
+                            if not fallback_on_errors:
+                                raise
+                            return build_fallback_scoring_result(
+                                record,
+                                bayes_model=bayes_model,
+                                prior_distribution=prior_distribution,
+                                reason=ERROR_FALLBACK_REASON,
+                                error_label=(
+                                    "content_filter_retry_invalid_observation: "
+                                    f"{type(semantic_error).__name__}: {semantic_error}"
+                                ),
+                                error_kind="invalid_observation",
+                                progress_label=progress_label,
+                            )
+                        # semantic retry成功時はこのexceptを抜けて更新へ進む。
+                        retry_exc = None
+                    if retry_exc is None:
+                        pass
+                    elif not fallback_on_errors:
+                        raise
+                    else:
+                        return build_fallback_scoring_result(
+                            record,
+                            bayes_model=bayes_model,
+                            prior_distribution=prior_distribution,
+                            reason=ERROR_FALLBACK_REASON,
+                            error_label=f"content_filter_retry_error: {type(retry_exc).__name__}: {retry_exc}",
+                            error_kind="content_filter_retry_error",
+                            progress_label=progress_label,
+                        )
+                else:
+                    llm_error = f"content_filter: {retry_exc}"
+                    return build_fallback_scoring_result(
+                        record,
+                        bayes_model=bayes_model,
+                        prior_distribution=prior_distribution,
+                        reason=CONTENT_FILTER_FALLBACK_REASON,
+                        error_label=llm_error,
+                        error_kind="content_filter",
+                        progress_label=progress_label,
+                    )
     bayes_result = score_transition_observation(
         bayes_model,
         observation_score,
@@ -351,6 +544,8 @@ def score_conversation_records(
     initial_distribution: dict[str, float] | None,
     progress_label: str,
     fallback_on_errors: bool = False,
+    scoring_preset: str = "legacy",
+    invalid_observation_retries: int = 0,
 ) -> list[dict[str, Any]]:
     """1会話内のレコードを順序通りにスコアリングする。"""
     results: list[dict[str, Any]] = []
@@ -366,6 +561,8 @@ def score_conversation_records(
             prior_distribution=prior_distribution,
             progress_label=progress_label,
             fallback_on_errors=fallback_on_errors,
+            scoring_preset=scoring_preset,
+            invalid_observation_retries=invalid_observation_retries,
         )
         prior_distribution = dict(result["state_posteriors"])
         results.append(result)
@@ -384,6 +581,8 @@ def score_records(
     output_path: Path | str | None = None,
     workers: int = 1,
     fallback_on_errors: bool = False,
+    scoring_preset: str = "legacy",
+    invalid_observation_retries: int = 0,
 ) -> list[dict[str, Any]]:
     """対話レコード群を状態遷移ベイズモデルでスコアリングする。"""
     results: list[dict[str, Any]] = list(existing_results or [])
@@ -397,7 +596,9 @@ def score_records(
                 for state, value in state_posteriors.items()
                 if isinstance(value, (int, float))
             }
-    instructions = build_transition_scoring_instructions(bayes_model)
+    instructions = build_transition_scoring_instructions(
+        bayes_model, scoring_preset=scoring_preset
+    )
     sorted_records = sorted(records, key=lambda item: (str(item["conversation_id"]), int(item["turn_index"])))
     pending_records = [record for record in sorted_records if _record_key(record) not in done_keys]
     if done_keys:
@@ -429,6 +630,8 @@ def score_records(
                     prior_distribution=distribution_by_conversation.get(conversation_id),
                     progress_label=progress_label,
                     fallback_on_errors=fallback_on_errors,
+                    scoring_preset=scoring_preset,
+                    invalid_observation_retries=invalid_observation_retries,
                 )
                 distribution_by_conversation[conversation_id] = dict(result["state_posteriors"])
                 results.append(result)
@@ -458,6 +661,8 @@ def score_records(
                         initial_distribution=distribution_by_conversation.get(conversation_id),
                         progress_label=progress_label,
                         fallback_on_errors=fallback_on_errors,
+                        scoring_preset=scoring_preset,
+                        invalid_observation_retries=invalid_observation_retries,
                     ): conversation_id
                     for conversation_id, conversation_records in records_by_conversation.items()
                 }
@@ -514,6 +719,8 @@ def main() -> int:
         output_path=Path(args.output),
         workers=max(1, args.workers),
         fallback_on_errors=args.fallback_on_errors,
+        scoring_preset=args.scoring_preset,
+        invalid_observation_retries=max(0, args.invalid_observation_retries),
     )
     retry_count = sum(1 for record in scored if record.get("llm_retry") == "content_filter_sanitized_retry")
     fallback_count = sum(1 for record in scored if str(record.get("llm_error", "")).startswith("content_filter:"))

@@ -88,22 +88,55 @@ def _label_text(value: set[str]) -> str:
     return ",".join(sorted(value))
 
 
-def derive_selection_labels_from_model(model: TransitionBayesModel) -> dict[str, str]:
-    """状態遷移ベイズモデルから抽出優先・除外ラベルを導出する。"""
+def derive_selection_label_diagnostics(
+    model: TransitionBayesModel,
+    *,
+    method: str = "mean_difference",
+    minimum_margin: float = 0.0,
+) -> dict[str, Any]:
+    """モデルから選別ラベルとemission差の監査情報を導出する。"""
+    if method not in {"mean_difference", "state_specific_margin"}:
+        raise ValueError(f"未知の選別ラベル導出方式です: {method}")
     positive_states = set(model.positive_states)
     negative_states = set(model.negative_states)
-    observation_scores: dict[str, float] = {}
+    observation_details: dict[str, dict[str, Any]] = {}
     for observation in model.observations:
         positive_mean = sum(model.emission_likelihoods[state][observation] for state in positive_states) / max(1, len(positive_states))
         negative_mean = sum(model.emission_likelihoods[state][observation] for state in negative_states) / max(1, len(negative_states))
-        observation_scores[observation] = positive_mean - negative_mean
+        positive_max = max(model.emission_likelihoods[state][observation] for state in positive_states)
+        negative_max = max(model.emission_likelihoods[state][observation] for state in negative_states)
+        score = (
+            positive_mean - negative_mean
+            if method == "mean_difference"
+            else positive_max - negative_max
+        )
+        is_preferred = score > 0.0 if method == "mean_difference" else score >= minimum_margin
+        is_excluded = score < 0.0 if method == "mean_difference" else score <= -minimum_margin
+        classification = "neutral"
+        if is_preferred:
+            classification = "preferred"
+        elif is_excluded:
+            classification = "excluded"
+        observation_details[observation] = {
+            "positive_mean": positive_mean,
+            "negative_mean": negative_mean,
+            "positive_max": positive_max,
+            "negative_max": negative_max,
+            "margin": score,
+            "classification": classification,
+        }
+
+    observation_scores = {
+        observation: float(detail["margin"])
+        for observation, detail in observation_details.items()
+    }
 
     preferred_observations = {
         observation
-        for observation, score in sorted(observation_scores.items(), key=lambda item: item[1], reverse=True)
-        if score > 0.0
+        for observation, detail in observation_details.items()
+        if detail["classification"] == "preferred"
     }
-    if len(preferred_observations) > 4:
+    if method == "mean_difference" and len(preferred_observations) > 4:
         preferred_observations = {
             observation
             for observation, _ in sorted(observation_scores.items(), key=lambda item: item[1], reverse=True)[:4]
@@ -111,22 +144,42 @@ def derive_selection_labels_from_model(model: TransitionBayesModel) -> dict[str,
 
     excluded_observations = {
         observation
-        for observation, score in sorted(observation_scores.items(), key=lambda item: item[1])
-        if score < 0.0
+        for observation, detail in observation_details.items()
+        if detail["classification"] == "excluded"
     }
-    if len(excluded_observations) > 4:
+    if method == "mean_difference" and len(excluded_observations) > 4:
         excluded_observations = {
             observation
             for observation, _ in sorted(observation_scores.items(), key=lambda item: item[1])[:4]
         }
 
-    return {
+    labels = {
         "prefer_states": _label_text(positive_states),
         "prefer_observations": _label_text(preferred_observations),
         "low_priority_states": "",
         "exclude_states": _label_text(negative_states),
         "exclude_observations": _label_text(excluded_observations),
     }
+    return {
+        "method": method,
+        "minimum_margin": minimum_margin,
+        "labels": labels,
+        "observations": observation_details,
+    }
+
+
+def derive_selection_labels_from_model(
+    model: TransitionBayesModel,
+    *,
+    method: str = "mean_difference",
+    minimum_margin: float = 0.0,
+) -> dict[str, str]:
+    """状態遷移ベイズモデルから抽出優先・除外ラベルを導出する。"""
+    return derive_selection_label_diagnostics(
+        model,
+        method=method,
+        minimum_margin=minimum_margin,
+    )["labels"]
 
 
 def apply_bayes_model_defaults(args: argparse.Namespace) -> argparse.Namespace:

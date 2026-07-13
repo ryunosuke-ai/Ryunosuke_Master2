@@ -11,7 +11,7 @@ if [[ -f "$PROJECT_ROOT/.env" ]]; then
   set +a
 fi
 
-RUN_TAG="${RUN_TAG:-mathdial_wildchat_gpt56_v2}"
+RUN_TAG="${RUN_TAG:-mathdial_wildchat_gpt56_v3}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-artifacts/mathdial_wildchat/runs/${RUN_TAG}}"
 WATCHDOG_INTERVAL_SECONDS="${WATCHDOG_INTERVAL_SECONDS:-30}"
 WATCHDOG_STALL_SECONDS="${WATCHDOG_STALL_SECONDS:-300}"

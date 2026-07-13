@@ -55,22 +55,28 @@ MathDial固有部分はadapter、ontology、prompt、評価軸、候補filterと
 # API/GPUを使わない全stage dry-run
 ./scripts/run_mathdial_wildchat_dry_run.sh
 
-# 本実験
-RUN_TAG=mathdial_wildchat_gpt56_v2 ./scripts/run_mathdial_wildchat_watchdog.sh
+# 本実験（v2の前処理・WildChat候補だけをhash検証して再利用）
+RUN_TAG=mathdial_wildchat_gpt56_v3 \
+REUSE_DATA_RUN_TAG=mathdial_wildchat_gpt56_v2 \
+./scripts/run_mathdial_wildchat_watchdog.sh
 
 # 区間実行
-RUN_TAG=mathdial_wildchat_gpt56_v2 \
+RUN_TAG=mathdial_wildchat_gpt56_v3 \
 START_STAGE=score_wildchat END_STAGE=build_dpo \
 ./scripts/run_mathdial_wildchat_watchdog.sh
 
 # 1 stageだけ実行
-RUN_TAG=mathdial_wildchat_gpt56_v2 STAGE=statistics \
+RUN_TAG=mathdial_wildchat_gpt56_v3 STAGE=statistics \
 ./scripts/run_mathdial_wildchat_watchdog.sh
 ```
 
 完了stageは`stage_state/*_SUCCESS.json`でskipする。再実行には
 `FORCE_STAGE=stage_name`を指定する。`LIMIT`、`WORKERS`、`SEED`、各モデル環境変数、
 `TRAIN_CUDA_VISIBLE_DEVICES`を変更できる。
+
+v3の`score_wildchat`は200件pilotを先に実行し、fallback率と不正ラベル率が各1%以下、
+有効observationが2種類以上の場合だけ20,000件へ進む。選別はMathDial専用の
+state-specific emission差を使用するが、posterior更新、MMR、DPO生成はESConv互換のままである。
 
 ## 本実行前の確認
 
