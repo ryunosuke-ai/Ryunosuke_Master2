@@ -92,6 +92,7 @@ report
 - MathDial presetではstate名やdataset hypothesisをTerraへ見せず、observationだけを分類候補にする。
 - 未知ラベルやJSON不正は、許可observationだけを示す短いpromptで最大2回再判定する。
 - 最初の200応答をpilotとし、fallback率・不正出力率が各1%以下、かつ有効観測2種類以上であることを確認する。
+- pilotは200件を初めて超える会話を丸ごと含めるため、実件数は200件以上になる。会話境界維持により199件で停止することはない。
 - pilot通過後に同じJSONLをresumeして20,000応答まで処理する。
 - conversation内はturn順を維持してposteriorを逐次更新する。
 - conversation単位で並列化し、結果を逐次JSONLへ追記する。
@@ -208,6 +209,21 @@ END_STAGE=build_dpo \
 WORKERS=8 \
 ./scripts/run_mathdial_wildchat_watchdog.sh
 ```
+
+合格済みv3 basisを維持して、pilot境界修正版へ安全に継続する場合:
+
+```bash
+RUN_TAG=mathdial_wildchat_gpt56_v3_resume1 \
+REUSE_DATA_RUN_TAG=mathdial_wildchat_gpt56_v3 \
+REUSE_BASIS_RUN_TAG=mathdial_wildchat_gpt56_v3 \
+START_STAGE=preprocess \
+END_STAGE=build_dpo \
+WORKERS=8 \
+PYTHONUNBUFFERED=1 \
+./scripts/run_mathdial_wildchat_watchdog.sh
+```
+
+この経路は前処理、品質合格済みbasis、WildChat候補だけをhash検証して再利用する。旧scoring、selection、DPO、SUCCESS markerはコピーしない。
 
 単一stageの明示再実行:
 

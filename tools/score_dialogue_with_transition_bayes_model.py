@@ -77,6 +77,14 @@ def parse_args() -> argparse.Namespace:
         help="API評価する最大応答件数。会話内の状態遷移を壊さないよう会話境界まで含めます。",
     )
     parser.add_argument(
+        "--include-crossing-conversation",
+        action="store_true",
+        help=(
+            "max-recordsを初めて超える会話も丸ごと含めます。"
+            "件数下限を満たす必要があるpilot専用で、既定動作は変更しません。"
+        ),
+    )
+    parser.add_argument(
         "--fallback-on-errors",
         action="store_true",
         help="content_filter以外のAPI/JSON失敗もnegative寄り観測へフォールバックして処理を継続します。",
@@ -101,6 +109,8 @@ def parse_args() -> argparse.Namespace:
 def limit_records_by_conversation(
     records: list[dict[str, Any]],
     max_records: int | None,
+    *,
+    include_crossing_conversation: bool = False,
 ) -> list[dict[str, Any]]:
     """入力順を維持し、会話を途中で分断せずに評価件数を制限する。"""
     if max_records is None or max_records <= 0 or len(records) <= max_records:
@@ -111,6 +121,9 @@ def limit_records_by_conversation(
     selected: list[dict[str, Any]] = []
     for conversation_records in grouped.values():
         if selected and len(selected) + len(conversation_records) > max_records:
+            if include_crossing_conversation:
+                selected.extend(conversation_records)
+                break
             continue
         selected.extend(conversation_records)
         if len(selected) >= max_records:
@@ -693,7 +706,11 @@ def main() -> int:
     """CLIエントリポイント。"""
     args = parse_args()
     source_records = read_dialogue_records(args.input)
-    records = limit_records_by_conversation(source_records, args.max_records)
+    records = limit_records_by_conversation(
+        source_records,
+        args.max_records,
+        include_crossing_conversation=args.include_crossing_conversation,
+    )
     if len(records) < len(source_records):
         print(
             "[scoring] 十分な比較候補プールを確保したため入力を早期停止します: "

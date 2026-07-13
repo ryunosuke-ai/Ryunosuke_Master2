@@ -16,6 +16,7 @@ from tools.extract_high_posterior_dialogues import (
     derive_selection_labels_from_model,
 )
 from tools.reuse_mathdial_pipeline_data import (
+    BASIS_FILES,
     CONFIGS,
     PREPROCESS_FILES,
     WILDCHAT_FILES,
@@ -228,7 +229,7 @@ def _write_reuse_source(source: Path, project: Path, *, seed: int = 42) -> None:
         ),
         encoding="utf-8",
     )
-    for stage in ("preprocess", "extract_wildchat"):
+    for stage in ("preprocess", "build_basis", "extract_wildchat"):
         (source / "stage_state" / f"{stage}_SUCCESS.json").write_text(
             json.dumps(
                 {
@@ -251,6 +252,39 @@ def _write_reuse_source(source: Path, project: Path, *, seed: int = 42) -> None:
     model.write_text("{}\n", encoding="utf-8")
 
 
+def _write_valid_basis_source(source: Path) -> None:
+    basis = source / "basis_model"
+    basis.mkdir(parents=True, exist_ok=True)
+    payload = mock_model()
+    model_text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    fine = basis / "mathdial_transition_bayes_model.json"
+    compat = basis / "mathdial_transition_compat.json"
+    fine.write_text(model_text, encoding="utf-8")
+    compat.write_text(model_text, encoding="utf-8")
+    analysis = basis / "mathdial_analysis_corpus.jsonl"
+    analysis.write_text('{"source_split":"train"}\n', encoding="utf-8")
+    conversation = source / "mathdial/data/mathdial_conversations.jsonl"
+    (basis / "mathdial_analysis_corpus.manifest.json").write_text(
+        json.dumps(
+            {
+                "input_sha256": hashlib.sha256(conversation.read_bytes()).hexdigest(),
+                "output_sha256": hashlib.sha256(analysis.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    (basis / "mathdial_transition_bayes_model.manifest.json").write_text(
+        json.dumps({"output_sha256": hashlib.sha256(fine.read_bytes()).hexdigest()}),
+        encoding="utf-8",
+    )
+    quality = evaluate_emission_quality(payload)
+    (basis / "mathdial_model_quality.json").write_text(
+        json.dumps(quality), encoding="utf-8"
+    )
+    (basis / "mathdial_analysis_input.txt").write_text("input\n", encoding="utf-8")
+    (basis / "mathdial_analysis_prompt.txt").write_text("prompt\n", encoding="utf-8")
+
+
 def test_reuse_copies_only_allowlisted_data_and_rejects_config_mismatch(tmp_path: Path):
     project = tmp_path / "project"
     source = tmp_path / "source"
@@ -266,3 +300,17 @@ def test_reuse_copies_only_allowlisted_data_and_rejects_config_mismatch(tmp_path
     (project / CONFIGS[0]).write_text("changed", encoding="utf-8")
     with pytest.raises(ValueError, match="config hash"):
         reuse_files(source, tmp_path / "other", mode="preprocess", seed=42, project_root=project)
+
+
+def test_reuse_basis_revalidates_quality_without_copying_scoring(tmp_path: Path):
+    project = tmp_path / "project"
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    _write_reuse_source(source, project)
+    _write_valid_basis_source(source)
+    reuse_files(source, target, mode="basis", seed=42, project_root=project)
+    assert all((target / relative).exists() for relative in BASIS_FILES)
+    assert not (target / "scoring/wildchat_scored.jsonl").exists()
+    assert not (target / "stage_state/build_basis_SUCCESS.json").exists()
+    manifest = json.loads((target / "reuse_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["modes"]["basis"]["emission_quality"]["passed"]

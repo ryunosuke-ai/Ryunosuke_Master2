@@ -77,6 +77,10 @@ RUN_TAG=mathdial_wildchat_gpt56_v3 STAGE=statistics \
 v3の`score_wildchat`は200件pilotを先に実行し、fallback率と不正ラベル率が各1%以下、
 有効observationが2種類以上の場合だけ20,000件へ進む。選別はMathDial専用の
 state-specific emission差を使用するが、posterior更新、MMR、DPO生成はESConv互換のままである。
+pilotは閾値をまたぐ会話を丸ごと含めるため、200件未満にはならない。
+
+既存runのbasisが品質gateに合格している場合は`REUSE_BASIS_RUN_TAG`で再利用できる。
+source側SUCCESS marker、入力・モデルhash、schema、emission品質を再検証し、scoring以降は再利用しない。
 
 ## 本実行前の確認
 

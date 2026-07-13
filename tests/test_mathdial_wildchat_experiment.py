@@ -308,6 +308,21 @@ def test_scoring_limit_preserves_complete_conversations():
     assert len(limit_records_by_conversation(records, None)) == len(records)
 
 
+def test_scoring_pilot_includes_first_conversation_crossing_minimum():
+    records = [
+        {"conversation_id": conversation_id, "turn_index": turn_index}
+        for conversation_id, size in (("c1", 2), ("c2", 3), ("c3", 2))
+        for turn_index in range(size)
+    ]
+    limited = limit_records_by_conversation(
+        records,
+        4,
+        include_crossing_conversation=True,
+    )
+    assert len(limited) == 5
+    assert {row["conversation_id"] for row in limited} == {"c1", "c2"}
+
+
 def test_selection_builds_three_groups_with_esconv_selector():
     scored = mock_score([
         {"sample_id": f"s{i}", "conversation_id": f"c{i}", "turn_index": 1, "prompt": "learn math", "response": f"response {i}", "metadata": {"context_turns": 3}}

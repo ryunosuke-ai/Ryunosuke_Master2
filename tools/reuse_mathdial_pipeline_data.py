@@ -9,6 +9,9 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from core.transition_bayes_model import load_transition_bayes_model
+from tools.analyze_mathdial_corpus_transition_bayes import evaluate_emission_quality
+
 
 CONFIGS = (
     "configs/datasets/mathdial.yaml",
@@ -30,6 +33,16 @@ WILDCHAT_FILES = (
     "wildchat/statistics.json",
     "wildchat/manifest.json",
     "wildchat/stream_checkpoint.json",
+)
+BASIS_FILES = (
+    "basis_model/mathdial_analysis_corpus.jsonl",
+    "basis_model/mathdial_analysis_corpus.manifest.json",
+    "basis_model/mathdial_analysis_input.txt",
+    "basis_model/mathdial_analysis_prompt.txt",
+    "basis_model/mathdial_model_quality.json",
+    "basis_model/mathdial_transition_bayes_model.json",
+    "basis_model/mathdial_transition_bayes_model.manifest.json",
+    "basis_model/mathdial_transition_compat.json",
 )
 
 
@@ -65,7 +78,11 @@ def validate_source(
 ) -> dict[str, Any]:
     """source runの成功marker、seed、dataset configを検証する。"""
     metadata = _load_json(source_root / "run_metadata.json")
-    stage = "preprocess" if mode == "preprocess" else "extract_wildchat"
+    stage = {
+        "preprocess": "preprocess",
+        "basis": "build_basis",
+        "wildchat": "extract_wildchat",
+    }[mode]
     marker = _load_json(source_root / "stage_state" / f"{stage}_SUCCESS.json")
     if marker.get("stage") != stage:
         raise ValueError(f"source側SUCCESS markerが不正です: {stage}")
@@ -81,6 +98,39 @@ def validate_source(
     return {"run_metadata": metadata, "stage_marker": marker}
 
 
+def validate_basis_artifacts(source_root: Path) -> dict[str, Any]:
+    """再利用するbasisモデルのhash、schema、emission品質を再検証する。"""
+    basis = source_root / "basis_model"
+    model_path = basis / "mathdial_transition_compat.json"
+    fine_model_path = basis / "mathdial_transition_bayes_model.json"
+    quality = _load_json(basis / "mathdial_model_quality.json")
+    model_manifest = _load_json(
+        basis / "mathdial_transition_bayes_model.manifest.json"
+    )
+    analysis_manifest = _load_json(basis / "mathdial_analysis_corpus.manifest.json")
+    if not quality.get("passed"):
+        raise ValueError("再利用元のMathDial basis品質gateが不合格です。")
+    if model_manifest.get("output_sha256") != sha256(fine_model_path):
+        raise ValueError("再利用元のbasis model hashがmanifestと一致しません。")
+    analysis_path = basis / "mathdial_analysis_corpus.jsonl"
+    if analysis_manifest.get("output_sha256") != sha256(analysis_path):
+        raise ValueError("再利用元のbasis分析標本hashがmanifestと一致しません。")
+    conversation_path = source_root / "mathdial/data/mathdial_conversations.jsonl"
+    if analysis_manifest.get("input_sha256") != sha256(conversation_path):
+        raise ValueError("再利用元のbasis入力とMathDial正規化会話が一致しません。")
+    load_transition_bayes_model(model_path)
+    current_quality = evaluate_emission_quality(
+        _load_json(model_path),
+        margin=float(quality.get("required_margin", 0.10)),
+        min_negative_observations=int(
+            quality.get("minimum_negative_dominant_observations", 2)
+        ),
+    )
+    if not current_quality["passed"]:
+        raise ValueError("再利用元のbasisモデルが現在のemission品質gateに不合格です。")
+    return current_quality
+
+
 def reuse_files(
     source_root: Path,
     target_root: Path,
@@ -93,7 +143,12 @@ def reuse_files(
     validation = validate_source(
         source_root, mode=mode, seed=seed, project_root=project_root
     )
-    files = PREPROCESS_FILES if mode == "preprocess" else WILDCHAT_FILES
+    if mode == "basis":
+        basis_quality = validate_basis_artifacts(source_root)
+        files = BASIS_FILES
+    else:
+        basis_quality = None
+        files = PREPROCESS_FILES if mode == "preprocess" else WILDCHAT_FILES
     copied = []
     for relative in files:
         source = source_root / relative
@@ -129,6 +184,8 @@ def reuse_files(
         "source_experiment_fingerprint": validation["run_metadata"].get("experiment_fingerprint"),
         "files": copied,
     }
+    if basis_quality is not None:
+        manifest["modes"][mode]["emission_quality"] = basis_quality
     temporary = manifest_path.with_suffix(".tmp")
     temporary.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
@@ -142,7 +199,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="MathDial v3データ再利用")
     parser.add_argument("--source-root", required=True)
     parser.add_argument("--target-root", required=True)
-    parser.add_argument("--mode", choices=("preprocess", "wildchat"), required=True)
+    parser.add_argument(
+        "--mode", choices=("preprocess", "basis", "wildchat"), required=True
+    )
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--project-root", default=".")
     args = parser.parse_args()
