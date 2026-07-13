@@ -71,6 +71,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS, help="最大出力トークン数。")
     parser.add_argument("--workers", type=int, default=1, help="会話単位で並列評価するworker数。1なら逐次処理。")
     parser.add_argument(
+        "--max-records",
+        type=int,
+        help="API評価する最大応答件数。会話内の状態遷移を壊さないよう会話境界まで含めます。",
+    )
+    parser.add_argument(
         "--fallback-on-errors",
         action="store_true",
         help="content_filter以外のAPI/JSON失敗もnegative寄り観測へフォールバックして処理を継続します。",
@@ -78,6 +83,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--audit-log", default=DEFAULT_AUDIT_LOG_PATH, help="重要操作の要約を追記するaudit_log.mdのパス。")
     parser.add_argument("--dry-run", action="store_true", help="APIを呼ばず、入力件数だけ確認します。")
     return parser.parse_args()
+
+
+def limit_records_by_conversation(
+    records: list[dict[str, Any]],
+    max_records: int | None,
+) -> list[dict[str, Any]]:
+    """入力順を維持し、会話を途中で分断せずに評価件数を制限する。"""
+    if max_records is None or max_records <= 0 or len(records) <= max_records:
+        return records
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        grouped.setdefault(str(record["conversation_id"]), []).append(record)
+    selected: list[dict[str, Any]] = []
+    for conversation_records in grouped.values():
+        if selected and len(selected) + len(conversation_records) > max_records:
+            continue
+        selected.extend(conversation_records)
+        if len(selected) >= max_records:
+            break
+    return selected
 
 
 def build_transition_scoring_instructions(model: TransitionBayesModel) -> str:
@@ -462,7 +487,14 @@ def score_records(
 def main() -> int:
     """CLIエントリポイント。"""
     args = parse_args()
-    records = read_dialogue_records(args.input)
+    source_records = read_dialogue_records(args.input)
+    records = limit_records_by_conversation(source_records, args.max_records)
+    if len(records) < len(source_records):
+        print(
+            "[scoring] 十分な比較候補プールを確保したため入力を早期停止します: "
+            f"selected={len(records)} source={len(source_records)} max_records={args.max_records}",
+            flush=True,
+        )
     bayes_model = load_transition_bayes_model(args.bayes_model)
     if args.dry_run:
         print("transition bayes scoring dry-run")
@@ -497,10 +529,12 @@ def main() -> int:
         command=(
             "python3 -m tools.score_dialogue_with_transition_bayes_model "
             f"--input {args.input} --bayes-model {args.bayes_model} --output {args.output} "
-            f"--model {args.model} --workers {max(1, args.workers)}"
+            f"--model {args.model} --workers {max(1, args.workers)} "
+            f"--max-records {args.max_records or 'all'}"
         ),
         before_after=[
-            f"入力レコード数: {len(records)}",
+            f"元入力レコード数: {len(source_records)}",
+            f"早期停止後の評価対象レコード数: {len(records)}",
             f"出力スコア済みレコード数: {len(scored)}",
             f"content_filter安全化再試行成功件数: {retry_count}",
             f"content_filterフォールバック件数: {fallback_count}",

@@ -75,6 +75,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true", help="学習せず、データと設定だけ確認します。")
     parser.add_argument("--logging-steps", type=int, default=1, help="ログ出力間隔。")
     parser.add_argument("--save-steps", type=int, default=25, help="チェックポイント保存間隔。")
+    parser.add_argument("--resume-from-checkpoint", default="", help="再開するcheckpointパス。`auto`なら最新を自動検出します。")
     parser.add_argument("--max-grad-norm", type=float, default=0.3, help="勾配クリッピング。")
     parser.add_argument("--warmup-ratio", type=float, default=0.03, help="ウォームアップ割合。")
     return parser.parse_args()
@@ -135,6 +136,18 @@ def summarize_records(records: list[dict[str, str]]) -> dict[str, int]:
         "max_chosen_chars": max(len(record["chosen"]) for record in records),
         "max_rejected_chars": max(len(record["rejected"]) for record in records),
     }
+
+
+def dpo_loss_from_logps(chosen_logps: list[float], rejected_logps: list[float], *, beta: float) -> float:
+    """dry-runテスト用にDPO logistic lossを数値計算する。"""
+    import math
+    if len(chosen_logps) != len(rejected_logps) or not chosen_logps:
+        raise ValueError("chosen/rejected log probabilityは同じ非空長である必要があります。")
+    losses = []
+    for chosen, rejected in zip(chosen_logps, rejected_logps):
+        margin = beta * (chosen - rejected)
+        losses.append(math.log1p(math.exp(-margin)))
+    return sum(losses) / len(losses)
 
 
 def print_dry_run_summary(args: argparse.Namespace, split: PreferenceDatasetSplit) -> None:
@@ -431,7 +444,14 @@ def train(args: argparse.Namespace, split: PreferenceDatasetSplit) -> None:
     except TypeError:
         trainer = deps["DPOTrainer"](**trainer_kwargs, tokenizer=tokenizer)
 
-    trainer.train()
+    resume = getattr(args, "resume_from_checkpoint", "") or None
+    if resume == "auto":
+        checkpoints = sorted(Path(args.output_dir).glob("checkpoint-*"), key=lambda path: int(path.name.split("-")[-1]))
+        resume = str(checkpoints[-1]) if checkpoints else None
+    if resume:
+        trainer.train(resume_from_checkpoint=resume)
+    else:
+        trainer.train()
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
     print(f"LoRA adapter を保存しました: {args.output_dir}")

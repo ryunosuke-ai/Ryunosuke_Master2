@@ -1,0 +1,217 @@
+# MathDial × WildChat-1M stage guide
+
+## 1. 目的
+
+このパイプラインは、ESConv × DailyDialogで用いたBASiSの役割を変えず、対象小コーパスをMathDial、大規模候補をWildChat-1Mへ置き換える。
+
+```text
+MathDial train代表会話
+  -> Solによる会話特徴分析と遷移ベイズモデル生成
+  -> TerraによるWildChat観測ラベル判定
+  -> posterior・遷移・多様性によるBASiS選別
+  -> 英語文脈とchosenを日本語化し、同一文脈のrejectedをLLM生成
+  -> Qwen DPO + LoRA
+  -> held-out MathDial履歴で3モデル応答生成
+  -> blind Oracle評価
+  -> 対応あり統計検定
+```
+
+旧方式の発話別`extract_features`と`validate_extraction`は主要経路から外した。既存の`features/extractions*.jsonl`は削除しないが、新しい`build_basis`以降では読まない。
+
+## 2. stage一覧
+
+実行順は次の11 stageで固定する。
+
+```text
+preprocess
+build_basis
+extract_wildchat
+score_wildchat
+select_data
+build_dpo
+train
+generate_responses
+oracle_eval
+statistics
+report
+```
+
+### 2.1 `preprocess`
+
+- 公式MathDialを既存adapterで正規化する。
+- Studentを`user`、Teacherを`assistant`へ変換する。
+- Teacher moveの接頭辞を本文から除き、metadataに保持する。
+- 連続Teacher発話、完全一致重複、空発話を既存規則で処理する。
+- qid単位でtrain/validation/testを分離し、official testと重なるtrainをquarantineする。
+- 完全履歴、response、`next_user_turn`を持つassistant sampleを作る。
+
+主出力:
+
+- `mathdial/data/mathdial_conversations.jsonl`
+- `mathdial/data/mathdial_assistant_samples.jsonl`
+- `mathdial/reports/preprocessing_statistics.json`
+
+### 2.2 `build_basis`
+
+- trainだけからqid一意な80会話をseed固定で層化抽出する。
+- `probing / focus / telling / generic`を全て含むようにする。
+- 完全会話、問題、正解、Teacher move annotationをSolへ渡す。
+- Solは4〜7 states、4〜8 observationsを持つ`transition_bayes_network`を直接生成する。
+- JSON構文が壊れた場合は修復を1回行う。
+- schema、確率範囲、各確率行の合計、positive/negative stateを検証する。
+- 80会話を途中で切らない。入力文字数上限を超えた場合は停止する。
+
+主出力:
+
+- `basis_model/mathdial_analysis_corpus.jsonl`
+- `basis_model/mathdial_analysis_corpus.manifest.json`
+- `basis_model/mathdial_analysis_prompt.txt`
+- `basis_model/mathdial_analysis_input.txt`
+- `basis_model/mathdial_transition_bayes_model.json`
+- `basis_model/mathdial_transition_compat.json`
+- `basis_model/mathdial_transition_bayes_model.manifest.json`
+
+### 2.3 `extract_wildchat`
+
+- Hugging Face streamingでWildChat-1Mを走査する。
+- 全データを保存せず、英語の教育・個別指導候補だけを保存する。
+- 既定で3 user-assistant exchange以上を要求する。
+- toxic、redacted、空発話、role破損、完全重複、近似重複を除く。
+- general tutoringを主集合、math-onlyをablation集合にする。
+- 足場かけの良さなど目的スタイル自体は粗抽出条件にしない。
+- checkpointにstream位置、候補、統計を保存して中断後に再開する。
+
+### 2.4 `score_wildchat`
+
+- Terraで各応答を生成ベイズモデルのobservationへ分類する。
+- conversation内はturn順を維持してposteriorを逐次更新する。
+- conversation単位で並列化し、結果を逐次JSONLへ追記する。
+- 既存結果のconversation/turn keyはresume時にskipする。
+- API/JSON失敗はSDK再試行後にnegative寄りfallbackとして記録する。
+- fallback率が1%を超えた場合は後段へ進まない。
+
+### 2.5 `select_data`
+
+- `domain_random`、`topic_similarity_top`、`basis_top`を同条件で作る。
+- positive/negative statesとemission差から優先・除外observationを自動導出する。
+- 生成モデル固有のラベル名へ依存しない。
+- posterior、観測、文脈長、会話単位上限、MMRを既存ESConv選別器で扱う。
+
+### 2.6 `build_dpo`
+
+- BASiS: WildChat選別2,000件 + MathDial train gold 500件。
+- Random: WildChat domain random 2,500件、goldなし。
+- WildChatの英語履歴とchosenを日本語化する。
+- chosenと同じ完全履歴に対する低品質応答候補をTerraで生成し、再スコアする。
+- prompt hash一致を必須にし、異なるcontextの応答は組にしない。
+- accepted/skippedを逐次保存し、目標件数まで残候補を処理する。
+- Random側も同じ生成モデル、候補数、温度条件を使い、逐次保存・resumeする。
+
+### 2.7 `train`
+
+- `Qwen/Qwen3.5-27B`へDPO + LoRAを適用する。
+- BASiSとRandomでベースモデル、総件数、hyperparameterを揃える。
+- `save_steps=25`でcheckpointを保存する。
+- 再開時は`--resume-from-checkpoint auto`を使う。
+- OOM時にbatch sizeや学習条件を自動変更しない。
+
+### 2.8 `generate_responses`
+
+- held-out MathDial testからqid一意な約100 promptを作る。
+- 問題、誤答、会話履歴を訂正せず日本語へ翻訳する。
+- 同じpromptへBase、BASiS-DPO、Random-DPOの応答を生成する。
+- prompt単位で逐次保存し、中断後は成功済みpromptをskipする。
+
+### 2.9 `oracle_eval`
+
+- モデル名を見せず、応答順をseed固定でランダム化する。
+- MathDial個別指導スタイルと一般品質を別promptで10段階評価する。
+- raw、errors、model、prompt version、短い根拠を保存する。
+- 成功済みprompt/modelはresume時にskipする。
+
+### 2.10 `statistics`
+
+- 同じpromptの3モデルを対応あり比較する。
+- Friedman検定、有意な軸だけの事後比較、Holm補正を行う。
+- Kendall's W、効果量、bootstrap 95% CIを保存する。
+
+### 2.11 `report`
+
+- 各manifest、選別診断、評価、統計結果を1つのMarkdownへ集約する。
+
+## 3. モデル割当
+
+`.env`では次を設定する。
+
+```env
+AZURE_OPENAI_GPT56_SOL_DEPLOYMENT=gpt-5.6-sol
+AZURE_OPENAI_GPT56_TERRA_DEPLOYMENT=gpt-5.6-terra
+AZURE_OPENAI_GPT56_API_KEY=...
+```
+
+- Sol: `build_basis`の代表会話分析とベイズモデル生成。
+- Terra: WildChat scoring、DPO生成、日本語評価prompt翻訳、Oracle評価。
+- Local Qwen: DPO学習と3モデル応答生成。
+
+## 4. SUCCESS markerと再開
+
+stage成功時だけ`stage_state/<stage>_SUCCESS.json`を書く。markerには実験fingerprint、入力hash、入力件数、config hash、モデル名を含む。同じ`RUN_TAG`で条件や入力が変わった場合は古いmarkerを再利用しない。
+
+`pipeline_status.json`にはstage、watchdog attempt、主要成功件数、fallback件数・率、`success / incomplete / fatal`を記録する。
+
+一時エラーは15秒、30秒、60秒待って最大3回再試行する。研究結果を無効にする次の問題は致命扱いにする。
+
+- ベイズモデルschema・確率が不正
+- train/test/qidリーク
+- WildChat候補またはDPO件数不足
+- scoring fallback率が1%超
+- BASiS 2,000 + gold 500、Random 2,500の構成不一致
+- 3モデル評価応答またはOracle必要件数の不足が再試行でも解消しない
+
+## 5. 実行方法
+
+API/GPUなしの確認:
+
+```bash
+./scripts/run_mathdial_wildchat_dry_run.sh
+```
+
+無人本実行:
+
+```bash
+RUN_TAG=mathdial_wildchat_gpt56_v2 \
+WORKERS=8 \
+PYTHONUNBUFFERED=1 \
+./scripts/run_mathdial_wildchat_watchdog.sh
+```
+
+watchdogは30秒ごとに進捗を確認し、既定300秒停止した再開可能stageをprocess group単位でTERM、10秒後も残ればKILLする。再起動後のworkerは4、最大20回である。`build_basis`、学習、統計など行数が増えないstageは単純なstall判定から除外する。
+
+段階実行:
+
+```bash
+RUN_TAG=mathdial_wildchat_gpt56_v2 \
+START_STAGE=preprocess \
+END_STAGE=build_dpo \
+WORKERS=8 \
+./scripts/run_mathdial_wildchat_watchdog.sh
+```
+
+単一stageの明示再実行:
+
+```bash
+RUN_TAG=mathdial_wildchat_gpt56_v2 \
+STAGE=score_wildchat \
+FORCE_STAGE=score_wildchat \
+./scripts/run_mathdial_wildchat_watchdog.sh
+```
+
+## 6. 停止
+
+watchdogを前面実行している端末では`Ctrl+C`でwatchdogを止める。watchdogは子pipelineのprocess group全体へTERMを送り、必要ならKILLする。tmux外から特定runだけ停止する場合は次を使う。
+
+```bash
+kill -TERM "$(cat artifacts/mathdial_wildchat/runs/mathdial_wildchat_gpt56_v2/watchdog/watchdog.pid)"
+```
+
+watchdog script名や広い`python`を条件にした`pkill`は、他の実験を巻き込むため使わない。

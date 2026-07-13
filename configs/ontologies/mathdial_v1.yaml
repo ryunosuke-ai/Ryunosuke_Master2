@@ -1,0 +1,72 @@
+name: mathdial_tutoring
+version: mathdial_v1
+frozen: true
+confidence_threshold: 0.60
+student_states:
+  - unobserved
+  - initial_attempt
+  - misconception
+  - calculation_error
+  - conceptual_confusion
+  - uncertainty
+  - partial_understanding
+  - corrected_understanding
+  - solution_reached
+tutor_strategies:
+  - open_diagnosis
+  - probing_question
+  - focusing_question
+  - minimal_hint
+  - scaffolded_hint
+  - explanation
+  - partial_telling
+  - direct_telling
+  - misconception_correction
+  - comprehension_check
+  - encouragement
+  - conversation_management
+conversation_stages:
+  - problem_understanding
+  - misconception_diagnosis
+  - guided_reasoning
+  - focused_scaffolding
+  - explicit_explanation
+  - verification
+  - closure
+style_features:
+  - student_state_grounding
+  - elicits_reasoning
+  - scaffolded_support
+  - withholds_final_answer
+  - promotes_self_correction
+  - targeted_feedback
+  - adaptive_support
+  - encouraging_tone
+teacher_move_mapping:
+  probing:
+    - open_diagnosis
+    - probing_question
+    - comprehension_check
+  focus:
+    - focusing_question
+    - minimal_hint
+    - scaffolded_hint
+  telling:
+    - explanation
+    - partial_telling
+    - direct_telling
+    - misconception_correction
+  generic:
+    - encouragement
+    - conversation_management
+smoothing_alpha: 0.5
+score_weights:
+  state: 0.15
+  strategy: 0.30
+  transition: 0.35
+  style: 0.20
+quality_gate:
+  json_valid_rate: 0.98
+  ambiguity_aware_accuracy: 0.65
+  macro_f1: 0.55
+  unknown_labels: 0

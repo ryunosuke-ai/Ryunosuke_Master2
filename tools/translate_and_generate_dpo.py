@@ -14,6 +14,7 @@ from typing import Any
 from core.dpo_prompting import (
     DPO_PROMPT_TEMPLATE_VERSION,
     build_dpo_prompt_from_context_text,
+    build_mathdial_dpo_prompt_from_context_text,
 )
 from core.transition_bayes_model import (
     TransitionBayesModel,
@@ -107,7 +108,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--score-model", default=resolve_scoring_model(), help="再スコアリングモデル。")
     parser.add_argument(
         "--style-preset",
-        choices=("reminiscence", "esconv_support"),
+        choices=("reminiscence", "esconv_support", "mathdial_tutoring"),
         default=DEFAULT_STYLE_PRESET,
         help="翻訳・rejected生成の方針。ESConvではesconv_supportを指定します。",
     )
@@ -295,6 +296,22 @@ def bayes_model_version(path: Path | str) -> str:
 
 def _style_specific_translation_policy(style_preset: str) -> str:
     """style presetごとの翻訳・rejected生成方針を返す。"""
+    if style_preset == "mathdial_tutoring":
+        return (
+            "翻訳方針:\n"
+            "- promptとchosenを、日本人の学習者と個別指導者の自然な日本語対話へ翻訳してください。\n"
+            "- 数値、数式、単位、問題条件、学習者の誤りを保持し、誤答を翻訳時に訂正しないでください。\n"
+            "- chosenに存在しない説明、ヒント、質問、最終解答を追加しないでください。\n"
+            "- chosenが持つ診断、問い返し、焦点化、段階的ヒント、説明、確認の機能を忠実に保持してください。\n"
+            "- 不自然な直訳は避けますが、BASiSらしさを翻訳によって強めないでください。\n"
+            "- prompt内のUser/AIの順序と各発話の対応を変えないでください。\n\n"
+            "rejected候補の生成方針:\n"
+            "- rejectedは必ず同じtranslated_promptに対する日本語応答にしてください。\n"
+            "- 文法的には自然で安全だが、個別指導としてchosenより弱い応答を作ってください。\n"
+            "- 弱点は、誤りを診断しない、一般論だけを言う、焦点がずれる、足場を飛ばす、答えを早く教える、自己修正を促さない、の間で分散してください。\n"
+            "- 問題や学習者発話にない新しい事実を捏造しないでください。\n"
+            "- chosenの単なる言い換え、壊れた文章、攻撃的な文章は禁止です。"
+        )
     if style_preset == "esconv_support":
         return (
             "翻訳方針:\n"
@@ -421,6 +438,20 @@ def validate_translation_payload(payload: dict[str, Any], *, candidates: int) ->
         "rejected_candidates": rejected_texts,
         "translation_quality_score": max(0.0, min(1.0, float(quality))),
     }
+
+
+def validate_mathdial_translation_fidelity(source_record: dict[str, Any], payload: dict[str, Any]) -> None:
+    """MathDial翻訳が数値・数式tokenを失っていないことを検証する。"""
+    import re
+    pattern = re.compile(r"\d+(?:[.,/]\d+)*")
+    source_tokens = pattern.findall(f"{source_record.get('prompt', '')} {source_record.get('response', '')}")
+    translated_tokens = pattern.findall(f"{payload['translated_prompt']} {payload['translated_chosen']}")
+    missing = list(source_tokens)
+    for token in translated_tokens:
+        if token in missing:
+            missing.remove(token)
+    if missing:
+        raise ValueError(f"MathDial翻訳で数値・数式tokenが失われました: {missing[:10]}")
 
 
 def score_japanese_response(
@@ -642,6 +673,8 @@ def build_one_dpo_record(
     )
     if translation_payload is None:
         return None, skip_reason, None
+    if style_preset == "mathdial_tutoring":
+        validate_mathdial_translation_fidelity(source_record, translation_payload)
     japanese_record = {
         "conversation_id": source_record["conversation_id"],
         "turn_index": source_record["turn_index"],
@@ -666,7 +699,11 @@ def build_one_dpo_record(
         score_model=score_model,
         max_output_tokens=max_output_tokens,
     )
-    dpo_prompt = build_dpo_prompt_from_context_text(translation_payload["translated_prompt"])
+    dpo_prompt = (
+        build_mathdial_dpo_prompt_from_context_text(translation_payload["translated_prompt"])
+        if style_preset == "mathdial_tutoring"
+        else build_dpo_prompt_from_context_text(translation_payload["translated_prompt"])
+    )
     candidate_record = {
         "prompt": dpo_prompt,
         "chosen": translation_payload["translated_chosen"],
@@ -736,6 +773,10 @@ def build_one_dpo_record(
             "style_preset": style_preset,
             "rejected_candidates": candidates,
             "generation_retry": translation_payload.get("generation_retry"),
+            "source_prompt_hash": hashlib.sha256(str(source_record.get("prompt", "")).encode("utf-8")).hexdigest(),
+            "translated_prompt_hash": hashlib.sha256(translation_payload["translated_prompt"].encode("utf-8")).hexdigest(),
+            "rejected_prompt_hash": hashlib.sha256(translation_payload["translated_prompt"].encode("utf-8")).hexdigest(),
+            "gold": bool(source_record.get("metadata", {}).get("gold", False)),
         },
     }
     if float(chosen_score["posterior"]) < min_chosen_posterior:
@@ -1202,6 +1243,11 @@ def main() -> int:
         heartbeat_path=args.heartbeat_file,
         heartbeat_stage_prefix=args.heartbeat_stage_prefix,
     )
+    if args.target_records is not None and len(dpo_records) < args.target_records:
+        raise RuntimeError(
+            f"DPO採用件数がtarget_recordsへ届きませんでした: "
+            f"accepted={len(dpo_records)}, target={args.target_records}"
+        )
     write_jsonl(dpo_records, args.output)
     manifest_path = Path(args.output).with_suffix(".manifest.json")
     write_json(

@@ -1,0 +1,50 @@
+dataset_name: allenai/WildChat-1M
+revision: 7d6490e462285cf85d91eabea0f9a954fbddcd1f
+split: train
+language: English
+stream_shuffle_buffer_size: 10000
+minimum_exchanges: 3
+require_followup_user: true
+exclude_toxic: true
+exclude_redacted: true
+near_duplicate_jaccard: 0.90
+general_tutoring_terms:
+  - learn
+  - understand
+  - explain
+  - homework
+  - lesson
+  - tutor
+  - teach
+  - study
+  - practice
+  - exercise
+  - mistake
+  - confused
+  - feedback
+  - revise
+  - grammar
+  - programming
+  - physics
+  - science
+  - mathematics
+  - math
+math_terms:
+  - math
+  - mathematics
+  - algebra
+  - geometry
+  - arithmetic
+  - equation
+  - calculate
+  - calculus
+  - probability
+  - fraction
+confusion_terms:
+  - confused
+  - don't understand
+  - do not understand
+  - not sure
+  - mistake
+  - wrong
+  - why

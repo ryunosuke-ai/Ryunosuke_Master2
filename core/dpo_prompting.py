@@ -14,6 +14,11 @@ INSTRUCTION_LINES = [
     "返答は日本語で1〜2文にしてください。",
     "ユーザーが話し続けやすいように、共感や具体語の拾いを使い、必要な時だけ質問を1つ添えてください。",
 ]
+MATHDIAL_INSTRUCTION_LINES = [
+    "以下の個別指導対話の次の教師返答を生成してください。",
+    "返答は自然な日本語で、問題とこれまでの学習者の考えに即して簡潔に書いてください。",
+    "必要に応じて質問、焦点化、段階的ヒント、説明、理解確認のいずれかを選んでください。",
+]
 
 ROLE_PREFIX_PATTERN = re.compile(
     r"^\s*(?:"
@@ -84,6 +89,26 @@ def build_dpo_prompt(
     return "\n".join(lines)
 
 
+def build_mathdial_dpo_prompt(
+    user_text: str = "",
+    history_turns: list[dict[str, str]] | tuple[dict[str, str], ...] | None = None,
+    *,
+    max_history_turns: int = DEFAULT_MAX_HISTORY_TURNS,
+) -> str:
+    """MathDial日本語個別指導で共有するpromptを作る。"""
+    lines = [*MATHDIAL_INSTRUCTION_LINES, "", "これまでの学習対話:"]
+    for turn in list(history_turns or [])[-max_history_turns:]:
+        speaker = normalize_speaker(turn.get("speaker", "User"))
+        text = clean_turn_text(turn.get("text", ""))
+        if text:
+            lines.append(f"{speaker}: {text}")
+    clean_user_text = clean_turn_text(user_text)
+    if clean_user_text:
+        lines.append(f"User: {clean_user_text}")
+    lines.extend(["", "AI:"])
+    return "\n".join(lines)
+
+
 def build_dpo_prompt_from_context_text(
     context_text: str,
     *,
@@ -95,3 +120,14 @@ def build_dpo_prompt_from_context_text(
         max_history_turns=max_history_turns,
     )
 
+
+def build_mathdial_dpo_prompt_from_context_text(
+    context_text: str,
+    *,
+    max_history_turns: int = DEFAULT_MAX_HISTORY_TURNS,
+) -> str:
+    """翻訳済み文脈からMathDial用DPO promptを作る。"""
+    return build_mathdial_dpo_prompt(
+        history_turns=context_text_to_user_ai_turns(context_text),
+        max_history_turns=max_history_turns,
+    )

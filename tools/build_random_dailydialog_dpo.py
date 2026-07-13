@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from core.dpo_prompting import DPO_PROMPT_TEMPLATE_VERSION, build_dpo_prompt_from_context_text
+from core.dpo_prompting import DPO_PROMPT_TEMPLATE_VERSION, build_dpo_prompt_from_context_text, build_mathdial_dpo_prompt_from_context_text
 from core.random_dpo_prompting import (
     GENERAL_QUALITY_STYLE_PRESET,
     RANDOM_DPO_PROMPT_TEMPLATE_VERSION,
@@ -35,6 +35,7 @@ from tools.score_dialogue_with_bayes_model import (
     load_env_file,
     resolve_scoring_model,
 )
+from tools.jsonl_utils import read_jsonl_records
 
 
 DEFAULT_RUN_TAG = "esconv_5000_to_2000_random2500"
@@ -69,6 +70,8 @@ def parse_args() -> argparse.Namespace:
         description="DailyDialogからランダム抽出したRandom-DPO baseline JSONLを作成します。"
     )
     parser.add_argument("--input", default="", help="準備済みDailyDialog JSONL。未指定ならHF datasetから読み込みます。")
+    parser.add_argument("--source-dataset", default="DailyDialog", help="入力JSONLのデータセット名。")
+    parser.add_argument("--prompt-preset", choices=("default", "mathdial_tutoring"), default="default")
     parser.add_argument("--dataset-name", default=DEFAULT_DATASET_NAME)
     parser.add_argument("--split", default=DEFAULT_SPLIT)
     parser.add_argument("--start-dialogue", type=int, default=0)
@@ -85,6 +88,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--seed", type=int, default=seed)
     parser.add_argument("--skip-sample-errors", action="store_true")
+    parser.add_argument("--heartbeat-file", default="")
     parser.add_argument("--dry-run", action="store_true", help="APIを呼ばず、抽出対象だけ確認します。")
     return parser.parse_args()
 
@@ -112,6 +116,12 @@ def read_jsonl(path: Path | str) -> list[dict[str, Any]]:
     return records
 
 
+def read_jsonl_unvalidated(path: Path | str) -> list[dict[str, Any]]:
+    """中断再開用の生成済みJSONLをそのまま読む。"""
+    records, _ = read_jsonl_records(path, strict=False, label="Random-DPO再開出力")
+    return [payload for payload in records if isinstance(payload, dict)]
+
+
 def write_jsonl(records: list[dict[str, Any]], path: Path | str) -> None:
     """JSONLを書き出す。"""
     output_path = Path(path)
@@ -119,6 +129,27 @@ def write_jsonl(records: list[dict[str, Any]], path: Path | str) -> None:
     with output_path.open("w", encoding="utf-8") as file:
         for record in records:
             file.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def append_jsonl(record: dict[str, Any], path: Path | str) -> None:
+    """中断再開用に1レコードを追記する。"""
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(record, ensure_ascii=False) + "\n")
+        file.flush()
+
+
+def write_heartbeat(path: Path | str | None, **payload: Any) -> None:
+    """Random-DPO生成の進捗を原子的に記録する。"""
+    if not path:
+        return
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    body = {"timestamp": datetime.now(timezone.utc).isoformat(), "stage": "random_dpo", **payload}
+    temporary.write_text(json.dumps(body, ensure_ascii=False) + "\n", encoding="utf-8")
+    temporary.replace(output)
 
 
 def write_json(payload: dict[str, Any], path: Path | str) -> None:
@@ -217,16 +248,18 @@ def build_random_dpo_record(
     model: str,
     seed: int,
     candidates: int,
+    source_dataset: str = "DailyDialog",
+    prompt_preset: str = "default",
 ) -> dict[str, Any]:
     """Random-DPOの1レコードを既存DPO学習schemaへ変換する。"""
     translated_prompt = generation_payload["translated_prompt"]
     translated_chosen = generation_payload["translated_chosen"]
     rejected_text = generation_payload["rejected_candidates"][0]
-    dpo_prompt = build_dpo_prompt_from_context_text(translated_prompt)
+    dpo_prompt = build_mathdial_dpo_prompt_from_context_text(translated_prompt) if prompt_preset == "mathdial_tutoring" else build_dpo_prompt_from_context_text(translated_prompt)
     metadata = dict(source_record.get("metadata", {}))
     metadata.update(
         {
-            "source_dataset": "DailyDialog",
+            "source_dataset": source_dataset,
             "selection_method": "random",
             "random_seed": seed,
             "random_index": index,
@@ -247,7 +280,7 @@ def build_random_dpo_record(
         "score_chosen": 1.0,
         "score_rejected": 0.0,
         "score_gap": 1.0,
-        "source_dataset": "DailyDialog",
+        "source_dataset": source_dataset,
         "source_dialogue_id": source_record.get("conversation_id"),
         "turn_index": source_record.get("turn_index"),
         "history_turns": source_record.get("metadata", {}).get("context_turns"),
@@ -285,13 +318,36 @@ def build_random_dpo_records(
     workers: int,
     seed: int,
     skip_sample_errors: bool,
+    source_dataset: str = "DailyDialog",
+    prompt_preset: str = "default",
+    existing_records: list[dict[str, Any]] | None = None,
+    existing_skipped_records: list[dict[str, Any]] | None = None,
+    output_path: Path | str | None = None,
+    skipped_output_path: Path | str | None = None,
+    heartbeat_path: Path | str | None = None,
 ) -> tuple[list[dict[str, Any]], Counter[str]]:
     """ランダム順のDailyDialog候補からDPOレコードを作る。"""
     instructions = build_general_quality_generation_instructions()
-    records: list[dict[str, Any]] = []
+    records: list[dict[str, Any]] = list(existing_records or [])
     skipped: Counter[str] = Counter()
-    processed: set[tuple[str, int]] = set()
-    indexed_records = list(enumerate(source_records, start=1))
+    processed: set[tuple[str, int]] = {
+        (str(row["source_dialogue_id"]), int(row["turn_index"])) for row in records
+    }
+    for row in existing_skipped_records or []:
+        processed.add((str(row["conversation_id"]), int(row["turn_index"])))
+        skipped[str(row.get("reason", "sample_error"))] += 1
+    indexed_records = [
+        (index, row)
+        for index, row in enumerate(source_records, start=1)
+        if source_key(row) not in processed
+    ]
+    write_heartbeat(
+        heartbeat_path,
+        state="running",
+        accepted=len(records),
+        skipped=sum(skipped.values()),
+        pending=len(indexed_records),
+    )
 
     def build_one(index: int, source_record: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
         try:
@@ -313,6 +369,8 @@ def build_random_dpo_records(
                     model=model,
                     seed=seed,
                     candidates=candidates,
+                    source_dataset=source_dataset,
+                    prompt_preset=prompt_preset,
                 ),
                 None,
             )
@@ -334,33 +392,60 @@ def build_random_dpo_records(
         if workers <= 1:
             results = [(source_record, *build_one(index, source_record)) for index, source_record in chunk]
         else:
-            results = []
+            indexed_results = []
             with ThreadPoolExecutor(max_workers=workers) as executor:
                 futures = {
-                    executor.submit(build_one, index, source_record): source_record
+                    executor.submit(build_one, index, source_record): (index, source_record)
                     for index, source_record in chunk
                 }
                 for future in as_completed(futures):
-                    source_record = futures[future]
+                    index, source_record = futures[future]
                     record, skip_reason = future.result()
-                    results.append((source_record, record, skip_reason))
+                    indexed_results.append((index, source_record, record, skip_reason))
+            results = [item[1:] for item in sorted(indexed_results, key=lambda item: item[0])]
         for source_record, record, skip_reason in results:
             key = source_key(source_record)
             if key in processed:
                 continue
             processed.add(key)
             if record is None:
-                skipped[skip_reason or "unknown"] += 1
+                reason = skip_reason or "unknown"
+                skipped[reason] += 1
+                if skipped_output_path:
+                    append_jsonl(
+                        {
+                            "conversation_id": source_record["conversation_id"],
+                            "turn_index": source_record["turn_index"],
+                            "reason": reason,
+                        },
+                        skipped_output_path,
+                    )
                 continue
             records.append(record)
+            if output_path:
+                append_jsonl(record, output_path)
             print(
                 "[RANDOM-DPO] accepted "
                 f"{len(records)}/{target_records} "
                 f"{source_record.get('conversation_id')}#{source_record.get('turn_index')}",
                 flush=True,
             )
+            write_heartbeat(
+                heartbeat_path,
+                state="running",
+                accepted=len(records),
+                skipped=sum(skipped.values()),
+                pending=max(0, len(indexed_records) - len(processed)),
+            )
             if len(records) >= target_records:
                 break
+    write_heartbeat(
+        heartbeat_path,
+        state="complete",
+        accepted=len(records),
+        skipped=sum(skipped.values()),
+        pending=max(0, target_records - len(records)),
+    )
     return records[:target_records], skipped
 
 
@@ -439,6 +524,13 @@ def main() -> int:
         print("  esconv_gold_records: 0")
         return 0
 
+    skipped_path = str(Path(args.output).with_suffix(".skipped.jsonl"))
+    existing = read_jsonl_unvalidated(args.output) if Path(args.output).exists() else []
+    existing_skipped = read_jsonl_unvalidated(skipped_path) if Path(skipped_path).exists() else []
+    if Path(args.output).exists():
+        write_jsonl(existing, args.output)
+    if Path(skipped_path).exists():
+        write_jsonl(existing_skipped, skipped_path)
     records, skipped = build_random_dpo_records(
         randomized_records,
         generator=OpenAIResponsesGenerator(),
@@ -449,6 +541,13 @@ def main() -> int:
         workers=max(1, args.workers),
         seed=args.seed,
         skip_sample_errors=args.skip_sample_errors,
+        source_dataset=args.source_dataset,
+        prompt_preset=args.prompt_preset,
+        existing_records=existing,
+        existing_skipped_records=existing_skipped,
+        output_path=args.output,
+        skipped_output_path=skipped_path,
+        heartbeat_path=args.heartbeat_file,
     )
     if len(records) < args.target_records:
         raise RuntimeError(

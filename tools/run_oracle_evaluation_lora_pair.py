@@ -186,7 +186,7 @@ def generate_reply_with_adapter(
     bundle: ChatBundle,
     prompt_text: str,
     *,
-    adapter_name: str,
+    adapter_name: str | None,
     max_new_tokens: int,
     temperature: float,
     top_p: float,
@@ -194,10 +194,11 @@ def generate_reply_with_adapter(
     seed: int,
 ) -> str:
     """指定したLoRA adapterで返答を生成する。"""
-    set_adapter = getattr(bundle.model, "set_adapter", None)
-    if set_adapter is None:
-        raise RuntimeError("読み込んだモデルがLoRA adapterの切り替えに対応していません。")
-    set_adapter(adapter_name)
+    if adapter_name is not None:
+        set_adapter = getattr(bundle.model, "set_adapter", None)
+        if set_adapter is None:
+            raise RuntimeError("読み込んだモデルがLoRA adapterの切り替えに対応していません。")
+        set_adapter(adapter_name)
 
     generation_prompt = build_dpo_generation_prompt(bundle.tokenizer, prompt_text)
     bundle.torch.manual_seed(seed)

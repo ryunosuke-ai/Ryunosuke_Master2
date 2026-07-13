@@ -88,13 +88,44 @@ def resolve_scoring_model() -> str:
     )
 
 
-def resolve_scoring_azure_api_key() -> str:
+def resolve_scoring_azure_api_key(model: str = "") -> str:
     """評価用Azure OpenAI APIキーを解決する。"""
+    if model.startswith("gpt-5.6") or model in {
+        read_env_value("AZURE_OPENAI_GPT56_SOL_DEPLOYMENT"),
+        read_env_value("AZURE_OPENAI_GPT56_TERRA_DEPLOYMENT"),
+    }:
+        return read_env_value_with_fallback(
+            "AZURE_OPENAI_GPT56_API_KEY",
+            "AZURE_OPENAI_API_KEY",
+        )
     return read_env_value_with_fallback(
         "AZURE_OPENAI_GPT54_API_KEY",
         "OPENAI_GPT54_API_KEY",
         "AZURE_OPENAI_API_KEY",
     )
+
+
+def resolve_scoring_azure_endpoint(model: str) -> str:
+    """モデル世代に対応するAzure endpointを解決する。"""
+    sol = read_env_value("AZURE_OPENAI_GPT56_SOL_DEPLOYMENT")
+    terra = read_env_value("AZURE_OPENAI_GPT56_TERRA_DEPLOYMENT")
+    if model in {sol, terra} or model.startswith("gpt-5.6"):
+        return read_env_value_with_fallback("AZURE_OPENAI_GPT56_ENDPOINT", "AZURE_OPENAI_ENDPOINT")
+    return read_env_value("AZURE_OPENAI_ENDPOINT")
+
+
+def resolve_scoring_azure_api_version(model: str) -> str:
+    """モデル世代に対応するAzure API versionを解決する。"""
+    if model.startswith("gpt-5.6") or model in {
+        read_env_value("AZURE_OPENAI_GPT56_SOL_DEPLOYMENT"),
+        read_env_value("AZURE_OPENAI_GPT56_TERRA_DEPLOYMENT"),
+    }:
+        return read_env_value_with_fallback(
+            "AZURE_OPENAI_GPT56_API_VERSION",
+            "AZURE_OPENAI_API_VERSION",
+            default="2025-04-01-preview",
+        )
+    return read_env_value("AZURE_OPENAI_API_VERSION", "2025-04-01-preview")
 
 
 def read_dialogue_records(path: Path | str) -> list[dict[str, Any]]:
@@ -258,17 +289,20 @@ class OpenAIResponsesGenerator:
         response_text_format: dict[str, Any] | None = None,
     ) -> str:
         """Responses APIでテキストを生成する。"""
-        azure_endpoint = read_env_value("AZURE_OPENAI_ENDPOINT")
-        azure_api_key = resolve_scoring_azure_api_key()
-        azure_api_version = read_env_value("AZURE_OPENAI_API_VERSION", "2025-04-01-preview")
+        azure_endpoint = resolve_scoring_azure_endpoint(model)
+        azure_api_key = resolve_scoring_azure_api_key(model)
+        azure_api_version = resolve_scoring_azure_api_version(model)
         if azure_endpoint and azure_api_key:
             client = self.azure_client_class(
                 api_key=azure_api_key,
                 azure_endpoint=azure_endpoint,
                 api_version=azure_api_version,
+                max_retries=2,
             )
         else:
-            client = self.openai_client_class(api_key=read_env_value("OPENAI_API_KEY"))
+            client = self.openai_client_class(
+                api_key=read_env_value("OPENAI_API_KEY"), max_retries=2
+            )
         create_kwargs: dict[str, Any] = {
             "model": model,
             "instructions": instructions,

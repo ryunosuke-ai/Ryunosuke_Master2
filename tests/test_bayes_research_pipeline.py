@@ -16,6 +16,7 @@ from tools.analyze_small_corpus import (
     generate_bayes_model,
     read_jsonl,
     resolve_analysis_azure_api_key,
+    resolve_analysis_azure_endpoint,
     resolve_analysis_model,
     summarize_corpus,
 )
@@ -24,6 +25,7 @@ from tools.score_dialogue_with_bayes_model import (
     build_json_mode_input as build_scoring_json_mode_input,
     parse_observation_score,
     resolve_scoring_azure_api_key,
+    resolve_scoring_azure_endpoint,
     resolve_scoring_model,
     score_records,
 )
@@ -136,6 +138,20 @@ def test_scoring_env_resolution_prefers_gpt54_specific_values(monkeypatch):
 
     assert resolve_scoring_azure_api_key() == "base-key"
     assert resolve_scoring_model() == "base-deployment"
+
+
+def test_gpt56_azure_resolution_uses_shared_key_and_generation_endpoint(monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_GPT56_API_KEY", "gpt56-key")
+    monkeypatch.setenv("AZURE_OPENAI_GPT56_ENDPOINT", "https://gpt56.example")
+    monkeypatch.setenv("AZURE_OPENAI_GPT56_SOL_DEPLOYMENT", "sol-deployment")
+    monkeypatch.setenv("AZURE_OPENAI_GPT56_TERRA_DEPLOYMENT", "terra-deployment")
+    monkeypatch.setenv("AZURE_OPENAI_GPT54_PRO_API_KEY", "legacy-pro-key")
+    monkeypatch.setenv("AZURE_OPENAI_GPT54_API_KEY", "legacy-score-key")
+
+    assert resolve_analysis_azure_api_key("sol-deployment") == "gpt56-key"
+    assert resolve_analysis_azure_endpoint("sol-deployment") == "https://gpt56.example"
+    assert resolve_scoring_azure_api_key("terra-deployment") == "gpt56-key"
+    assert resolve_scoring_azure_endpoint("terra-deployment") == "https://gpt56.example"
 
 
 def test_extract_json_object_handles_surrounding_text():

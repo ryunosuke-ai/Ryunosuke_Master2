@@ -151,3 +151,36 @@ def test_build_random_dpo_records_uses_shared_training_prompt_template():
     assert record["model_used_for_scoring"] == "not_used_random_baseline"
     assert count_by_source_dataset(records) == {"DailyDialog": 1}
     assert generator.calls[0]["response_text_format"] == {"type": "json_object"}
+
+
+def test_random_dpo_resume_skips_existing_context_without_duplicates(tmp_path):
+    source = [make_source_record(1), make_source_record(2)]
+    output = tmp_path / "random.jsonl"
+    first, _ = build_random_dpo_records(
+        source[:1],
+        generator=StubGenerator([generation_output("prompt 1", "chosen 1", "rejected 1")]),
+        model="mock",
+        max_output_tokens=512,
+        candidates=4,
+        target_records=1,
+        workers=1,
+        seed=42,
+        skip_sample_errors=False,
+        output_path=output,
+    )
+    resumed, _ = build_random_dpo_records(
+        source,
+        generator=StubGenerator([generation_output("prompt 2", "chosen 2", "rejected 2")]),
+        model="mock",
+        max_output_tokens=512,
+        candidates=4,
+        target_records=2,
+        workers=1,
+        seed=42,
+        skip_sample_errors=False,
+        existing_records=first,
+        output_path=output,
+    )
+    assert len(resumed) == 2
+    assert len({(row["source_dialogue_id"], row["turn_index"]) for row in resumed}) == 2
+    assert len([line for line in output.read_text(encoding="utf-8").splitlines() if line]) == 2

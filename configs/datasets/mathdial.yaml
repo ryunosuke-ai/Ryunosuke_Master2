@@ -1,0 +1,13 @@
+dataset_name: eth-nlped/mathdial
+revision: acc3878459e0bd8c04ab840056572f0b8b1abe1f
+language: English
+validation_ratio: 0.10
+seed: 42
+teacher_moves:
+  - probing
+  - focus
+  - telling
+  - generic
+strict_qid_isolation: true
+merge_consecutive_assistant_turns: true
+deduplicate_identical_adjacent_assistant_text: true
