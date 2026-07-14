@@ -93,7 +93,10 @@ report
 - 未知ラベルやJSON不正は、許可observationだけを示す短いpromptで最大2回再判定する。
 - 最初の200応答をpilotとし、fallback率・不正出力率が各1%以下、かつ有効観測2種類以上であることを確認する。
 - pilotは200件を初めて超える会話を丸ごと含めるため、実件数は200件以上になる。会話境界維持により199件で停止することはない。
-- pilot通過後に同じJSONLをresumeして20,000応答まで処理する。
+- WildChat全体の粗候補を、assistant応答を見ずにuser側の混乱・試行・再質問・履歴長で優先順位付けする。
+- pilot通過後は20,000応答ずつresume scoringし、各batch後に実際のBASiS選別可能件数を再集計する。
+- `SELECTION_POOL_COUNT`（既定5,000件）へ到達した時点で、未評価候補を残してscoringを終了する。
+- 各batchのスコア済み件数、選別可能件数、fallback件数は`scoring/selection_pool_history.jsonl`へ追記する。
 - conversation内はturn順を維持してposteriorを逐次更新する。
 - conversation単位で並列化し、結果を逐次JSONLへ追記する。
 - 既存結果のconversation/turn keyはresume時にskipする。
@@ -236,16 +239,16 @@ REUSE_BASIS_RUN_TAG=mathdial_wildchat_gpt56_v3 \
 REUSE_SCORING_RUN_TAG=mathdial_wildchat_gpt56_v3_resume1 \
 START_STAGE=preprocess \
 END_STAGE=build_dpo \
-SELECTION_POOL_COUNT=3000 \
-WILDCHAT_SCORING_TARGET_RECORDS=80000 \
+SELECTION_POOL_COUNT=5000 \
+SCORING_BATCH_RECORDS=20000 \
 WORKERS=8 \
 SCORING_REPAIR_WORKERS=4 \
 PYTHONUNBUFFERED=1 \
 ./scripts/run_mathdial_wildchat_watchdog.sh
 ```
 
-この経路はraw scoring 20,000件を照合して再利用し、不足するWildChat候補とscoringだけを追加する。
-429・timeoutを含む会話は低並列で再評価する。20,000件時点の優先候補率から、3,000件の選別プールを確保するため80,000件を既定の推奨値としている。selectionとDPOは再利用しない。
+この経路はraw scoring 20,000件を照合して再利用する。既存WildChat checkpointから残りを全走査し、粗候補をuser側の指導機会でグローバルに並べる。
+以降は20,000件ずつ追加評価し、選別可能候補5,000件へ達した時点で自動停止する。429・timeoutを含む会話は低並列で再評価する。selectionとDPOは再利用しない。
 
 単一stageの明示再実行:
 

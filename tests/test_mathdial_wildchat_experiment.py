@@ -296,6 +296,33 @@ def test_wildchat_checkpoint_resume_does_not_duplicate_candidates():
     assert stats["stream_rows"] == 4
 
 
+def test_wildchat_full_scan_resume_clears_previous_target_stop():
+    config = {**load_yaml(WILD_CONFIG_PATH), "near_duplicate_jaccard": 1.0}
+    rows = []
+    for index in range(3):
+        row = valid_wildchat_row()
+        row["conversation"][0]["content"] += f" Full scan example {index}."
+        rows.append(row)
+    first_general, first_math, first_stats = extract_candidates(
+        rows[:1],
+        config,
+        target_candidate_records=3,
+        progress_every=0,
+    )
+    assert first_stats["stopped_by_candidate_target"] == 1
+    general, _, stats = extract_candidates(
+        rows[1:],
+        config,
+        progress_every=0,
+        initial_general=first_general,
+        initial_math=first_math,
+        initial_counts=first_stats,
+    )
+    assert len(general) == 3
+    assert stats["stopped_by_candidate_target"] == 0
+    assert stats["stream_exhausted"] == 1
+
+
 def test_scoring_limit_preserves_complete_conversations():
     records = [
         {"conversation_id": conversation_id, "turn_index": turn_index}

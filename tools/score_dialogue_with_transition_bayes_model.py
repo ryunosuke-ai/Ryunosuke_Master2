@@ -26,6 +26,7 @@ from tools.score_dialogue_with_bayes_model import (
     load_env_file,
     read_dialogue_records,
     resolve_scoring_model,
+    validate_dialogue_record,
     write_jsonl,
 )
 from tools.audit_logging import DEFAULT_AUDIT_LOG_PATH, append_audit_log
@@ -75,6 +76,14 @@ def parse_args() -> argparse.Namespace:
         "--max-records",
         type=int,
         help="API評価する最大応答件数。会話内の状態遷移を壊さないよう会話境界まで含めます。",
+    )
+    parser.add_argument(
+        "--max-new-records",
+        type=int,
+        help=(
+            "resume済みsampleを除き、この実行で新規評価する最大件数。"
+            "会話を途中で分断せず、適応型batch scoringで使用します。"
+        ),
     )
     parser.add_argument(
         "--include-crossing-conversation",
@@ -134,6 +143,110 @@ def limit_records_by_conversation(
                 break
             continue
         selected.extend(conversation_records)
+        if len(selected) >= max_records:
+            break
+    return selected
+
+
+def limit_new_records_by_conversation(
+    records: list[dict[str, Any]],
+    existing_results: list[dict[str, Any]],
+    max_new_records: int | None,
+) -> list[dict[str, Any]]:
+    """既存結果を除く新規API件数を、会話境界を維持して制限する。"""
+    if max_new_records is None or max_new_records <= 0:
+        return records
+    done_keys = {_record_key(row) for row in existing_results}
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        grouped.setdefault(str(record["conversation_id"]), []).append(record)
+    selected: list[dict[str, Any]] = []
+    pending_count = 0
+    for conversation_records in grouped.values():
+        pending = sum(
+            _record_key(record) not in done_keys for record in conversation_records
+        )
+        if pending == 0:
+            continue
+        if selected and pending_count + pending > max_new_records:
+            continue
+        selected.extend(conversation_records)
+        pending_count += pending
+        if pending_count >= max_new_records:
+            break
+    return selected
+
+
+def _iter_jsonl_conversations(path: Path | str):
+    """conversation_idで連続したJSONLを会話単位で逐次読む。"""
+    input_path = Path(path)
+    current_id: str | None = None
+    current: list[dict[str, Any]] = []
+    with input_path.open(encoding="utf-8") as file:
+        for line_number, line in enumerate(file, start=1):
+            if not line.strip():
+                continue
+            row = validate_dialogue_record(json.loads(line), line_number=line_number)
+            conversation_id = str(row["conversation_id"])
+            if current_id is not None and conversation_id != current_id:
+                yield current
+                current = []
+            current_id = conversation_id
+            current.append(row)
+    if current:
+        yield current
+
+
+def read_new_records_batch(
+    path: Path | str,
+    existing_results: list[dict[str, Any]],
+    max_new_records: int,
+) -> list[dict[str, Any]]:
+    """大規模優先順位JSONLから未評価batchだけを逐次抽出する。"""
+    done_keys = {_record_key(row) for row in existing_results}
+    selected: list[dict[str, Any]] = []
+    pending_count = 0
+    for conversation in _iter_jsonl_conversations(path):
+        pending = sum(_record_key(row) not in done_keys for row in conversation)
+        if pending == 0:
+            continue
+        if selected and pending_count + pending > max_new_records:
+            continue
+        selected.extend(conversation)
+        pending_count += pending
+        if pending_count >= max_new_records:
+            break
+    return selected
+
+
+def read_conversations_by_id(
+    path: Path | str, conversation_ids: set[str]
+) -> list[dict[str, Any]]:
+    """指定会話だけを大規模JSONLから逐次抽出する。"""
+    selected: list[dict[str, Any]] = []
+    if not conversation_ids:
+        return selected
+    for conversation in _iter_jsonl_conversations(path):
+        if str(conversation[0]["conversation_id"]) in conversation_ids:
+            selected.extend(conversation)
+    return selected
+
+
+def read_limited_records(
+    path: Path | str,
+    max_records: int,
+    *,
+    include_crossing_conversation: bool,
+) -> list[dict[str, Any]]:
+    """大規模JSONLの先頭優先会話から件数制限して逐次読む。"""
+    selected: list[dict[str, Any]] = []
+    for conversation in _iter_jsonl_conversations(path):
+        if selected and len(selected) + len(conversation) > max_records:
+            if include_crossing_conversation:
+                selected.extend(conversation)
+                break
+            continue
+        selected.extend(conversation)
         if len(selected) >= max_records:
             break
     return selected
@@ -764,18 +877,52 @@ def score_records(
 def main() -> int:
     """CLIエントリポイント。"""
     args = parse_args()
-    source_records = read_dialogue_records(args.input)
-    records = limit_records_by_conversation(
-        source_records,
-        args.max_records,
-        include_crossing_conversation=args.include_crossing_conversation,
-    )
-    if len(records) < len(source_records):
+    existing_results = read_existing_scored_records(args.output)
+    if args.repair_retryable_fallbacks:
+        repair_ids = {
+            str(row["conversation_id"])
+            for row in existing_results
+            if is_retryable_fallback(row)
+        }
+        source_records = read_conversations_by_id(args.input, repair_ids)
+        records = source_records
+    elif args.max_new_records:
+        source_records = read_new_records_batch(
+            args.input, existing_results, args.max_new_records
+        )
+        records = source_records
+        pending_keys = {
+            _record_key(row) for row in records
+        } - {_record_key(row) for row in existing_results}
         print(
-            "[scoring] 十分な比較候補プールを確保したため入力を早期停止します: "
-            f"selected={len(records)} source={len(source_records)} max_records={args.max_records}",
+            "[scoring batch] selected_new="
+            f"{len(pending_keys)} max_new_records={args.max_new_records}",
             flush=True,
         )
+    elif args.max_records and Path(args.input).suffix.lower() == ".jsonl":
+        source_records = read_limited_records(
+            args.input,
+            args.max_records,
+            include_crossing_conversation=args.include_crossing_conversation,
+        )
+        records = source_records
+        print(
+            f"[scoring] prioritized inputから{len(records)}件を会話単位で読み込みました。",
+            flush=True,
+        )
+    else:
+        source_records = read_dialogue_records(args.input)
+        records = limit_records_by_conversation(
+            source_records,
+            args.max_records,
+            include_crossing_conversation=args.include_crossing_conversation,
+        )
+        if len(records) < len(source_records):
+            print(
+                "[scoring] 十分な比較候補プールを確保したため入力を早期停止します: "
+                f"selected={len(records)} source={len(source_records)} max_records={args.max_records}",
+                flush=True,
+            )
     bayes_model = load_transition_bayes_model(args.bayes_model)
     if args.dry_run:
         print("transition bayes scoring dry-run")
@@ -783,7 +930,6 @@ def main() -> int:
         print(f"  bayes_model: {bayes_model.name}")
         print(f"  model: {args.model or DEFAULT_MODEL}")
         return 0
-    existing_results = read_existing_scored_records(args.output)
     if args.repair_retryable_fallbacks:
         existing_results, repair_conversations = prepare_retryable_fallback_repair(
             records,
@@ -795,6 +941,11 @@ def main() -> int:
             f"{len(repair_conversations)} retained_records={len(existing_results)}",
             flush=True,
         )
+        records = [
+            row
+            for row in records
+            if str(row.get("conversation_id")) in repair_conversations
+        ]
     scored = score_records(
         records,
         bayes_model=bayes_model,

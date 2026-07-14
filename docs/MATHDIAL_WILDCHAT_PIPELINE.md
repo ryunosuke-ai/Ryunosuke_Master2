@@ -75,8 +75,11 @@ RUN_TAG=mathdial_wildchat_gpt56_v3 STAGE=statistics \
 `TRAIN_CUDA_VISIBLE_DEVICES`を変更できる。
 
 v3の`score_wildchat`は200件pilotを先に実行し、fallback率と不正ラベル率が各1%以下、
-有効observationが2種類以上の場合だけ20,000件へ進む。選別はMathDial専用の
-state-specific emission差を使用するが、posterior更新、MMR、DPO生成はESConv互換のままである。
+有効observationが2種類以上の場合だけ本評価へ進む。WildChat全体の粗候補は、assistant応答を
+参照せずuser側の指導機会で優先順位付けする。20,000件単位で評価と選別可能件数の測定を繰り返し、
+既定5,000件へ到達した時点で停止する。選別はMathDial専用のstate-specific emission差を使用するが、
+posterior更新、MMR、DPO生成はESConv互換のままである。batchごとの件数は
+`scoring/selection_pool_history.jsonl`へ保存する。
 pilotは閾値をまたぐ会話を丸ごと含めるため、200件未満にはならない。
 
 本scoringでは429・timeout等の回復可能なfallbackを含む会話を低並列で再評価する。

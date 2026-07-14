@@ -23,10 +23,16 @@ from tools.reuse_mathdial_pipeline_data import (
     reuse_files,
 )
 from tools.reuse_transition_scoring import validate_and_reuse_scoring
+from tools.prioritize_tutoring_candidates import (
+    opportunity_score,
+    prioritize_jsonl,
+)
+from tools.measure_basis_selection_pool import measure_pool
 from tools.score_dialogue_with_transition_bayes_model import (
     build_transition_scoring_instructions,
     is_retryable_fallback,
     prepare_retryable_fallback_repair,
+    read_new_records_batch,
     score_single_record,
 )
 from tools.validate_scoring_fallbacks import summarize_fallbacks
@@ -155,6 +161,102 @@ def test_retryable_fallback_repair_removes_whole_conversation(tmp_path: Path):
     assert not is_retryable_fallback(
         {"llm_error": "content_filter", "llm_error_kind": "content_filter"}
     )
+
+
+def test_adaptive_batch_skips_scored_conversations(tmp_path: Path):
+    records = [
+        {
+            "conversation_id": conversation_id,
+            "turn_index": turn_index,
+            "prompt": "p",
+            "response": "r",
+        }
+        for conversation_id, size in (("c1", 2), ("c2", 3), ("c3", 2))
+        for turn_index in range(size)
+    ]
+    path = tmp_path / "prioritized.jsonl"
+    path.write_text(
+        "".join(json.dumps(row) + "\n" for row in records), encoding="utf-8"
+    )
+    existing = [dict(row) for row in records if row["conversation_id"] == "c1"]
+    selected = read_new_records_batch(path, existing, max_new_records=3)
+    assert {row["conversation_id"] for row in selected} == {"c2"}
+    assert len(selected) == 3
+
+
+def test_priority_uses_only_user_side_and_streams_by_conversation(tmp_path: Path):
+    base = {
+        "turn_index": 1,
+        "history": [{"role": "user", "text": "Teach me a topic."}],
+        "next_user_turn": "Continue.",
+        "metadata": {},
+    }
+    plain = {**base, "conversation_id": "plain", "response": "excellent tutor"}
+    confused = {
+        **base,
+        "conversation_id": "confused",
+        "history": [
+            {
+                "role": "user",
+                "text": "I tried this equation but my answer is wrong and I am confused?",
+            }
+        ],
+        "response": "unrelated assistant text",
+    }
+    changed_response = {**confused, "response": "a completely different response"}
+    assert opportunity_score(confused) == opportunity_score(changed_response)
+    source = tmp_path / "candidates.jsonl"
+    source.write_text(
+        json.dumps(plain) + "\n" + json.dumps(confused) + "\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "prioritized.jsonl"
+    report_path = tmp_path / "report.json"
+    report = prioritize_jsonl(source, output, report_path=report_path, seed=42)
+    rows = [json.loads(line) for line in output.open()]
+    assert rows[0]["conversation_id"] == "confused"
+    assert report["assistant_response_used_for_priority"] is False
+    assert rows[0]["metadata"]["candidate_priority"]["uses_assistant_response"] is False
+
+    original_mtime = output.stat().st_mtime_ns
+    second = prioritize_jsonl(source, output, report_path=report_path, seed=42)
+    assert second == report
+    assert output.stat().st_mtime_ns == original_mtime
+
+
+def test_selection_pool_measurement_matches_mathdial_selection_conditions(
+    tmp_path: Path,
+):
+    model_path = tmp_path / "model.json"
+    model_path.write_text(json.dumps(mock_model()), encoding="utf-8")
+    rows = []
+    for index in range(5):
+        rows.append(
+            {
+                "conversation_id": "same-conversation",
+                "turn_index": index,
+                "observation": "elicit_reasoning",
+                "most_likely_state": "active_diagnosis",
+                "posterior": 0.8,
+            }
+        )
+    rows.append(
+        {
+            "conversation_id": "off-style",
+            "turn_index": 0,
+            "observation": "generic_repetition",
+            "most_likely_state": "stalled_misalignment",
+            "posterior": 0.9,
+        }
+    )
+    report = measure_pool(
+        rows,
+        model_path=model_path,
+        method="state_specific_margin",
+        margin=0.05,
+    )
+    assert report["eligible_records"] == 3
+    assert report["eligible_conversations"] == 1
 
 
 def test_full_fallback_gate_warns_before_fatal():

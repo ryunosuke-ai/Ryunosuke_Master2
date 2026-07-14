@@ -10,9 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from tools.score_dialogue_with_transition_bayes_model import (
-    limit_records_by_conversation,
+    read_limited_records,
 )
-from tools.score_dialogue_with_bayes_model import read_dialogue_records
 
 
 def sha256(path: Path) -> str:
@@ -57,11 +56,15 @@ def validate_and_reuse_scoring(
         )
     if expected_records <= 0:
         raise ValueError("再利用するscoring期待件数を決定できません。")
-    source_expected = limit_records_by_conversation(
-        read_dialogue_records(source_root / relative_input), expected_records
+    source_expected = read_limited_records(
+        source_root / relative_input,
+        expected_records,
+        include_crossing_conversation=False,
     )
-    target_expected = limit_records_by_conversation(
-        read_dialogue_records(target_root / relative_input), expected_records
+    target_expected = read_limited_records(
+        target_root / relative_input,
+        expected_records,
+        include_crossing_conversation=False,
     )
     if len(source_expected) != expected_records or len(target_expected) != expected_records:
         raise ValueError(

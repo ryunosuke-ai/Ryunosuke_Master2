@@ -31,6 +31,9 @@ WARN_SCORING_FALLBACK_RATE="${WARN_SCORING_FALLBACK_RATE:-0.01}"
 FATAL_SCORING_FALLBACK_RATE="${FATAL_SCORING_FALLBACK_RATE:-0.05}"
 SCORING_REPAIR_WORKERS="${SCORING_REPAIR_WORKERS:-4}"
 SCORING_REPAIR_ROUNDS="${SCORING_REPAIR_ROUNDS:-2}"
+ADAPTIVE_SCORING="${ADAPTIVE_SCORING:-1}"
+SCORING_BATCH_RECORDS="${SCORING_BATCH_RECORDS:-20000}"
+WILDCHAT_FULL_SCAN="${WILDCHAT_FULL_SCAN:-1}"
 MAX_SCORING_INVALID_RATE="${MAX_SCORING_INVALID_RATE:-0.01}"
 SCORING_PILOT_RECORDS="${SCORING_PILOT_RECORDS:-200}"
 SCORING_PRESET="${SCORING_PRESET:-mathdial_tutoring}"
@@ -66,11 +69,11 @@ mkdir -p "$LOG_DIR" "$STATE_DIR"
 LOG_FILE="$LOG_DIR/pipeline_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-EXPERIMENT_FINGERPRINT="$(python3 - "$RUN_TAG" "$SEED" "$DRY_RUN" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$SELECTION_POOL_COUNT" "$WILDCHAT_CANDIDATE_TARGET_RECORDS" "$WILDCHAT_SCORING_TARGET_RECORDS" "$MATHDIAL_ANALYSIS_CONVERSATIONS" "$MATHDIAL_ANALYSIS_MAX_INPUT_CHARS" "$MATHDIAL_ANALYSIS_MAX_OUTPUT_TOKENS" "$MAX_SCORING_FALLBACK_RATE" "$MAX_SCORING_INVALID_RATE" "$SCORING_PILOT_RECORDS" "$SCORING_PRESET" "$SCORING_PRESET_VERSION" "$INVALID_OBSERVATION_RETRIES" "$SELECTION_LABEL_METHOD" "$SELECTION_EMISSION_MARGIN" "$MODEL_EMISSION_QUALITY_MARGIN" "$MODEL_MIN_NEGATIVE_OBSERVATIONS" "$REUSE_DATA_RUN_TAG" "${REUSE_DATA_ROOT:-}" "$REUSE_BASIS_RUN_TAG" "${REUSE_BASIS_ROOT:-}" "$REUSE_SCORING_RUN_TAG" "${REUSE_SCORING_ROOT:-}" "$WARN_SCORING_FALLBACK_RATE" "$FATAL_SCORING_FALLBACK_RATE" "$SCORING_REPAIR_WORKERS" "$SCORING_REPAIR_ROUNDS" <<'PY'
+EXPERIMENT_FINGERPRINT="$(python3 - "$RUN_TAG" "$SEED" "$DRY_RUN" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$SELECTION_POOL_COUNT" "$WILDCHAT_CANDIDATE_TARGET_RECORDS" "$WILDCHAT_SCORING_TARGET_RECORDS" "$MATHDIAL_ANALYSIS_CONVERSATIONS" "$MATHDIAL_ANALYSIS_MAX_INPUT_CHARS" "$MATHDIAL_ANALYSIS_MAX_OUTPUT_TOKENS" "$MAX_SCORING_FALLBACK_RATE" "$MAX_SCORING_INVALID_RATE" "$SCORING_PILOT_RECORDS" "$SCORING_PRESET" "$SCORING_PRESET_VERSION" "$INVALID_OBSERVATION_RETRIES" "$SELECTION_LABEL_METHOD" "$SELECTION_EMISSION_MARGIN" "$MODEL_EMISSION_QUALITY_MARGIN" "$MODEL_MIN_NEGATIVE_OBSERVATIONS" "$REUSE_DATA_RUN_TAG" "${REUSE_DATA_ROOT:-}" "$REUSE_BASIS_RUN_TAG" "${REUSE_BASIS_ROOT:-}" "$REUSE_SCORING_RUN_TAG" "${REUSE_SCORING_ROOT:-}" "$WARN_SCORING_FALLBACK_RATE" "$FATAL_SCORING_FALLBACK_RATE" "$SCORING_REPAIR_WORKERS" "$SCORING_REPAIR_ROUNDS" "$ADAPTIVE_SCORING" "$SCORING_BATCH_RECORDS" "$WILDCHAT_FULL_SCAN" <<'PY'
 import hashlib,json,pathlib,sys
-configs=["configs/datasets/mathdial.yaml","configs/datasets/wildchat_tutoring.yaml","configs/evaluations/mathdial_oracle_v1.yaml","configs/training/mathdial_dpo.yaml","tools/mathdial_dataset.py","tools/prepare_mathdial.py","tools/prepare_mathdial_for_analysis.py","tools/analyze_mathdial_corpus_transition_bayes.py","tools/score_dialogue_with_transition_bayes_model.py","tools/translate_and_generate_dpo.py","tools/extract_high_posterior_dialogues.py","tools/mathdial_selection.py","tools/validate_mathdial_scoring_pilot.py","tools/validate_scoring_fallbacks.py","tools/reuse_mathdial_pipeline_data.py","tools/reuse_transition_scoring.py","scripts/run_mathdial_wildchat_pipeline.sh"]
+configs=["configs/datasets/mathdial.yaml","configs/datasets/wildchat_tutoring.yaml","configs/evaluations/mathdial_oracle_v1.yaml","configs/training/mathdial_dpo.yaml","tools/mathdial_dataset.py","tools/prepare_mathdial.py","tools/prepare_mathdial_for_analysis.py","tools/analyze_mathdial_corpus_transition_bayes.py","tools/score_dialogue_with_transition_bayes_model.py","tools/prioritize_tutoring_candidates.py","tools/measure_basis_selection_pool.py","tools/translate_and_generate_dpo.py","tools/extract_high_posterior_dialogues.py","tools/mathdial_selection.py","tools/validate_mathdial_scoring_pilot.py","tools/validate_scoring_fallbacks.py","tools/reuse_mathdial_pipeline_data.py","tools/reuse_transition_scoring.py","scripts/run_mathdial_wildchat_pipeline.sh"]
 payload={"values":sys.argv[1:],"files":{p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in configs}}
-for key,value in (("data",sys.argv[30]),("basis",sys.argv[32]),("scoring",sys.argv[34])):
+for key,value in (("data",sys.argv[26]),("basis",sys.argv[28]),("scoring",sys.argv[30])):
  reuse_root=pathlib.Path(value) if value else None
  if reuse_root and (reuse_root/"run_metadata.json").exists():
   payload[f"reuse_{key}_run_metadata_sha256"]=hashlib.sha256((reuse_root/"run_metadata.json").read_bytes()).hexdigest()
@@ -78,11 +81,11 @@ print(hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":")).enc
 PY
 )"
 
-python3 - "$OUTPUT_ROOT/run_metadata.json" "$OUTPUT_ROOT/run_attempts.jsonl" "$EXPERIMENT_FINGERPRINT" "$RUN_TAG" "$SEED" "$DRY_RUN" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$WORKERS" "$SELECTION_POOL_COUNT" "$WILDCHAT_CANDIDATE_TARGET_RECORDS" "$WILDCHAT_SCORING_TARGET_RECORDS" "$MATHDIAL_ANALYSIS_CONVERSATIONS" "$MATHDIAL_ANALYSIS_MAX_INPUT_CHARS" "$MATHDIAL_ANALYSIS_MAX_OUTPUT_TOKENS" "$MAX_SCORING_FALLBACK_RATE" "$MAX_SCORING_INVALID_RATE" "$SCORING_PILOT_RECORDS" "$SCORING_PRESET" "$SCORING_PRESET_VERSION" "$INVALID_OBSERVATION_RETRIES" "$SELECTION_LABEL_METHOD" "$SELECTION_EMISSION_MARGIN" "$MODEL_EMISSION_QUALITY_MARGIN" "$MODEL_MIN_NEGATIVE_OBSERVATIONS" "$REUSE_DATA_RUN_TAG" "$REUSE_BASIS_RUN_TAG" "$REUSE_SCORING_RUN_TAG" "$WARN_SCORING_FALLBACK_RATE" "$FATAL_SCORING_FALLBACK_RATE" "$SCORING_REPAIR_WORKERS" "$SCORING_REPAIR_ROUNDS" <<'PY'
+python3 - "$OUTPUT_ROOT/run_metadata.json" "$OUTPUT_ROOT/run_attempts.jsonl" "$EXPERIMENT_FINGERPRINT" "$RUN_TAG" "$SEED" "$DRY_RUN" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$WORKERS" "$SELECTION_POOL_COUNT" "$WILDCHAT_CANDIDATE_TARGET_RECORDS" "$WILDCHAT_SCORING_TARGET_RECORDS" "$MATHDIAL_ANALYSIS_CONVERSATIONS" "$MATHDIAL_ANALYSIS_MAX_INPUT_CHARS" "$MATHDIAL_ANALYSIS_MAX_OUTPUT_TOKENS" "$MAX_SCORING_FALLBACK_RATE" "$MAX_SCORING_INVALID_RATE" "$SCORING_PILOT_RECORDS" "$SCORING_PRESET" "$SCORING_PRESET_VERSION" "$INVALID_OBSERVATION_RETRIES" "$SELECTION_LABEL_METHOD" "$SELECTION_EMISSION_MARGIN" "$MODEL_EMISSION_QUALITY_MARGIN" "$MODEL_MIN_NEGATIVE_OBSERVATIONS" "$REUSE_DATA_RUN_TAG" "$REUSE_BASIS_RUN_TAG" "$REUSE_SCORING_RUN_TAG" "$WARN_SCORING_FALLBACK_RATE" "$FATAL_SCORING_FALLBACK_RATE" "$SCORING_REPAIR_WORKERS" "$SCORING_REPAIR_ROUNDS" "$ADAPTIVE_SCORING" "$SCORING_BATCH_RECORDS" "$WILDCHAT_FULL_SCAN" <<'PY'
 import datetime,hashlib,json,pathlib,sys
 path=pathlib.Path(sys.argv[1]); attempts=pathlib.Path(sys.argv[2]); fingerprint=sys.argv[3]
-configs=["configs/datasets/mathdial.yaml","configs/datasets/wildchat_tutoring.yaml","configs/evaluations/mathdial_oracle_v1.yaml","configs/training/mathdial_dpo.yaml","tools/mathdial_dataset.py","tools/prepare_mathdial.py","tools/prepare_mathdial_for_analysis.py","tools/analyze_mathdial_corpus_transition_bayes.py","tools/score_dialogue_with_transition_bayes_model.py","tools/translate_and_generate_dpo.py","tools/extract_high_posterior_dialogues.py","tools/mathdial_selection.py","tools/validate_mathdial_scoring_pilot.py","tools/validate_scoring_fallbacks.py","tools/reuse_mathdial_pipeline_data.py","tools/reuse_transition_scoring.py","scripts/run_mathdial_wildchat_pipeline.sh"]
-payload={"experiment_fingerprint":fingerprint,"run_tag":sys.argv[4],"seed":int(sys.argv[5]),"dry_run":sys.argv[6]=="1","models":{"analysis":sys.argv[7],"scoring":sys.argv[8],"generation":sys.argv[9],"judge":sys.argv[10],"local":sys.argv[11]},"early_stop":{"selection_pool_records":int(sys.argv[13]),"wildchat_candidate_records":int(sys.argv[14]),"wildchat_scoring_records":int(sys.argv[15]),"scoring_pilot_records":int(sys.argv[21])},"basis_analysis":{"conversations":int(sys.argv[16]),"max_input_chars":int(sys.argv[17]),"max_output_tokens":int(sys.argv[18])},"scoring":{"preset":sys.argv[22],"preset_version":sys.argv[23],"invalid_observation_retries":int(sys.argv[24]),"repair_workers":int(sys.argv[34]),"repair_rounds":int(sys.argv[35])},"selection":{"label_derivation_method":sys.argv[25],"emission_margin":float(sys.argv[26])},"quality_gates":{"pilot_max_fallback_rate":float(sys.argv[19]),"max_scoring_invalid_rate":float(sys.argv[20]),"full_warning_fallback_rate":float(sys.argv[32]),"full_fatal_fallback_rate":float(sys.argv[33]),"model_emission_margin":float(sys.argv[27]),"minimum_negative_observations":int(sys.argv[28])},"reuse_data_run_tag":sys.argv[29],"reuse_basis_run_tag":sys.argv[30],"reuse_scoring_run_tag":sys.argv[31],"configs":{name:hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest() for name in configs}}
+configs=["configs/datasets/mathdial.yaml","configs/datasets/wildchat_tutoring.yaml","configs/evaluations/mathdial_oracle_v1.yaml","configs/training/mathdial_dpo.yaml","tools/mathdial_dataset.py","tools/prepare_mathdial.py","tools/prepare_mathdial_for_analysis.py","tools/analyze_mathdial_corpus_transition_bayes.py","tools/score_dialogue_with_transition_bayes_model.py","tools/prioritize_tutoring_candidates.py","tools/measure_basis_selection_pool.py","tools/translate_and_generate_dpo.py","tools/extract_high_posterior_dialogues.py","tools/mathdial_selection.py","tools/validate_mathdial_scoring_pilot.py","tools/validate_scoring_fallbacks.py","tools/reuse_mathdial_pipeline_data.py","tools/reuse_transition_scoring.py","scripts/run_mathdial_wildchat_pipeline.sh"]
+payload={"experiment_fingerprint":fingerprint,"run_tag":sys.argv[4],"seed":int(sys.argv[5]),"dry_run":sys.argv[6]=="1","models":{"analysis":sys.argv[7],"scoring":sys.argv[8],"generation":sys.argv[9],"judge":sys.argv[10],"local":sys.argv[11]},"early_stop":{"selection_pool_records":int(sys.argv[13]),"initial_wildchat_candidate_records":int(sys.argv[14]),"legacy_wildchat_scoring_records":int(sys.argv[15]),"scoring_pilot_records":int(sys.argv[21]),"adaptive_scoring":sys.argv[36]=="1","scoring_batch_records":int(sys.argv[37]),"wildchat_full_scan":sys.argv[38]=="1"},"basis_analysis":{"conversations":int(sys.argv[16]),"max_input_chars":int(sys.argv[17]),"max_output_tokens":int(sys.argv[18])},"scoring":{"preset":sys.argv[22],"preset_version":sys.argv[23],"invalid_observation_retries":int(sys.argv[24]),"repair_workers":int(sys.argv[34]),"repair_rounds":int(sys.argv[35])},"selection":{"label_derivation_method":sys.argv[25],"emission_margin":float(sys.argv[26])},"quality_gates":{"pilot_max_fallback_rate":float(sys.argv[19]),"max_scoring_invalid_rate":float(sys.argv[20]),"full_warning_fallback_rate":float(sys.argv[32]),"full_fatal_fallback_rate":float(sys.argv[33]),"model_emission_margin":float(sys.argv[27]),"minimum_negative_observations":int(sys.argv[28])},"reuse_data_run_tag":sys.argv[29],"reuse_basis_run_tag":sys.argv[30],"reuse_scoring_run_tag":sys.argv[31],"configs":{name:hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest() for name in configs}}
 if path.exists():
     current=json.loads(path.read_text())
     if current.get("experiment_fingerprint") != fingerprint:
@@ -267,28 +270,28 @@ build_basis_stage() {
 }
 
 extract_wildchat_stage() {
+  local args=(--config configs/datasets/wildchat_tutoring.yaml --output-dir "$WILD_DIR" --seed "$SEED" --checkpoint-every "$WILDCHAT_CHECKPOINT_EVERY" --heartbeat-file "$HEARTBEAT_FILE")
   if [[ -n "$REUSE_DATA_RUN_TAG" && "$DRY_RUN" != "1" ]]; then
     python3 -m tools.reuse_mathdial_pipeline_data --source-root "$REUSE_DATA_ROOT" --target-root "$OUTPUT_ROOT" --mode wildchat --seed "$SEED" --project-root "$PROJECT_ROOT"
-    local reused_candidates
-    reused_candidates="$(wc -l < "$WILD_DIR/general_tutoring_candidates.jsonl")"
-    if [[ "$reused_candidates" -lt "$WILDCHAT_CANDIDATE_TARGET_RECORDS" ]]; then
-      echo "[extract_wildchat] extending reused candidates ${reused_candidates} -> ${WILDCHAT_CANDIDATE_TARGET_RECORDS}"
-      python3 -m tools.wildchat_tutoring --config configs/datasets/wildchat_tutoring.yaml --output-dir "$WILD_DIR" --seed "$SEED" --target-candidate-records "$WILDCHAT_CANDIDATE_TARGET_RECORDS" --checkpoint-every "$WILDCHAT_CHECKPOINT_EVERY" --heartbeat-file "$HEARTBEAT_FILE"
-    fi
-  else
-  local args=(--config configs/datasets/wildchat_tutoring.yaml --output-dir "$WILD_DIR" --seed "$SEED" --target-candidate-records "$WILDCHAT_CANDIDATE_TARGET_RECORDS" --checkpoint-every "$WILDCHAT_CHECKPOINT_EVERY" --heartbeat-file "$HEARTBEAT_FILE")
-  if [[ "$DRY_RUN" == "1" ]]; then args+=(--fixture tests/fixtures/wildchat_tutoring.jsonl); else [[ -n "$LIMIT" ]] && args+=(--limit "$LIMIT"); fi
-  python3 -m tools.wildchat_tutoring "${args[@]}"
   fi
+  if [[ "$WILDCHAT_FULL_SCAN" != "1" ]]; then
+    args+=(--target-candidate-records "$WILDCHAT_CANDIDATE_TARGET_RECORDS")
+  fi
+  if [[ "$DRY_RUN" == "1" ]]; then
+    args+=(--fixture tests/fixtures/wildchat_tutoring.jsonl)
+  else
+    [[ -n "$LIMIT" ]] && args+=(--limit "$LIMIT")
+  fi
+  python3 -m tools.wildchat_tutoring "${args[@]}"
   if [[ "$DRY_RUN" != "1" ]]; then
-    if ! python3 - "$WILD_DIR/general_tutoring_candidates.jsonl" "$WILDCHAT_CANDIDATE_TARGET_RECORDS" <<'PY'
+    if ! python3 - "$WILD_DIR/general_tutoring_candidates.jsonl" "$SELECTION_POOL_COUNT" <<'PY'
 import pathlib, sys
 path = pathlib.Path(sys.argv[1])
 actual = sum(1 for line in path.open(encoding="utf-8") if line.strip())
 required = int(sys.argv[2])
-print(f"[extract_wildchat] scoring pool coverage={actual}/{required}")
+print(f"[extract_wildchat] coarse candidate coverage={actual}/{required}")
 if actual < required:
-    raise SystemExit(f"WildChat候補がスコアリング目標に不足しています: {actual}/{required}")
+    raise SystemExit(f"WildChat粗候補が選別目標未満です: {actual}/{required}")
 PY
     then
       return 20
@@ -299,43 +302,59 @@ PY
 score_wildchat_stage() {
   mkdir -p "$(dirname "$SCORED")"
   local pilot_records="$SCORING_PILOT_RECORDS"
+  local prioritized="$OUTPUT_ROOT/scoring/prioritized_candidates.jsonl"
+  local priority_report="$OUTPUT_ROOT/scoring/candidate_priority_report.json"
+  local pool_report="$OUTPUT_ROOT/scoring/selection_pool_progress.json"
+  local pool_history="$OUTPUT_ROOT/scoring/selection_pool_history.jsonl"
   if [[ "$DRY_RUN" == "1" ]]; then
     python3 -m tools.mathdial_pipeline_support mock-score --input "$WILD_DIR/general_tutoring_candidates.jsonl" --output "$SCORED_RAW" --bayes-model "$COMPAT_MODEL"
     pilot_records=6
-  elif [[ -n "$REUSE_SCORING_RUN_TAG" && ! -f "$SCORED_RAW" ]]; then
-    python3 -m tools.reuse_transition_scoring --source-root "$REUSE_SCORING_ROOT" --target-root "$OUTPUT_ROOT"
   else
-    retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$WILD_DIR/general_tutoring_candidates.jsonl" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-records "$pilot_records" --include-crossing-conversation --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --fallback-on-errors
+    python3 -m tools.prioritize_tutoring_candidates --input "$WILD_DIR/general_tutoring_candidates.jsonl" --output "$prioritized" --report "$priority_report" --seed "$SEED"
+    if [[ -n "$REUSE_SCORING_RUN_TAG" && ! -f "$SCORED_RAW" ]]; then
+      python3 -m tools.reuse_transition_scoring --source-root "$REUSE_SCORING_ROOT" --target-root "$OUTPUT_ROOT"
+    elif [[ ! -f "$SCORED_RAW" ]]; then
+      retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-records "$pilot_records" --include-crossing-conversation --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --fallback-on-errors
+    fi
   fi
-  if [[ -z "$REUSE_SCORING_RUN_TAG" || "$DRY_RUN" == "1" ]]; then
+  if [[ "$DRY_RUN" == "1" || ! -f "$OUTPUT_ROOT/scoring/pilot_diagnostics.json" ]]; then
     python3 -m tools.validate_mathdial_scoring_pilot --input "$SCORED_RAW" --bayes-model "$COMPAT_MODEL" --output "$OUTPUT_ROOT/scoring/pilot_diagnostics.json" --required-records "$pilot_records" --max-fallback-rate "$MAX_SCORING_FALLBACK_RATE" --max-invalid-rate "$MAX_SCORING_INVALID_RATE" --min-observations 2 || return 20
   fi
-  if [[ "$DRY_RUN" != "1" ]]; then
-    retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$WILD_DIR/general_tutoring_candidates.jsonl" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-records "$WILDCHAT_SCORING_TARGET_RECORDS" --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --fallback-on-errors
+  if [[ "$DRY_RUN" == "1" ]]; then
+    python3 -m tools.mathdial_pipeline_support enrich-score --input "$SCORED_RAW" --output "$SCORED"
+    return 0
   fi
-  if [[ "$DRY_RUN" != "1" ]]; then
-    local repair_round
-    for ((repair_round=1; repair_round<=SCORING_REPAIR_ROUNDS; repair_round++)); do
-      echo "[score_wildchat] retryable fallback repair round=${repair_round}/${SCORING_REPAIR_ROUNDS} workers=${SCORING_REPAIR_WORKERS}"
-      retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$WILD_DIR/general_tutoring_candidates.jsonl" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$SCORING_REPAIR_WORKERS" --max-records "$WILDCHAT_SCORING_TARGET_RECORDS" --repair-retryable-fallbacks --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --fallback-on-errors
+  if [[ "$ADAPTIVE_SCORING" == "1" ]]; then
+    local repaired=0 before_count after_count sufficient repair_round
+    while true; do
+      python3 -m tools.mathdial_pipeline_support enrich-score --input "$SCORED_RAW" --output "$SCORED"
+      python3 -m tools.measure_basis_selection_pool --input "$SCORED" --bayes-model "$COMPAT_MODEL" --output "$pool_report" --history "$pool_history" --method "$SELECTION_LABEL_METHOD" --margin "$SELECTION_EMISSION_MARGIN" --required "$SELECTION_POOL_COUNT"
+      sufficient="$(python3 -c 'import json,sys; print("1" if json.load(open(sys.argv[1]))["sufficient"] else "0")' "$pool_report")"
+      if [[ "$sufficient" == "1" && "$repaired" == "1" ]]; then
+        break
+      fi
+      if [[ "$sufficient" == "1" ]]; then
+        for ((repair_round=1; repair_round<=SCORING_REPAIR_ROUNDS; repair_round++)); do
+          echo "[score_wildchat] retryable fallback repair round=${repair_round}/${SCORING_REPAIR_ROUNDS} workers=${SCORING_REPAIR_WORKERS}"
+          retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$SCORING_REPAIR_WORKERS" --repair-retryable-fallbacks --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --fallback-on-errors
+        done
+        repaired=1
+        continue
+      fi
+      before_count="$(wc -l < "$SCORED_RAW")"
+      retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-new-records "$SCORING_BATCH_RECORDS" --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --fallback-on-errors
+      after_count="$(wc -l < "$SCORED_RAW")"
+      if [[ "$after_count" -le "$before_count" ]]; then
+        echo "WildChat全粗候補をscoringしても選別候補が不足しています。" >&2
+        return 20
+      fi
+      repaired=0
     done
+  else
+    retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-records "$WILDCHAT_SCORING_TARGET_RECORDS" --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --fallback-on-errors
+    python3 -m tools.mathdial_pipeline_support enrich-score --input "$SCORED_RAW" --output "$SCORED"
   fi
-  python3 -m tools.mathdial_pipeline_support enrich-score --input "$SCORED_RAW" --output "$SCORED"
-  if [[ "$DRY_RUN" != "1" ]]; then
-    if ! python3 - "$SCORED" "$SELECTION_POOL_COUNT" <<'PY'
-import json,pathlib,sys
-rows=[json.loads(line) for line in pathlib.Path(sys.argv[1]).open(encoding="utf-8") if line.strip()]
-actual=len(rows)
-required = int(sys.argv[2])
-print(f"[score_wildchat] selection pool coverage={actual}/{required}")
-if actual < required:
-    raise SystemExit(f"WildChatスコア済み候補が選別目標に不足しています: {actual}/{required}")
-PY
-    then
-      return 20
-    fi
-    python3 -m tools.validate_scoring_fallbacks --input "$SCORED" --output "$OUTPUT_ROOT/scoring/fallback_diagnostics.json" --warning-rate "$WARN_SCORING_FALLBACK_RATE" --fatal-rate "$FATAL_SCORING_FALLBACK_RATE" || return 20
-  fi
+  python3 -m tools.validate_scoring_fallbacks --input "$SCORED" --output "$OUTPUT_ROOT/scoring/fallback_diagnostics.json" --warning-rate "$WARN_SCORING_FALLBACK_RATE" --fatal-rate "$FATAL_SCORING_FALLBACK_RATE" || return 20
 }
 
 select_data_stage() {

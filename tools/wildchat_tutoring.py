@@ -151,6 +151,9 @@ def extract_candidates(
     """stream row列からgeneral/math候補と走査統計を返す。"""
     general, math = list(initial_general or []), list(initial_math or [])
     counts: Counter[str] = Counter(initial_counts or {})
+    # 前回が件数上限で止まった場合でも、上限なしの再開では残りを正しく走査する。
+    counts["stopped_by_candidate_target"] = 0
+    counts["stopped_by_row_limit"] = 0
     exact_seen: set[str] = {
         str(row.get("metadata", {}).get("conversation_hash", "")) for row in general
     }
@@ -159,6 +162,7 @@ def extract_candidates(
         near.is_duplicate(tokenize(" ".join(turn["text"] for turn in existing["turns"])))
     if target_candidate_records is not None and counts["general_candidate_records"] >= target_candidate_records:
         counts["stopped_by_candidate_target"] = 1
+        counts["stream_exhausted"] = 0
         return general, math, dict(counts)
     for row in rows:
         if (
@@ -225,8 +229,10 @@ def extract_candidates(
     counts["math_candidates"] = len(math)
     counts["available_assistant_responses"] = sum(len(build_assistant_samples(row)) for row in general)
     counts["target_candidate_records"] = target_candidate_records or 0
-    counts.setdefault("stopped_by_candidate_target", 0)
-    counts.setdefault("stopped_by_row_limit", 0)
+    counts["stream_exhausted"] = int(
+        not counts["stopped_by_candidate_target"]
+        and not counts["stopped_by_row_limit"]
+    )
     if on_checkpoint:
         on_checkpoint(general, math, dict(counts), True)
     return general, math, dict(counts)
