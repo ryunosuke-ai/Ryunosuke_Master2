@@ -250,6 +250,12 @@ PYTHONUNBUFFERED=1 \
 この経路はraw scoring 20,000件を照合して再利用する。既存WildChat checkpointから残りを全走査し、粗候補をuser側の指導機会でグローバルに並べる。
 以降は20,000件ずつ追加評価し、選別可能候補5,000件へ達した時点で自動停止する。429・timeoutを含む会話は低並列で再評価する。selectionとDPOは再利用しない。
 
+実行途中の同じrunで、保存済みscoringを維持したまま判定batchだけを3,000件へ縮小する場合は、
+`scripts/resume_mathdial_scoring_small_batches.sh`をwatchdogのpipelineとして指定する。
+元runのfingerprintは変更せず、変更理由、開始件数、batch幅を
+`scoring/scoring_configuration_amendments.jsonl`へ保存する。目標到達後は元のfingerprint条件で
+`select_data`から再開する。
+
 単一stageの明示再実行:
 
 ```bash
