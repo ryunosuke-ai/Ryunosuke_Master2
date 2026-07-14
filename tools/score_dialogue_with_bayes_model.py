@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.generated_bayes_model import BayesModel, ObservationScore, load_bayes_model, score_observation
+from core.adaptive_request_pacer import AdaptiveRequestPacer
 
 
 DEFAULT_INPUT_PATH = "data/large_dialogue.jsonl"
@@ -267,10 +268,36 @@ def parse_observation_score(payload: dict[str, Any], model: BayesModel) -> Obser
     return ObservationScore(observation=observation, score=score, reason=reason)
 
 
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """OpenAI SDKの429例外をversion差を許容して判定する。"""
+    status_code = getattr(exc, "status_code", None)
+    return status_code == 429 or type(exc).__name__ == "RateLimitError"
+
+
+def _retry_after_seconds(exc: Exception) -> float | None:
+    """429レスポンスのretry-after系headerを秒へ変換する。"""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", {}) or {}
+    for name, divisor in (("retry-after-ms", 1000.0), ("retry-after", 1.0)):
+        value = headers.get(name)
+        if value is None:
+            continue
+        try:
+            return max(0.0, float(value) / divisor)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 class OpenAIResponsesGenerator:
     """OpenAIまたはAzure OpenAI Responses APIを呼び出す生成器。"""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        request_pacer: AdaptiveRequestPacer | None = None,
+        rate_limit_max_retries: int = 2,
+    ) -> None:
         try:
             from openai import AzureOpenAI, OpenAI
         except ImportError as exc:
@@ -278,6 +305,8 @@ class OpenAIResponsesGenerator:
         load_env_file()
         self.azure_client_class = AzureOpenAI
         self.openai_client_class = OpenAI
+        self.request_pacer = request_pacer
+        self.rate_limit_max_retries = max(0, rate_limit_max_retries)
 
     def generate(
         self,
@@ -292,16 +321,18 @@ class OpenAIResponsesGenerator:
         azure_endpoint = resolve_scoring_azure_endpoint(model)
         azure_api_key = resolve_scoring_azure_api_key(model)
         azure_api_version = resolve_scoring_azure_api_version(model)
+        coordinated_retry = bool(self.request_pacer and self.request_pacer.enabled)
+        sdk_retries = 0 if coordinated_retry else 2
         if azure_endpoint and azure_api_key:
             client = self.azure_client_class(
                 api_key=azure_api_key,
                 azure_endpoint=azure_endpoint,
                 api_version=azure_api_version,
-                max_retries=2,
+                max_retries=sdk_retries,
             )
         else:
             client = self.openai_client_class(
-                api_key=read_env_value("OPENAI_API_KEY"), max_retries=2
+                api_key=read_env_value("OPENAI_API_KEY"), max_retries=sdk_retries
             )
         create_kwargs: dict[str, Any] = {
             "model": model,
@@ -312,8 +343,33 @@ class OpenAIResponsesGenerator:
         }
         if response_text_format:
             create_kwargs["text"] = {"format": response_text_format}
-        response = client.responses.create(**create_kwargs)
-        return extract_response_text(response)
+        for attempt in range(self.rate_limit_max_retries + 1):
+            if self.request_pacer:
+                self.request_pacer.wait()
+            try:
+                response = client.responses.create(**create_kwargs)
+            except Exception as exc:
+                if (
+                    not coordinated_retry
+                    or not _is_rate_limit_error(exc)
+                    or attempt >= self.rate_limit_max_retries
+                ):
+                    raise
+                delay = self.request_pacer.record_rate_limit(
+                    _retry_after_seconds(exc)
+                )
+                print(
+                    "[rate-limit] 429を検出したため全workerを調整します: "
+                    f"retry={attempt + 1}/{self.rate_limit_max_retries} "
+                    f"cooldown={delay:.1f}s "
+                    f"interval={self.request_pacer.current_interval:.2f}s",
+                    flush=True,
+                )
+                continue
+            if self.request_pacer:
+                self.request_pacer.record_success()
+            return extract_response_text(response)
+        raise RuntimeError("RateLimit retry loopが予期せず終了しました。")
 
 
 def build_json_mode_input(input_text: str) -> str:

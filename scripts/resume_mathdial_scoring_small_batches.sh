@@ -19,6 +19,12 @@ SELECTION_POOL_COUNT="${SELECTION_POOL_COUNT:-5000}"
 WORKERS="${WORKERS:-4}"
 SCORING_REPAIR_WORKERS="${SCORING_REPAIR_WORKERS:-4}"
 SCORING_REPAIR_ROUNDS="${SCORING_REPAIR_ROUNDS:-2}"
+SCORING_REQUESTS_PER_MINUTE="${SCORING_REQUESTS_PER_MINUTE:-120}"
+SCORING_REPAIR_REQUESTS_PER_MINUTE="${SCORING_REPAIR_REQUESTS_PER_MINUTE:-90}"
+SCORING_RATE_LIMIT_MAX_RETRIES="${SCORING_RATE_LIMIT_MAX_RETRIES:-6}"
+SCORING_RATE_LIMIT_BACKOFF_SECONDS="${SCORING_RATE_LIMIT_BACKOFF_SECONDS:-15}"
+export SCORING_REQUESTS_PER_MINUTE SCORING_REPAIR_REQUESTS_PER_MINUTE
+export SCORING_RATE_LIMIT_MAX_RETRIES SCORING_RATE_LIMIT_BACKOFF_SECONDS
 SCORING_MODEL="${MATHDIAL_SCORING_LLM_MODEL:-${AZURE_OPENAI_GPT56_TERRA_DEPLOYMENT:-gpt-5.6-terra}}"
 SCORING_PRESET="${SCORING_PRESET:-mathdial_tutoring}"
 INVALID_OBSERVATION_RETRIES="${INVALID_OBSERVATION_RETRIES:-2}"
@@ -58,6 +64,7 @@ python3 - "$OUTPUT_ROOT/run_metadata.json" "$RUN_TAG" "$SCORING_MODEL" \
   "$SELECTION_POOL_COUNT" "$RAW" "$AMENDMENTS" <<'PY'
 import datetime
 import json
+import os
 import pathlib
 import sys
 
@@ -89,6 +96,12 @@ payload = {
     "starting_scored_records": records,
     "models": metadata.get("models", {}),
     "scoring": metadata.get("scoring", {}),
+    "runtime_rate_limit": {
+        "scoring_requests_per_minute": float(os.environ["SCORING_REQUESTS_PER_MINUTE"]),
+        "repair_requests_per_minute": float(os.environ["SCORING_REPAIR_REQUESTS_PER_MINUTE"]),
+        "max_retries": int(os.environ["SCORING_RATE_LIMIT_MAX_RETRIES"]),
+        "initial_backoff_seconds": float(os.environ["SCORING_RATE_LIMIT_BACKOFF_SECONDS"]),
+    },
     "selection": metadata.get("selection", {}),
 }
 amendments = pathlib.Path(sys.argv[9])
@@ -157,6 +170,9 @@ while true; do
         --repair-retryable-fallbacks \
         --scoring-preset "$SCORING_PRESET" \
         --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" \
+        --requests-per-minute "$SCORING_REPAIR_REQUESTS_PER_MINUTE" \
+        --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" \
+        --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" \
         --fallback-on-errors
     done
     repaired=1
@@ -172,6 +188,9 @@ while true; do
     --max-new-records "$SCORING_BATCH_RECORDS" \
     --scoring-preset "$SCORING_PRESET" \
     --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" \
+    --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" \
+    --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" \
+    --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" \
     --fallback-on-errors
   after="$(wc -l < "$RAW")"
   if [[ "$after" -le "$before" ]]; then

@@ -10,6 +10,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+from core.adaptive_request_pacer import AdaptiveRequestPacer
+
 from core.transition_bayes_model import (
     TransitionBayesModel,
     TransitionObservationScore,
@@ -117,6 +119,30 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="未知ラベル・JSON不正時に許可観測だけで再判定する回数。legacyの既定は0です。",
+    )
+    parser.add_argument(
+        "--requests-per-minute",
+        type=float,
+        default=0.0,
+        help="全worker合計のAPI開始数上限。0は従来互換で制限しません。",
+    )
+    parser.add_argument(
+        "--min-request-interval-seconds",
+        type=float,
+        default=0.0,
+        help="全workerで共有する最小API開始間隔。0はRPM設定から算出します。",
+    )
+    parser.add_argument(
+        "--rate-limit-max-retries",
+        type=int,
+        default=6,
+        help="共有cooldownを使った429再試行回数。ペーサー無効時はSDK既定を使います。",
+    )
+    parser.add_argument(
+        "--rate-limit-initial-backoff-seconds",
+        type=float,
+        default=15.0,
+        help="429応答に待機headerがない場合の全worker共通待機秒数。",
     )
     parser.add_argument("--audit-log", default=DEFAULT_AUDIT_LOG_PATH, help="重要操作の要約を追記するaudit_log.mdのパス。")
     parser.add_argument("--dry-run", action="store_true", help="APIを呼ばず、入力件数だけ確認します。")
@@ -946,10 +972,26 @@ def main() -> int:
             for row in records
             if str(row.get("conversation_id")) in repair_conversations
         ]
+    request_pacer = AdaptiveRequestPacer(
+        requests_per_minute=max(0.0, args.requests_per_minute),
+        minimum_interval_seconds=max(0.0, args.min_request_interval_seconds),
+        initial_backoff_seconds=max(0.0, args.rate_limit_initial_backoff_seconds),
+    )
+    if request_pacer.enabled:
+        print(
+            "[rate-limit] shared pacing enabled: "
+            f"requests_per_minute={args.requests_per_minute:g} "
+            f"minimum_interval={request_pacer.base_interval:.2f}s "
+            f"max_retries={max(0, args.rate_limit_max_retries)}",
+            flush=True,
+        )
     scored = score_records(
         records,
         bayes_model=bayes_model,
-        generator=OpenAIResponsesGenerator(),
+        generator=OpenAIResponsesGenerator(
+            request_pacer=request_pacer,
+            rate_limit_max_retries=max(0, args.rate_limit_max_retries),
+        ),
         model=args.model,
         max_output_tokens=args.max_output_tokens,
         progress_label=f"[STEP] scoring {args.model}",

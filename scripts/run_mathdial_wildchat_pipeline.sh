@@ -31,6 +31,12 @@ WARN_SCORING_FALLBACK_RATE="${WARN_SCORING_FALLBACK_RATE:-0.01}"
 FATAL_SCORING_FALLBACK_RATE="${FATAL_SCORING_FALLBACK_RATE:-0.05}"
 SCORING_REPAIR_WORKERS="${SCORING_REPAIR_WORKERS:-4}"
 SCORING_REPAIR_ROUNDS="${SCORING_REPAIR_ROUNDS:-2}"
+SCORING_REQUESTS_PER_MINUTE="${SCORING_REQUESTS_PER_MINUTE:-120}"
+SCORING_REPAIR_REQUESTS_PER_MINUTE="${SCORING_REPAIR_REQUESTS_PER_MINUTE:-90}"
+SCORING_RATE_LIMIT_MAX_RETRIES="${SCORING_RATE_LIMIT_MAX_RETRIES:-6}"
+SCORING_RATE_LIMIT_BACKOFF_SECONDS="${SCORING_RATE_LIMIT_BACKOFF_SECONDS:-15}"
+export SCORING_REQUESTS_PER_MINUTE SCORING_REPAIR_REQUESTS_PER_MINUTE
+export SCORING_RATE_LIMIT_MAX_RETRIES SCORING_RATE_LIMIT_BACKOFF_SECONDS
 ADAPTIVE_SCORING="${ADAPTIVE_SCORING:-1}"
 SCORING_BATCH_RECORDS="${SCORING_BATCH_RECORDS:-20000}"
 WILDCHAT_FULL_SCAN="${WILDCHAT_FULL_SCAN:-1}"
@@ -82,7 +88,7 @@ PY
 )"
 
 python3 - "$OUTPUT_ROOT/run_metadata.json" "$OUTPUT_ROOT/run_attempts.jsonl" "$EXPERIMENT_FINGERPRINT" "$RUN_TAG" "$SEED" "$DRY_RUN" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$WORKERS" "$SELECTION_POOL_COUNT" "$WILDCHAT_CANDIDATE_TARGET_RECORDS" "$WILDCHAT_SCORING_TARGET_RECORDS" "$MATHDIAL_ANALYSIS_CONVERSATIONS" "$MATHDIAL_ANALYSIS_MAX_INPUT_CHARS" "$MATHDIAL_ANALYSIS_MAX_OUTPUT_TOKENS" "$MAX_SCORING_FALLBACK_RATE" "$MAX_SCORING_INVALID_RATE" "$SCORING_PILOT_RECORDS" "$SCORING_PRESET" "$SCORING_PRESET_VERSION" "$INVALID_OBSERVATION_RETRIES" "$SELECTION_LABEL_METHOD" "$SELECTION_EMISSION_MARGIN" "$MODEL_EMISSION_QUALITY_MARGIN" "$MODEL_MIN_NEGATIVE_OBSERVATIONS" "$REUSE_DATA_RUN_TAG" "$REUSE_BASIS_RUN_TAG" "$REUSE_SCORING_RUN_TAG" "$WARN_SCORING_FALLBACK_RATE" "$FATAL_SCORING_FALLBACK_RATE" "$SCORING_REPAIR_WORKERS" "$SCORING_REPAIR_ROUNDS" "$ADAPTIVE_SCORING" "$SCORING_BATCH_RECORDS" "$WILDCHAT_FULL_SCAN" <<'PY'
-import datetime,hashlib,json,pathlib,sys
+import datetime,hashlib,json,os,pathlib,sys
 path=pathlib.Path(sys.argv[1]); attempts=pathlib.Path(sys.argv[2]); fingerprint=sys.argv[3]
 configs=["configs/datasets/mathdial.yaml","configs/datasets/wildchat_tutoring.yaml","configs/evaluations/mathdial_oracle_v1.yaml","configs/training/mathdial_dpo.yaml","tools/mathdial_dataset.py","tools/prepare_mathdial.py","tools/prepare_mathdial_for_analysis.py","tools/analyze_mathdial_corpus_transition_bayes.py","tools/score_dialogue_with_transition_bayes_model.py","tools/prioritize_tutoring_candidates.py","tools/measure_basis_selection_pool.py","tools/translate_and_generate_dpo.py","tools/extract_high_posterior_dialogues.py","tools/mathdial_selection.py","tools/validate_mathdial_scoring_pilot.py","tools/validate_scoring_fallbacks.py","tools/reuse_mathdial_pipeline_data.py","tools/reuse_transition_scoring.py","scripts/run_mathdial_wildchat_pipeline.sh"]
 payload={"experiment_fingerprint":fingerprint,"run_tag":sys.argv[4],"seed":int(sys.argv[5]),"dry_run":sys.argv[6]=="1","models":{"analysis":sys.argv[7],"scoring":sys.argv[8],"generation":sys.argv[9],"judge":sys.argv[10],"local":sys.argv[11]},"early_stop":{"selection_pool_records":int(sys.argv[13]),"initial_wildchat_candidate_records":int(sys.argv[14]),"legacy_wildchat_scoring_records":int(sys.argv[15]),"scoring_pilot_records":int(sys.argv[21]),"adaptive_scoring":sys.argv[36]=="1","scoring_batch_records":int(sys.argv[37]),"wildchat_full_scan":sys.argv[38]=="1"},"basis_analysis":{"conversations":int(sys.argv[16]),"max_input_chars":int(sys.argv[17]),"max_output_tokens":int(sys.argv[18])},"scoring":{"preset":sys.argv[22],"preset_version":sys.argv[23],"invalid_observation_retries":int(sys.argv[24]),"repair_workers":int(sys.argv[34]),"repair_rounds":int(sys.argv[35])},"selection":{"label_derivation_method":sys.argv[25],"emission_margin":float(sys.argv[26])},"quality_gates":{"pilot_max_fallback_rate":float(sys.argv[19]),"max_scoring_invalid_rate":float(sys.argv[20]),"full_warning_fallback_rate":float(sys.argv[32]),"full_fatal_fallback_rate":float(sys.argv[33]),"model_emission_margin":float(sys.argv[27]),"minimum_negative_observations":int(sys.argv[28])},"reuse_data_run_tag":sys.argv[29],"reuse_basis_run_tag":sys.argv[30],"reuse_scoring_run_tag":sys.argv[31],"configs":{name:hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest() for name in configs}}
@@ -92,7 +98,7 @@ if path.exists():
         raise SystemExit("同じRUN_TAGの実験条件が変わっています。新しいRUN_TAGを使うか、既存runを明示的に退避してください。")
 else:
     path.parent.mkdir(parents=True,exist_ok=True); path.write_text(json.dumps(payload,ensure_ascii=False,indent=2)+"\n")
-attempt={"timestamp":datetime.datetime.now(datetime.timezone.utc).isoformat(),"experiment_fingerprint":fingerprint,"workers":int(sys.argv[12])}
+attempt={"timestamp":datetime.datetime.now(datetime.timezone.utc).isoformat(),"experiment_fingerprint":fingerprint,"workers":int(sys.argv[12]),"runtime_rate_limit":{"scoring_requests_per_minute":float(os.environ["SCORING_REQUESTS_PER_MINUTE"]),"repair_requests_per_minute":float(os.environ["SCORING_REPAIR_REQUESTS_PER_MINUTE"]),"max_retries":int(os.environ["SCORING_RATE_LIMIT_MAX_RETRIES"]),"initial_backoff_seconds":float(os.environ["SCORING_RATE_LIMIT_BACKOFF_SECONDS"])}}
 with attempts.open("a",encoding="utf-8") as f: f.write(json.dumps(attempt,ensure_ascii=False)+"\n")
 PY
 
@@ -314,7 +320,7 @@ score_wildchat_stage() {
     if [[ -n "$REUSE_SCORING_RUN_TAG" && ! -f "$SCORED_RAW" ]]; then
       python3 -m tools.reuse_transition_scoring --source-root "$REUSE_SCORING_ROOT" --target-root "$OUTPUT_ROOT"
     elif [[ ! -f "$SCORED_RAW" ]]; then
-      retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-records "$pilot_records" --include-crossing-conversation --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --fallback-on-errors
+      retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-records "$pilot_records" --include-crossing-conversation --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" --fallback-on-errors
     fi
   fi
   if [[ "$DRY_RUN" == "1" || ! -f "$OUTPUT_ROOT/scoring/pilot_diagnostics.json" ]]; then
@@ -336,13 +342,13 @@ score_wildchat_stage() {
       if [[ "$sufficient" == "1" ]]; then
         for ((repair_round=1; repair_round<=SCORING_REPAIR_ROUNDS; repair_round++)); do
           echo "[score_wildchat] retryable fallback repair round=${repair_round}/${SCORING_REPAIR_ROUNDS} workers=${SCORING_REPAIR_WORKERS}"
-          retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$SCORING_REPAIR_WORKERS" --repair-retryable-fallbacks --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --fallback-on-errors
+          retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$SCORING_REPAIR_WORKERS" --repair-retryable-fallbacks --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --requests-per-minute "$SCORING_REPAIR_REQUESTS_PER_MINUTE" --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" --fallback-on-errors
         done
         repaired=1
         continue
       fi
       before_count="$(wc -l < "$SCORED_RAW")"
-      retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-new-records "$SCORING_BATCH_RECORDS" --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --fallback-on-errors
+      retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-new-records "$SCORING_BATCH_RECORDS" --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" --fallback-on-errors
       after_count="$(wc -l < "$SCORED_RAW")"
       if [[ "$after_count" -le "$before_count" ]]; then
         echo "WildChat全粗候補をscoringしても選別候補が不足しています。" >&2
@@ -351,7 +357,7 @@ score_wildchat_stage() {
       repaired=0
     done
   else
-    retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-records "$WILDCHAT_SCORING_TARGET_RECORDS" --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --fallback-on-errors
+    retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-records "$WILDCHAT_SCORING_TARGET_RECORDS" --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" --fallback-on-errors
     python3 -m tools.mathdial_pipeline_support enrich-score --input "$SCORED_RAW" --output "$SCORED"
   fi
   python3 -m tools.validate_scoring_fallbacks --input "$SCORED" --output "$OUTPUT_ROOT/scoring/fallback_diagnostics.json" --warning-rate "$WARN_SCORING_FALLBACK_RATE" --fatal-rate "$FATAL_SCORING_FALLBACK_RATE" || return 20
