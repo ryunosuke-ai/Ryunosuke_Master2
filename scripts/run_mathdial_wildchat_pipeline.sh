@@ -87,6 +87,30 @@ print(hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":")).enc
 PY
 )"
 
+if [[ -n "${OPERATIONAL_FINGERPRINT_OVERRIDE:-}" ]]; then
+  [[ "${ALLOW_CLEAN_FALLBACK_CONTINUATION:-0}" == "1" ]] || {
+    echo "fingerprint overrideにはALLOW_CLEAN_FALLBACK_CONTINUATION=1が必要です。" >&2
+    exit 20
+  }
+  [[ "$START_STAGE" == "select_data" ]] || {
+    echo "clean fallback continuationはselect_dataからのみ開始できます。" >&2
+    exit 20
+  }
+  python3 - "$OUTPUT_ROOT/run_metadata.json" "$OUTPUT_ROOT/stage_state/scoring_small_batch_CONTINUATION_SUCCESS.json" "$OUTPUT_ROOT/scoring/selection_pool_progress.json" "$OPERATIONAL_FINGERPRINT_OVERRIDE" <<'PY'
+import json,pathlib,sys
+metadata,success,report=map(pathlib.Path,sys.argv[1:4])
+for path in (metadata,success,report):
+    if not path.exists():
+        raise SystemExit(f"clean continuationの検証ファイルがありません: {path}")
+if json.loads(metadata.read_text(encoding="utf-8")).get("experiment_fingerprint") != sys.argv[4]:
+    raise SystemExit("指定した元fingerprintがrun metadataと一致しません。")
+pool=json.loads(report.read_text(encoding="utf-8"))
+if not pool.get("sufficient") or not pool.get("exclude_fallback_conversations"):
+    raise SystemExit("clean候補の完了条件を満たしていません。")
+PY
+  EXPERIMENT_FINGERPRINT="$OPERATIONAL_FINGERPRINT_OVERRIDE"
+fi
+
 python3 - "$OUTPUT_ROOT/run_metadata.json" "$OUTPUT_ROOT/run_attempts.jsonl" "$EXPERIMENT_FINGERPRINT" "$RUN_TAG" "$SEED" "$DRY_RUN" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$WORKERS" "$SELECTION_POOL_COUNT" "$WILDCHAT_CANDIDATE_TARGET_RECORDS" "$WILDCHAT_SCORING_TARGET_RECORDS" "$MATHDIAL_ANALYSIS_CONVERSATIONS" "$MATHDIAL_ANALYSIS_MAX_INPUT_CHARS" "$MATHDIAL_ANALYSIS_MAX_OUTPUT_TOKENS" "$MAX_SCORING_FALLBACK_RATE" "$MAX_SCORING_INVALID_RATE" "$SCORING_PILOT_RECORDS" "$SCORING_PRESET" "$SCORING_PRESET_VERSION" "$INVALID_OBSERVATION_RETRIES" "$SELECTION_LABEL_METHOD" "$SELECTION_EMISSION_MARGIN" "$MODEL_EMISSION_QUALITY_MARGIN" "$MODEL_MIN_NEGATIVE_OBSERVATIONS" "$REUSE_DATA_RUN_TAG" "$REUSE_BASIS_RUN_TAG" "$REUSE_SCORING_RUN_TAG" "$WARN_SCORING_FALLBACK_RATE" "$FATAL_SCORING_FALLBACK_RATE" "$SCORING_REPAIR_WORKERS" "$SCORING_REPAIR_ROUNDS" "$ADAPTIVE_SCORING" "$SCORING_BATCH_RECORDS" "$WILDCHAT_FULL_SCAN" <<'PY'
 import datetime,hashlib,json,os,pathlib,sys
 path=pathlib.Path(sys.argv[1]); attempts=pathlib.Path(sys.argv[2]); fingerprint=sys.argv[3]
@@ -331,21 +355,13 @@ score_wildchat_stage() {
     return 0
   fi
   if [[ "$ADAPTIVE_SCORING" == "1" ]]; then
-    local repaired=0 before_count after_count sufficient repair_round
+    local before_count after_count sufficient
     while true; do
       python3 -m tools.mathdial_pipeline_support enrich-score --input "$SCORED_RAW" --output "$SCORED"
-      python3 -m tools.measure_basis_selection_pool --input "$SCORED" --bayes-model "$COMPAT_MODEL" --output "$pool_report" --history "$pool_history" --method "$SELECTION_LABEL_METHOD" --margin "$SELECTION_EMISSION_MARGIN" --required "$SELECTION_POOL_COUNT"
+      python3 -m tools.measure_basis_selection_pool --input "$SCORED" --bayes-model "$COMPAT_MODEL" --output "$pool_report" --history "$pool_history" --method "$SELECTION_LABEL_METHOD" --margin "$SELECTION_EMISSION_MARGIN" --required "$SELECTION_POOL_COUNT" --exclude-fallback-conversations
       sufficient="$(python3 -c 'import json,sys; print("1" if json.load(open(sys.argv[1]))["sufficient"] else "0")' "$pool_report")"
-      if [[ "$sufficient" == "1" && "$repaired" == "1" ]]; then
-        break
-      fi
       if [[ "$sufficient" == "1" ]]; then
-        for ((repair_round=1; repair_round<=SCORING_REPAIR_ROUNDS; repair_round++)); do
-          echo "[score_wildchat] retryable fallback repair round=${repair_round}/${SCORING_REPAIR_ROUNDS} workers=${SCORING_REPAIR_WORKERS}"
-          retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$SCORING_REPAIR_WORKERS" --repair-retryable-fallbacks --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --requests-per-minute "$SCORING_REPAIR_REQUESTS_PER_MINUTE" --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" --fallback-on-errors
-        done
-        repaired=1
-        continue
+        break
       fi
       before_count="$(wc -l < "$SCORED_RAW")"
       retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-new-records "$SCORING_BATCH_RECORDS" --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" --fallback-on-errors
@@ -354,20 +370,19 @@ score_wildchat_stage() {
         echo "WildChat全粗候補をscoringしても選別候補が不足しています。" >&2
         return 20
       fi
-      repaired=0
     done
   else
     retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-records "$WILDCHAT_SCORING_TARGET_RECORDS" --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" --fallback-on-errors
     python3 -m tools.mathdial_pipeline_support enrich-score --input "$SCORED_RAW" --output "$SCORED"
   fi
-  python3 -m tools.validate_scoring_fallbacks --input "$SCORED" --output "$OUTPUT_ROOT/scoring/fallback_diagnostics.json" --warning-rate "$WARN_SCORING_FALLBACK_RATE" --fatal-rate "$FATAL_SCORING_FALLBACK_RATE" || return 20
+  python3 -m tools.validate_scoring_fallbacks --input "$SCORED" --output "$OUTPUT_ROOT/scoring/fallback_diagnostics.json" --warning-rate "$WARN_SCORING_FALLBACK_RATE" --fatal-rate "$FATAL_SCORING_FALLBACK_RATE" --diagnostic-only || return 20
 }
 
 select_data_stage() {
   # DPO閾値落ちを見込み、最終採用数より大きい同数の比較候補プールを作る。
   local count="$SELECTION_POOL_COUNT" random_count="$SELECTION_POOL_COUNT"
   [[ "$DRY_RUN" == "1" ]] && { count=4; random_count=6; }
-  python3 -m tools.mathdial_selection --scored "$SCORED" --mathdial-conversations "$MATH_CONV" --bayes-model "$COMPAT_MODEL" --output-dir "$SELECT_DIR" --count "$count" --random-count "$random_count" --seed "$SEED" --label-derivation-method "$SELECTION_LABEL_METHOD" --selection-margin "$SELECTION_EMISSION_MARGIN" || return 20
+  python3 -m tools.mathdial_selection --scored "$SCORED" --mathdial-conversations "$MATH_CONV" --bayes-model "$COMPAT_MODEL" --output-dir "$SELECT_DIR" --count "$count" --random-count "$random_count" --seed "$SEED" --label-derivation-method "$SELECTION_LABEL_METHOD" --selection-margin "$SELECTION_EMISSION_MARGIN" --exclude-fallback-conversations || return 20
 }
 
 build_dpo_stage() {

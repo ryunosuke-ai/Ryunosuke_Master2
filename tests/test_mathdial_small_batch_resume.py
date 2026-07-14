@@ -57,18 +57,24 @@ def test_small_batch_resume_records_auditable_amendment(tmp_path: Path):
     assert completed.returncode == 0, completed.stderr
     amendment_path = run_root / "scoring/scoring_configuration_amendments.jsonl"
     amendments = [json.loads(line) for line in amendment_path.open(encoding="utf-8")]
-    assert amendments == [
-        {
-            "amendment_id": "small_batch:fixture-fingerprint:3000",
-            "timestamp": amendments[0]["timestamp"],
-            "experiment_fingerprint": "fixture-fingerprint",
-            "reason": "API評価の過剰実行を避けるため、保存済みscoringから判定batchだけを縮小",
-            "original_scoring_batch_records": 20000,
-            "continued_scoring_batch_records": 3000,
-            "selection_pool_records": 5000,
-            "starting_scored_records": 1,
-            "models": {"scoring": "terra"},
-            "scoring": {"preset": "mathdial_tutoring"},
-            "selection": {"label_derivation_method": "state_specific_margin"},
-        }
-    ]
+    assert len(amendments) == 1
+    amendment = amendments[0]
+    assert amendment["amendment_id"] == "clean_fallback_v1:fixture-fingerprint:3000"
+    assert amendment["experiment_fingerprint"] == "fixture-fingerprint"
+    assert amendment["original_scoring_batch_records"] == 20000
+    assert amendment["continued_scoring_batch_records"] == 3000
+    assert amendment["selection_pool_records"] == 5000
+    assert amendment["starting_scored_records"] == 1
+    assert amendment["mandatory_fallback_repair"] is False
+    assert amendment["exclude_fallback_conversations_from_basis"] is True
+    assert amendment["models"] == {"scoring": "terra"}
+    assert amendment["scoring"] == {"preset": "mathdial_tutoring"}
+    assert amendment["selection"] == {
+        "label_derivation_method": "state_specific_margin"
+    }
+    assert amendment["runtime_rate_limit"] == {
+        "scoring_requests_per_minute": 120.0,
+        "repair_requests_per_minute": 90.0,
+        "max_retries": 6,
+        "initial_backoff_seconds": 15.0,
+    }

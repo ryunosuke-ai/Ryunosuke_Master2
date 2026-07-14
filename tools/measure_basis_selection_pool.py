@@ -21,30 +21,52 @@ def measure_pool(
     method: str,
     margin: float,
     per_dialogue_limit: int = 3,
+    exclude_fallback_conversations: bool = False,
 ) -> dict:
     model = load_transition_bayes_model(model_path)
     labels = derive_selection_labels_from_model(
         model, method=method, minimum_margin=margin
     )
-    selected = select_high_posterior_records(
-        scored,
-        min_posterior=0.0,
-        max_records=None,
-        target_records=None,
-        sort_by_posterior=False,
-        sort_by_selection=True,
-        per_dialogue_limit=per_dialogue_limit,
-        prefer_states=labels["prefer_states"],
-        prefer_observations=labels["prefer_observations"],
-        low_priority_states=labels["low_priority_states"],
-        exclude_states=labels["exclude_states"],
-        exclude_observations=labels["exclude_observations"],
-        require_preferred=True,
-    )
+    fallback_conversations = {
+        str(row.get("conversation_id", ""))
+        for row in scored
+        if row.get("llm_error")
+    }
+
+    def select(records: list[dict]) -> list[dict]:
+        return select_high_posterior_records(
+            records,
+            min_posterior=0.0,
+            max_records=None,
+            target_records=None,
+            sort_by_posterior=False,
+            sort_by_selection=True,
+            per_dialogue_limit=per_dialogue_limit,
+            prefer_states=labels["prefer_states"],
+            prefer_observations=labels["prefer_observations"],
+            low_priority_states=labels["low_priority_states"],
+            exclude_states=labels["exclude_states"],
+            exclude_observations=labels["exclude_observations"],
+            require_preferred=True,
+        )
+
+    selected_before_exclusion = select(scored)
+    if exclude_fallback_conversations:
+        eligible_input = [
+            row
+            for row in scored
+            if str(row.get("conversation_id", "")) not in fallback_conversations
+        ]
+        selected = select(eligible_input)
+    else:
+        selected = selected_before_exclusion
     return {
         "scored_records": len(scored),
         "scored_conversations": len({row.get("conversation_id") for row in scored}),
         "eligible_records": len(selected),
+        "eligible_records_before_fallback_exclusion": len(
+            selected_before_exclusion
+        ),
         "eligible_conversations": len(
             {row.get("conversation_id") for row in selected}
         ),
@@ -52,6 +74,9 @@ def measure_pool(
             sorted(Counter(str(row.get("observation")) for row in selected).items())
         ),
         "fallback_count": sum(bool(row.get("llm_error")) for row in scored),
+        "fallback_conversations": len(fallback_conversations),
+        "excluded_eligible_records": len(selected_before_exclusion) - len(selected),
+        "exclude_fallback_conversations": exclude_fallback_conversations,
         "label_derivation": labels,
     }
 
@@ -69,6 +94,11 @@ def main() -> int:
     parser.add_argument("--margin", type=float, default=0.05)
     parser.add_argument("--required", type=int, default=0)
     parser.add_argument("--history", help="batchごとの進捗を追記するJSONL")
+    parser.add_argument(
+        "--exclude-fallback-conversations",
+        action="store_true",
+        help="fallbackを1件でも含む会話全体をBASiS候補数から除外します。",
+    )
     args = parser.parse_args()
     scored = [
         json.loads(line)
@@ -80,6 +110,7 @@ def main() -> int:
         model_path=args.bayes_model,
         method=args.method,
         margin=args.margin,
+        exclude_fallback_conversations=args.exclude_fallback_conversations,
     )
     report["required_records"] = args.required
     report["sufficient"] = report["eligible_records"] >= args.required
@@ -114,7 +145,8 @@ def main() -> int:
     print(
         "[selection pool] "
         f"eligible={report['eligible_records']}/{args.required} "
-        f"scored={report['scored_records']}",
+        f"scored={report['scored_records']} "
+        f"excluded_fallback_conversations={report['fallback_conversations'] if args.exclude_fallback_conversations else 0}",
         flush=True,
     )
     return 0

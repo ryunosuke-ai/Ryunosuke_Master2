@@ -259,6 +259,46 @@ def test_selection_pool_measurement_matches_mathdial_selection_conditions(
     assert report["eligible_conversations"] == 1
 
 
+def test_clean_selection_pool_excludes_whole_fallback_conversation(tmp_path: Path):
+    model_path = tmp_path / "model.json"
+    model_path.write_text(json.dumps(mock_model()), encoding="utf-8")
+    rows = [
+        {
+            "conversation_id": "dirty",
+            "turn_index": 0,
+            "observation": "generic_repetition",
+            "most_likely_state": "stalled_misalignment",
+            "posterior": 0.2,
+            "llm_error": "RateLimitError: 429",
+        },
+        {
+            "conversation_id": "dirty",
+            "turn_index": 1,
+            "observation": "elicit_reasoning",
+            "most_likely_state": "active_diagnosis",
+            "posterior": 0.8,
+        },
+        {
+            "conversation_id": "clean",
+            "turn_index": 0,
+            "observation": "elicit_reasoning",
+            "most_likely_state": "active_diagnosis",
+            "posterior": 0.8,
+        },
+    ]
+    report = measure_pool(
+        rows,
+        model_path=model_path,
+        method="state_specific_margin",
+        margin=0.05,
+        exclude_fallback_conversations=True,
+    )
+    assert report["eligible_records_before_fallback_exclusion"] == 2
+    assert report["eligible_records"] == 1
+    assert report["excluded_eligible_records"] == 1
+    assert report["fallback_conversations"] == 1
+
+
 def test_full_fallback_gate_warns_before_fatal():
     records = [{"conversation_id": f"c{i}"} for i in range(100)]
     for index in range(3):

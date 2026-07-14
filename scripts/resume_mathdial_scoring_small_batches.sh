@@ -86,14 +86,16 @@ raw = pathlib.Path(sys.argv[8])
 with raw.open(encoding="utf-8", errors="strict") as file:
     records = sum(bool(line.strip()) for line in file)
 payload = {
-    "amendment_id": f"small_batch:{metadata['experiment_fingerprint']}:{sys.argv[6]}",
+    "amendment_id": f"clean_fallback_v1:{metadata['experiment_fingerprint']}:{sys.argv[6]}",
     "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "experiment_fingerprint": metadata["experiment_fingerprint"],
-    "reason": "API評価の過剰実行を避けるため、保存済みscoringから判定batchだけを縮小",
+    "reason": "fallback会話をBASiS対象外にし、clean候補を小batchで必要数まで追加評価",
     "original_scoring_batch_records": original,
     "continued_scoring_batch_records": int(sys.argv[6]),
     "selection_pool_records": int(sys.argv[7]),
     "starting_scored_records": records,
+    "mandatory_fallback_repair": False,
+    "exclude_fallback_conversations_from_basis": True,
     "models": metadata.get("models", {}),
     "scoring": metadata.get("scoring", {}),
     "runtime_rate_limit": {
@@ -143,7 +145,6 @@ retry_command() {
   done
 }
 
-repaired=0
 while true; do
   python3 -m tools.mathdial_pipeline_support enrich-score --input "$RAW" --output "$SCORED"
   python3 -m tools.measure_basis_selection_pool \
@@ -153,30 +154,11 @@ while true; do
     --history "$POOL_HISTORY" \
     --method "$SELECTION_LABEL_METHOD" \
     --margin "$SELECTION_EMISSION_MARGIN" \
-    --required "$SELECTION_POOL_COUNT"
+    --required "$SELECTION_POOL_COUNT" \
+    --exclude-fallback-conversations
   sufficient="$(python3 -c 'import json,sys; print("1" if json.load(open(sys.argv[1]))["sufficient"] else "0")' "$POOL_REPORT")"
-  if [[ "$sufficient" == "1" && "$repaired" == "1" ]]; then
-    break
-  fi
   if [[ "$sufficient" == "1" ]]; then
-    for ((round=1; round<=SCORING_REPAIR_ROUNDS; round++)); do
-      echo "[small-batch resume] fallback repair round=${round}/${SCORING_REPAIR_ROUNDS}"
-      retry_command python3 -m tools.score_dialogue_with_transition_bayes_model \
-        --input "$PRIORITIZED" \
-        --bayes-model "$MODEL" \
-        --output "$RAW" \
-        --model "$SCORING_MODEL" \
-        --workers "$SCORING_REPAIR_WORKERS" \
-        --repair-retryable-fallbacks \
-        --scoring-preset "$SCORING_PRESET" \
-        --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" \
-        --requests-per-minute "$SCORING_REPAIR_REQUESTS_PER_MINUTE" \
-        --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" \
-        --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" \
-        --fallback-on-errors
-    done
-    repaired=1
-    continue
+    break
   fi
   before="$(wc -l < "$RAW")"
   retry_command python3 -m tools.score_dialogue_with_transition_bayes_model \
@@ -197,14 +179,14 @@ while true; do
     echo "WildChat全粗候補をscoringしても選別候補が不足しています。" >&2
     exit 20
   fi
-  repaired=0
 done
 
 python3 -m tools.validate_scoring_fallbacks \
   --input "$SCORED" \
   --output "$OUTPUT_ROOT/scoring/fallback_diagnostics.json" \
   --warning-rate "$WARN_SCORING_FALLBACK_RATE" \
-  --fatal-rate "$FATAL_SCORING_FALLBACK_RATE" || exit 20
+  --fatal-rate "$FATAL_SCORING_FALLBACK_RATE" \
+  --diagnostic-only || exit 20
 
 python3 - "$SUCCESS" "$RAW" "$SCORED" "$MODEL" "$POOL_REPORT" \
   "$SCORING_BATCH_RECORDS" <<'PY'
@@ -231,6 +213,9 @@ payload = {
     "continued_scoring_batch_records": int(sys.argv[6]),
     "scored_records": pool["scored_records"],
     "eligible_records": pool["eligible_records"],
+    "eligible_records_before_fallback_exclusion": pool["eligible_records_before_fallback_exclusion"],
+    "excluded_eligible_records": pool["excluded_eligible_records"],
+    "exclude_fallback_conversations": pool["exclude_fallback_conversations"],
     "required_records": pool["required_records"],
     "hashes": {
         str(raw): sha256(raw),
@@ -244,6 +229,7 @@ temporary.replace(path)
 PY
 
 echo "[small-batch resume] scoring完了。select_data以降を元fingerprint条件で再開します。"
+ORIGINAL_FINGERPRINT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["experiment_fingerprint"])' "$OUTPUT_ROOT/run_metadata.json")"
 env \
   RUN_TAG="$RUN_TAG" \
   OUTPUT_ROOT="$OUTPUT_ROOT" \
@@ -252,5 +238,7 @@ env \
   SCORING_BATCH_RECORDS="$ORIGINAL_SCORING_BATCH_RECORDS" \
   WORKERS="$WORKERS" \
   SCORING_REPAIR_WORKERS="$SCORING_REPAIR_WORKERS" \
+  ALLOW_CLEAN_FALLBACK_CONTINUATION=1 \
+  OPERATIONAL_FINGERPRINT_OVERRIDE="$ORIGINAL_FINGERPRINT" \
   PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}" \
   "$MAIN_PIPELINE"

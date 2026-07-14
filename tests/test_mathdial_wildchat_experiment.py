@@ -380,6 +380,41 @@ def test_selection_uses_generated_state_and_observation_names(tmp_path):
     assert {row["most_likely_state"] for row in groups["basis_top"]} <= set(mock_mathdial_model()["states"])
 
 
+def test_basis_selection_excludes_entire_fallback_conversation(tmp_path):
+    model_path = tmp_path / "model.json"
+    model_path.write_text(json.dumps(mock_mathdial_model()), encoding="utf-8")
+    source = [
+        {
+            "sample_id": f"s{i}",
+            "conversation_id": f"c{i}",
+            "turn_index": 1,
+            "prompt": "learn math",
+            "response": f"response {i}",
+            "metadata": {"context_turns": 3},
+        }
+        for i in range(5)
+    ]
+    scored = mock_score(source, model_path)
+    scored.append(
+        {
+            **scored[0],
+            "turn_index": 0,
+            "sample_id": "fallback",
+            "llm_error": "RateLimitError: 429",
+        }
+    )
+    groups = select_groups(
+        scored,
+        [{"split": "train", "metadata": {"question": "math equation"}}],
+        count=3,
+        random_count=3,
+        seed=42,
+        bayes_model_path=model_path,
+        exclude_fallback_conversations=True,
+    )
+    assert all(row["conversation_id"] != "c0" for row in groups["basis_top"])
+
+
 def test_mathdial_translation_policy_preserves_errors_and_does_not_enhance():
     policy = _style_specific_translation_policy("mathdial_tutoring")
     assert "誤答を翻訳時に訂正しない" in policy

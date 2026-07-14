@@ -57,6 +57,11 @@ def main() -> int:
     parser.add_argument("--output", required=True)
     parser.add_argument("--warning-rate", type=float, default=0.01)
     parser.add_argument("--fatal-rate", type=float, default=0.05)
+    parser.add_argument(
+        "--diagnostic-only",
+        action="store_true",
+        help="致命閾値を超えても診断を保存し、終了コード0で継続します。",
+    )
     args = parser.parse_args()
     if not 0 <= args.warning_rate <= args.fatal_rate <= 1:
         raise SystemExit("fallback閾値は 0 <= warning <= fatal <= 1 が必要です。")
@@ -83,10 +88,16 @@ def main() -> int:
         f"fatal={args.fatal_rate:.4%}",
         flush=True,
     )
-    if not report["passed"]:
+    if not report["passed"] and not args.diagnostic_only:
         raise SystemExit(
             "scoring fallback率が致命上限を超えました: "
             f"{report['fallback_rate']:.4%} > {args.fatal_rate:.4%}"
+        )
+    if not report["passed"]:
+        print(
+            "[scoring fallback WARN] clean候補ではfallback会話を除外するため、"
+            "診断のみ記録して継続します。",
+            flush=True,
         )
     return 0
 

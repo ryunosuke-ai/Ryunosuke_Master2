@@ -90,6 +90,7 @@ def select_groups(
     bayes_model_path: Path | str | None = None,
     label_derivation_method: str = "state_specific_margin",
     selection_margin: float = 0.05,
+    exclude_fallback_conversations: bool = False,
 ) -> dict[str, list[dict[str, Any]]]:
     """既存posterior抽出を用いて3比較群を作る。"""
     deduped = {}
@@ -105,6 +106,11 @@ def select_groups(
             str(row.get("sample_id", "")),
         ),
     )
+    fallback_conversations = {
+        str(row.get("conversation_id", ""))
+        for row in scored
+        if row.get("llm_error")
+    }
     rng = random.Random(seed)
     randomized = list(pool)
     rng.shuffle(randomized)
@@ -127,8 +133,15 @@ def select_groups(
             "exclude_states": "premature_telling,generic_ungrounded",
             "exclude_observations": "",
         }
+    basis_pool = pool
+    if exclude_fallback_conversations:
+        basis_pool = [
+            row
+            for row in pool
+            if str(row.get("conversation_id", "")) not in fallback_conversations
+        ]
     basis_candidates = select_high_posterior_records(
-        pool, min_posterior=0.0, max_records=None, target_records=None,
+        basis_pool, min_posterior=0.0, max_records=None, target_records=None,
         sort_by_posterior=False, sort_by_selection=True, per_dialogue_limit=3,
         prefer_states=labels["prefer_states"],
         prefer_observations=labels["prefer_observations"],
@@ -171,13 +184,20 @@ def main() -> int:
         default="state_specific_margin",
     )
     parser.add_argument("--selection-margin", type=float, default=0.05)
+    parser.add_argument(
+        "--exclude-fallback-conversations",
+        action="store_true",
+        help="fallbackを含む会話全体をBASiS選別から除外します。",
+    )
     args = parser.parse_args()
+    scored = read_jsonl(args.scored)
     groups = select_groups(
-        read_jsonl(args.scored), read_jsonl(args.mathdial_conversations),
+        scored, read_jsonl(args.mathdial_conversations),
         count=args.count, random_count=args.random_count, seed=args.seed,
         bayes_model_path=args.bayes_model,
         label_derivation_method=args.label_derivation_method,
         selection_margin=args.selection_margin,
+        exclude_fallback_conversations=args.exclude_fallback_conversations,
     )
     shortages = {
         name: (len(rows), args.random_count if name == "domain_random" else args.count)
@@ -191,6 +211,19 @@ def main() -> int:
     for name, rows in groups.items():
         write_jsonl(rows, output / f"{name}.jsonl")
     report = diagnostics(groups)
+    fallback_conversations = {
+        str(row.get("conversation_id", ""))
+        for row in scored
+        if row.get("llm_error")
+    }
+    report["basis_quality_filter"] = {
+        "exclude_fallback_conversations": args.exclude_fallback_conversations,
+        "fallback_conversations": len(fallback_conversations),
+        "selected_basis_from_fallback_conversations": sum(
+            str(row.get("conversation_id", "")) in fallback_conversations
+            for row in groups["basis_top"]
+        ),
+    }
     report["label_derivation"] = derive_selection_label_diagnostics(
         load_transition_bayes_model(args.bayes_model),
         method=args.label_derivation_method,
