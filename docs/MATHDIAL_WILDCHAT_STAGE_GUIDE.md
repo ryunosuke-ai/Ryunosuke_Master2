@@ -98,7 +98,9 @@ report
 - conversation単位で並列化し、結果を逐次JSONLへ追記する。
 - 既存結果のconversation/turn keyはresume時にskipする。
 - API/JSON失敗はSDK再試行後にnegative寄りfallbackとして記録する。
-- fallback率が1%を超えた場合は後段へ進まない。
+- pilotのfallback率が1%を超えた場合は、prompt/API接続異常として本スコアリングへ進まない。
+- 本スコアリング完了後は、429・timeout等を含む会話を低並列で丸ごと再評価し、posterior系列も作り直す。
+- 本スコアリングのfallback率は1%超で警告、5%超で停止する。警告時も理由別件数を`scoring/fallback_diagnostics.json`へ保存する。
 
 ### 2.5 `select_data`
 
@@ -175,7 +177,7 @@ stage成功時だけ`stage_state/<stage>_SUCCESS.json`を書く。markerには�
 - ベイズモデルschema・確率が不正
 - train/test/qidリーク
 - WildChat候補またはDPO件数不足
-- scoring fallback率が1%超
+- scoring pilot fallback率が1%超、または修復後の本scoring fallback率が5%超
 - BASiS 2,000 + gold 500、Random 2,500の構成不一致
 - 3モデル評価応答またはOracle必要件数の不足が再試行でも解消しない
 
@@ -224,6 +226,26 @@ PYTHONUNBUFFERED=1 \
 ```
 
 この経路は前処理、品質合格済みbasis、WildChat候補だけをhash検証して再利用する。旧scoring、selection、DPO、SUCCESS markerはコピーしない。
+
+20,000件scoring完了後にfallback gateで停止したrunを、429修復から継続する場合:
+
+```bash
+RUN_TAG=mathdial_wildchat_gpt56_v3_resume2 \
+REUSE_DATA_RUN_TAG=mathdial_wildchat_gpt56_v3 \
+REUSE_BASIS_RUN_TAG=mathdial_wildchat_gpt56_v3 \
+REUSE_SCORING_RUN_TAG=mathdial_wildchat_gpt56_v3_resume1 \
+START_STAGE=preprocess \
+END_STAGE=build_dpo \
+SELECTION_POOL_COUNT=3000 \
+WILDCHAT_SCORING_TARGET_RECORDS=80000 \
+WORKERS=8 \
+SCORING_REPAIR_WORKERS=4 \
+PYTHONUNBUFFERED=1 \
+./scripts/run_mathdial_wildchat_watchdog.sh
+```
+
+この経路はraw scoring 20,000件を照合して再利用し、不足するWildChat候補とscoringだけを追加する。
+429・timeoutを含む会話は低並列で再評価する。20,000件時点の優先候補率から、3,000件の選別プールを確保するため80,000件を既定の推奨値としている。selectionとDPOは再利用しない。
 
 単一stageの明示再実行:
 

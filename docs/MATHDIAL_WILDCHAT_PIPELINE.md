@@ -79,6 +79,11 @@ v3の`score_wildchat`は200件pilotを先に実行し、fallback率と不正ラ�
 state-specific emission差を使用するが、posterior更新、MMR、DPO生成はESConv互換のままである。
 pilotは閾値をまたぐ会話を丸ごと含めるため、200件未満にはならない。
 
+本scoringでは429・timeout等の回復可能なfallbackを含む会話を低並列で再評価する。
+修復後のfallback率は1%超を警告、5%超を致命条件とし、理由別内訳を保存する。
+`REUSE_SCORING_RUN_TAG`を指定すると、候補・モデル・scoring条件・全sampleを照合した上で
+完了済みraw scoringを再利用できる。
+
 既存runのbasisが品質gateに合格している場合は`REUSE_BASIS_RUN_TAG`で再利用できる。
 source側SUCCESS marker、入力・モデルhash、schema、emission品質を再検証し、scoring以降は再利用しない。
 

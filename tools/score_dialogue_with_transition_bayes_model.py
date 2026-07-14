@@ -90,6 +90,14 @@ def parse_args() -> argparse.Namespace:
         help="content_filter以外のAPI/JSON失敗もnegative寄り観測へフォールバックして処理を継続します。",
     )
     parser.add_argument(
+        "--repair-retryable-fallbacks",
+        action="store_true",
+        help=(
+            "既存出力中の429・timeout等を含む会話を丸ごと削除して再評価します。"
+            "会話内posteriorの整合性を保つため、失敗発話だけの差し替えは行いません。"
+        ),
+    )
+    parser.add_argument(
         "--scoring-preset",
         choices=SCORING_PRESETS,
         default="legacy",
@@ -129,6 +137,57 @@ def limit_records_by_conversation(
         if len(selected) >= max_records:
             break
     return selected
+
+
+def is_retryable_fallback(record: dict[str, Any]) -> bool:
+    """再API評価で回復する可能性があるfallbackか判定する。"""
+    error = str(record.get("llm_error", "")).lower()
+    kind = str(record.get("llm_error_kind", ""))
+    if not error:
+        return False
+    if kind == "invalid_observation":
+        return True
+    retryable_markers = (
+        "429",
+        "ratelimit",
+        "rate limit",
+        "timeout",
+        "timed out",
+        "connection",
+        "temporarily unavailable",
+        "service unavailable",
+        "internal server error",
+        "server_error",
+    )
+    return any(marker in error for marker in retryable_markers)
+
+
+def prepare_retryable_fallback_repair(
+    records: list[dict[str, Any]],
+    existing_results: list[dict[str, Any]],
+    output_path: Path | str,
+) -> tuple[list[dict[str, Any]], set[str]]:
+    """retryable fallbackを含む会話全体を出力から除き、原子的に再開準備する。"""
+    allowed_conversations = {str(row["conversation_id"]) for row in records}
+    repair_conversations = {
+        str(row["conversation_id"])
+        for row in existing_results
+        if str(row.get("conversation_id")) in allowed_conversations
+        and is_retryable_fallback(row)
+    }
+    if not repair_conversations:
+        return existing_results, set()
+    retained = [
+        row
+        for row in existing_results
+        if str(row.get("conversation_id")) not in repair_conversations
+    ]
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".repair.tmp")
+    write_jsonl(retained, temporary)
+    temporary.replace(path)
+    return retained, repair_conversations
 
 
 def build_transition_scoring_instructions(
@@ -725,6 +784,17 @@ def main() -> int:
         print(f"  model: {args.model or DEFAULT_MODEL}")
         return 0
     existing_results = read_existing_scored_records(args.output)
+    if args.repair_retryable_fallbacks:
+        existing_results, repair_conversations = prepare_retryable_fallback_repair(
+            records,
+            existing_results,
+            args.output,
+        )
+        print(
+            "[scoring repair] retryable fallback conversations="
+            f"{len(repair_conversations)} retained_records={len(existing_results)}",
+            flush=True,
+        )
     scored = score_records(
         records,
         bayes_model=bayes_model,

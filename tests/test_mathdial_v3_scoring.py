@@ -22,10 +22,14 @@ from tools.reuse_mathdial_pipeline_data import (
     WILDCHAT_FILES,
     reuse_files,
 )
+from tools.reuse_transition_scoring import validate_and_reuse_scoring
 from tools.score_dialogue_with_transition_bayes_model import (
     build_transition_scoring_instructions,
+    is_retryable_fallback,
+    prepare_retryable_fallback_repair,
     score_single_record,
 )
+from tools.validate_scoring_fallbacks import summarize_fallbacks
 from tools.validate_mathdial_scoring_pilot import summarize_pilot
 from tools.translate_and_generate_dpo import score_japanese_response
 
@@ -119,6 +123,50 @@ def test_mathdial_falls_back_only_after_semantic_retry_exhaustion():
     )
     assert result["llm_error_kind"] == "invalid_observation"
     assert result["observation"] in model.observations
+
+
+def test_retryable_fallback_repair_removes_whole_conversation(tmp_path: Path):
+    records = [
+        {"conversation_id": "c1", "turn_index": 1},
+        {"conversation_id": "c1", "turn_index": 3},
+        {"conversation_id": "c2", "turn_index": 1},
+    ]
+    existing = [
+        {**records[0], "observation": "a"},
+        {
+            **records[1],
+            "observation": "b",
+            "llm_error": "RateLimitError: 429 rate limit exceeded",
+            "llm_error_kind": "api_or_json",
+        },
+        {**records[2], "observation": "a"},
+    ]
+    output = tmp_path / "scored.jsonl"
+    output.write_text(
+        "".join(json.dumps(row) + "\n" for row in existing), encoding="utf-8"
+    )
+    retained, conversations = prepare_retryable_fallback_repair(
+        records, existing, output
+    )
+    assert conversations == {"c1"}
+    assert [row["conversation_id"] for row in retained] == ["c2"]
+    assert [json.loads(line)["conversation_id"] for line in output.open()] == ["c2"]
+    assert is_retryable_fallback(existing[1])
+    assert not is_retryable_fallback(
+        {"llm_error": "content_filter", "llm_error_kind": "content_filter"}
+    )
+
+
+def test_full_fallback_gate_warns_before_fatal():
+    records = [{"conversation_id": f"c{i}"} for i in range(100)]
+    for index in range(3):
+        records[index]["llm_error"] = "RateLimitError: 429"
+    warning = summarize_fallbacks(records, warning_rate=0.01, fatal_rate=0.05)
+    assert warning["passed"]
+    assert warning["warning"]
+    assert warning["fallback_reason_distribution"] == {"rate_limit": 3}
+    fatal = summarize_fallbacks(records, warning_rate=0.01, fatal_rate=0.02)
+    assert not fatal["passed"]
 
 
 def test_mathdial_dpo_rescoring_uses_mathdial_preset_and_semantic_retry():
@@ -314,3 +362,77 @@ def test_reuse_basis_revalidates_quality_without_copying_scoring(tmp_path: Path)
     assert not (target / "stage_state/build_basis_SUCCESS.json").exists()
     manifest = json.loads((target / "reuse_manifest.json").read_text(encoding="utf-8"))
     assert manifest["modes"]["basis"]["emission_quality"]["passed"]
+
+
+def test_reuse_complete_scoring_validates_candidates_and_pilot(tmp_path: Path):
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    candidates = [
+        {
+            "sample_id": f"s{i}",
+            "conversation_id": f"c{i}",
+            "turn_index": 1,
+            "prompt": f"p{i}",
+            "response": f"r{i}",
+        }
+        for i in range(3)
+    ]
+    scored = [
+        {
+            **row,
+            "observation": "a",
+            "state_posteriors": {"positive": 0.8, "negative": 0.2},
+        }
+        for row in candidates
+    ]
+    for root in (source, target):
+        (root / "wildchat").mkdir(parents=True)
+        (root / "basis_model").mkdir(parents=True)
+        (root / "wildchat/general_tutoring_candidates.jsonl").write_text(
+            "".join(json.dumps(row) + "\n" for row in candidates), encoding="utf-8"
+        )
+        (root / "basis_model/mathdial_transition_compat.json").write_text(
+            "same-model", encoding="utf-8"
+        )
+        (root / "run_metadata.json").write_text(
+            json.dumps(
+                {
+                    "models": {"scoring": "terra"},
+                    "scoring": {
+                        "preset": "mathdial_tutoring",
+                        "preset_version": "mathdial_v3",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+    (source / "scoring").mkdir()
+    (source / "scoring/wildchat_scored_raw.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in scored), encoding="utf-8"
+    )
+    (source / "scoring/pilot_diagnostics.json").write_text(
+        json.dumps({"passed": True, "records": 3}), encoding="utf-8"
+    )
+    with (target / "wildchat/general_tutoring_candidates.jsonl").open(
+        "a", encoding="utf-8"
+    ) as file:
+        file.write(
+            json.dumps(
+                {
+                    "sample_id": "s-extra",
+                    "conversation_id": "c-extra",
+                    "turn_index": 1,
+                    "prompt": "extra prompt",
+                    "response": "extra response",
+                }
+            )
+            + "\n"
+        )
+    report = validate_and_reuse_scoring(
+        source_root=source,
+        target_root=target,
+        expected_records=3,
+    )
+    assert report["records"] == 3
+    assert (target / "scoring/wildchat_scored_raw.jsonl").exists()
+    assert (target / "scoring/pilot_diagnostics.json").exists()
