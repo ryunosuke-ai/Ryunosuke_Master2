@@ -242,11 +242,15 @@ def write_jsonl(rows: list[dict[str, Any]], path: Path) -> None:
     """中断時に既存成果物を壊さないようJSONLを原子的に置換する。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
-    with temporary.open("w", encoding="utf-8") as file:
-        for row in rows:
-            file.write(json.dumps(row, ensure_ascii=False) + "\n")
-        file.flush()
-    temporary.replace(path)
+    try:
+        with temporary.open("w", encoding="utf-8") as file:
+            for row in rows:
+                file.write(json.dumps(row, ensure_ascii=False) + "\n")
+            file.flush()
+        temporary.replace(path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def main() -> int:
@@ -279,6 +283,21 @@ def main() -> int:
         checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
         if int(checkpoint.get("seed", -1)) != args.seed:
             raise ValueError("WildChat checkpointのseedが現在値と一致しません。")
+        completed_outputs = (
+            output / "general_tutoring_candidates.jsonl",
+            output / "math_tutoring_candidates.jsonl",
+            output / "statistics.json",
+            output / "manifest.json",
+        )
+        if checkpoint.get("completed") is True and all(path.is_file() for path in completed_outputs):
+            statistics = dict(checkpoint.get("statistics", {}))
+            print(
+                "[extract_wildchat] completed checkpointを再利用: "
+                f"stream_rows={statistics.get('stream_rows', 0)} "
+                f"candidate_records={statistics.get('general_candidate_records', 0)}",
+                flush=True,
+            )
+            return 0
         initial_general = [json.loads(line) for line in general_path.open(encoding="utf-8") if line.strip()]
         initial_math = [json.loads(line) for line in math_path.open(encoding="utf-8") if line.strip()]
         initial_counts = dict(checkpoint.get("statistics", {}))

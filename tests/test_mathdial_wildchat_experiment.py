@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,7 @@ from tools.score_dialogue_with_transition_bayes_model import limit_records_by_co
 from tools.wildchat_tutoring import (
     domain_flags,
     extract_candidates,
+    main as wildchat_main,
     normalize_wildchat_row,
     sample_to_scoring_record,
     tokenize,
@@ -295,6 +297,48 @@ def test_wildchat_checkpoint_resume_does_not_duplicate_candidates():
     assert len(general) == 4
     assert len({row["conversation_id"] for row in general}) == 4
     assert stats["stream_rows"] == 4
+
+
+def test_wildchat_completed_checkpoint_returns_without_reopening_stream(tmp_path, monkeypatch):
+    output = tmp_path / "wildchat"
+    output.mkdir()
+    for name in (
+        "general_tutoring_conversations.jsonl",
+        "math_tutoring_conversations.jsonl",
+        "general_tutoring_candidates.jsonl",
+        "math_tutoring_candidates.jsonl",
+    ):
+        (output / name).write_text("{}\n", encoding="utf-8")
+    for name in ("statistics.json", "manifest.json"):
+        (output / name).write_text("{}\n", encoding="utf-8")
+    (output / "stream_checkpoint.json").write_text(
+        json.dumps(
+            {
+                "seed": 42,
+                "completed": True,
+                "statistics": {
+                    "stream_rows": 932581,
+                    "general_candidate_records": 254140,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "wildchat_tutoring",
+            "--output-dir",
+            str(output),
+            "--fixture",
+            str(tmp_path / "must_not_be_opened.jsonl"),
+            "--seed",
+            "42",
+        ],
+    )
+
+    assert wildchat_main() == 0
 
 
 def test_wildchat_full_scan_resume_clears_previous_target_stop():

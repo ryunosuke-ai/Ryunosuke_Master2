@@ -139,7 +139,7 @@ def reuse_files(
     seed: int,
     project_root: Path,
 ) -> dict[str, Any]:
-    """allowlistの成果物だけをhash照合して複製する。"""
+    """allowlistの成果物だけをhash照合して複製またはリンクする。"""
     validation = validate_source(
         source_root, mode=mode, seed=seed, project_root=project_root
     )
@@ -160,7 +160,10 @@ def reuse_files(
         if target.exists() and sha256(target) != source_hash:
             raise ValueError(f"再利用先に内容の異なるファイルがあります: {target}")
         if not target.exists():
-            shutil.copy2(source, target)
+            if mode == "wildchat":
+                target.symlink_to(source.resolve())
+            else:
+                shutil.copy2(source, target)
         if sha256(target) != source_hash:
             raise ValueError(f"コピー後のhashが一致しません: {target}")
         copied.append(
@@ -168,6 +171,7 @@ def reuse_files(
                 "path": relative,
                 "sha256": source_hash,
                 "jsonl_records": line_count(source),
+                "reuse_method": "symlink" if mode == "wildchat" else "copy",
             }
         )
     manifest_path = target_root / "reuse_manifest.json"

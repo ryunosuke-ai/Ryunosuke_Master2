@@ -521,6 +521,7 @@ def test_reuse_copies_only_allowlisted_data_and_rejects_config_mismatch(tmp_path
     _write_reuse_source(source, project)
     reuse_files(source, target, mode="preprocess", seed=42, project_root=project)
     reuse_files(source, target, mode="wildchat", seed=42, project_root=project)
+    assert (target / "wildchat/general_tutoring_candidates.jsonl").is_symlink()
     assert (target / PREPROCESS_FILES[1]).exists()
     assert (target / WILDCHAT_FILES[0]).exists()
     assert not (target / "scoring/wildchat_scored.jsonl").exists()
