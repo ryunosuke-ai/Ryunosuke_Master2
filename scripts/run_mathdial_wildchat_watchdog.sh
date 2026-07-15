@@ -66,7 +66,7 @@ PY
 
 stage_is_stall_protected() {
   case "$1" in
-    preprocess|build_basis|train|statistics|report) return 0 ;;
+    preprocess|build_basis|select_data|train|generate_responses|oracle_eval|statistics|report) return 0 ;;
     *) return 1 ;;
   esac
 }

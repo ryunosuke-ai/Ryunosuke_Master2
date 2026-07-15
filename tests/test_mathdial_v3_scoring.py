@@ -598,21 +598,7 @@ def test_reuse_complete_scoring_validates_candidates_and_pilot(tmp_path: Path):
     (source / "scoring/pilot_diagnostics.json").write_text(
         json.dumps({"passed": True, "records": 3}), encoding="utf-8"
     )
-    with (target / "scoring/prioritized_candidates.jsonl").open(
-        "a", encoding="utf-8"
-    ) as file:
-        file.write(
-            json.dumps(
-                {
-                    "sample_id": "s-extra",
-                    "conversation_id": "c-extra",
-                    "turn_index": 1,
-                    "prompt": "extra prompt",
-                    "response": "extra response",
-                }
-            )
-            + "\n"
-        )
+    (target / "scoring/prioritized_candidates.jsonl").unlink()
     report = validate_and_reuse_scoring(
         source_root=source,
         target_root=target,
@@ -620,4 +606,6 @@ def test_reuse_complete_scoring_validates_candidates_and_pilot(tmp_path: Path):
     )
     assert report["records"] == 3
     assert (target / "scoring/wildchat_scored_raw.jsonl").exists()
+    assert (target / "scoring/wildchat_scored_raw.jsonl").is_symlink()
+    assert (target / "scoring/prioritized_candidates.jsonl").is_symlink()
     assert (target / "scoring/pilot_diagnostics.json").exists()

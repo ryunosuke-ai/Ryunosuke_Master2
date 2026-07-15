@@ -607,6 +607,31 @@ def summarize_score_records(records: list[dict[str, Any]], spec: EvaluationSpec,
     return rows
 
 
+def summarize_axis_records(records: list[dict[str, Any]], spec: EvaluationSpec, *, seed: int) -> list[dict[str, Any]]:
+    """単独採点結果をモデル・評価軸別のsummary行にする。"""
+    by_model: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        by_model[str(record["model_name"])].append(record)
+    rows: list[dict[str, Any]] = []
+    for model_name in sorted(by_model):
+        model_records = by_model[model_name]
+        for axis in spec.axes:
+            values = [float(record["scores"][axis.key]) for record in model_records]
+            ci_low, ci_high = bootstrap_ci(values, seed=seed)
+            rows.append(
+                {
+                    "model_name": model_name,
+                    "axis": axis.key,
+                    "count": len(values),
+                    "mean": mean(values),
+                    "std": stdev(values),
+                    "ci95_low": ci_low,
+                    "ci95_high": ci_high,
+                }
+            )
+    return rows
+
+
 def pairwise_winrate_rows(records: list[dict[str, Any]], *, threshold: float = WIN_TIE_THRESHOLD) -> list[dict[str, Any]]:
     """同一sample上のモデル間Win/Tie/Lossを計算する。"""
     by_sample: dict[str, dict[str, float]] = defaultdict(dict)
@@ -824,8 +849,11 @@ def run_score_category_cli(args: argparse.Namespace, spec: EvaluationSpec) -> in
         score_scale=args.score_scale,
     )
     summary_rows = summarize_score_records(records, spec, seed=args.seed)
+    axis_summary_rows = summarize_axis_records(records, spec, seed=args.seed)
     pairwise_rows = pairwise_winrate_rows(records, threshold=pairwise_tie_threshold)
     write_csv_rows(summary_rows, output_dir / "summary.csv")
+    write_csv_rows(summary_rows, output_dir / "model_summary.csv")
+    write_csv_rows(axis_summary_rows, output_dir / "axis_summary.csv")
     write_csv_rows(pairwise_rows, output_dir / "pairwise_winrate.csv")
     write_metadata(
         path=output_dir / "metadata.json",

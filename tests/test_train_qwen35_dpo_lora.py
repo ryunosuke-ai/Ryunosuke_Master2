@@ -105,6 +105,7 @@ def make_args(**overrides) -> Namespace:
         "gradient_accumulation_steps": 8,
         "logging_steps": 1,
         "save_steps": 25,
+        "save_total_limit": 2,
         "warmup_ratio": 0.03,
         "max_grad_norm": 0.3,
         "seed": 42,
@@ -247,6 +248,16 @@ def test_build_training_args_passes_max_steps():
 
     assert config.kwargs["max_steps"] == 2
     assert config.kwargs["optim"] == "paged_adamw_8bit"
+
+
+def test_build_training_args_limits_retained_checkpoints():
+    args = make_args(save_total_limit=2)
+    deps = {"torch": FakeTorch, "DPOConfig": FakeDPOConfig}
+
+    config = build_training_args(args, deps, dtype=FakeTorch.bfloat16, has_eval=False)
+
+    assert config.kwargs["save_steps"] == 25
+    assert config.kwargs["save_total_limit"] == 2
 
 
 def test_validate_model_device_placement_rejects_hf_offload():

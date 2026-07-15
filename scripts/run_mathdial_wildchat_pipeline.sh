@@ -54,6 +54,7 @@ MODEL_MIN_NEGATIVE_OBSERVATIONS="${MODEL_MIN_NEGATIVE_OBSERVATIONS:-2}"
 SELECTION_POOL_COUNT="${SELECTION_POOL_COUNT:-5000}"
 DPO_MAX_SOURCE_CHARACTERS="${DPO_MAX_SOURCE_CHARACTERS:-16000}"
 DPO_MAX_OUTPUT_TOKENS="${DPO_MAX_OUTPUT_TOKENS:-6144}"
+PIPELINE_MIN_FREE_GB="${PIPELINE_MIN_FREE_GB:-8}"
 [[ "$DPO_MAX_SOURCE_CHARACTERS" -gt 0 ]] || { echo "DPO_MAX_SOURCE_CHARACTERSは正数にしてください。" >&2; exit 20; }
 [[ "$DPO_MAX_OUTPUT_TOKENS" -gt 0 ]] || { echo "DPO_MAX_OUTPUT_TOKENSは正数にしてください。" >&2; exit 20; }
 WILDCHAT_SCORING_TARGET_RECORDS="${WILDCHAT_SCORING_TARGET_RECORDS:-$((SELECTION_POOL_COUNT * 4))}"
@@ -65,6 +66,13 @@ GENERATION_MODEL="${MATHDIAL_DPO_GENERATION_MODEL:-${SCORING_MODEL}}"
 JUDGE_MODEL="${MATHDIAL_JUDGE_MODEL:-${SCORING_MODEL}}"
 LOCAL_MODEL="${LOCAL_QWEN_MODEL_ID:-Qwen/Qwen3.5-27B}"
 CUDA_DEVICES="${TRAIN_CUDA_VISIBLE_DEVICES:-0,1}"
+TRAIN_DEVICE_MAP="${TRAIN_DEVICE_MAP:-auto}"
+TRAIN_MAX_MEMORY="${TRAIN_MAX_MEMORY:-0=46GiB,1=46GiB,cpu=0GiB}"
+TRAIN_SAVE_TOTAL_LIMIT="${TRAIN_SAVE_TOTAL_LIMIT:-2}"
+TRAIN_MIN_FREE_MEMORY_MIB="${TRAIN_MIN_FREE_MEMORY_MIB:-36000}"
+EVAL_CUDA_DEVICES="${EVAL_CUDA_VISIBLE_DEVICES:-$CUDA_DEVICES}"
+EVAL_MAX_MEMORY="${EVAL_MAX_MEMORY:-$TRAIN_MAX_MEMORY}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 START_STAGE="${START_STAGE:-preprocess}"
 END_STAGE="${END_STAGE:-report}"
 STAGE="${STAGE:-}"
@@ -81,9 +89,9 @@ mkdir -p "$LOG_DIR" "$STATE_DIR"
 LOG_FILE="$LOG_DIR/pipeline_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-EXPERIMENT_FINGERPRINT="$(python3 - "$RUN_TAG" "$SEED" "$DRY_RUN" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$SELECTION_POOL_COUNT" "$WILDCHAT_CANDIDATE_TARGET_RECORDS" "$WILDCHAT_SCORING_TARGET_RECORDS" "$MATHDIAL_ANALYSIS_CONVERSATIONS" "$MATHDIAL_ANALYSIS_MAX_INPUT_CHARS" "$MATHDIAL_ANALYSIS_MAX_OUTPUT_TOKENS" "$MAX_SCORING_FALLBACK_RATE" "$MAX_SCORING_INVALID_RATE" "$SCORING_PILOT_RECORDS" "$SCORING_PRESET" "$SCORING_PRESET_VERSION" "$INVALID_OBSERVATION_RETRIES" "$SELECTION_LABEL_METHOD" "$SELECTION_EMISSION_MARGIN" "$MODEL_EMISSION_QUALITY_MARGIN" "$MODEL_MIN_NEGATIVE_OBSERVATIONS" "$REUSE_DATA_RUN_TAG" "${REUSE_DATA_ROOT:-}" "$REUSE_BASIS_RUN_TAG" "${REUSE_BASIS_ROOT:-}" "$REUSE_SCORING_RUN_TAG" "${REUSE_SCORING_ROOT:-}" "$WARN_SCORING_FALLBACK_RATE" "$FATAL_SCORING_FALLBACK_RATE" "$SCORING_REPAIR_WORKERS" "$SCORING_REPAIR_ROUNDS" "$ADAPTIVE_SCORING" "$SCORING_BATCH_RECORDS" "$WILDCHAT_FULL_SCAN" "$DPO_MAX_SOURCE_CHARACTERS" "$DPO_MAX_OUTPUT_TOKENS" "$REUSE_DPO_RUN_TAG" "${REUSE_DPO_ROOT:-}" <<'PY'
+EXPERIMENT_FINGERPRINT="$(python3 - "$RUN_TAG" "$SEED" "$DRY_RUN" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$SELECTION_POOL_COUNT" "$WILDCHAT_CANDIDATE_TARGET_RECORDS" "$WILDCHAT_SCORING_TARGET_RECORDS" "$MATHDIAL_ANALYSIS_CONVERSATIONS" "$MATHDIAL_ANALYSIS_MAX_INPUT_CHARS" "$MATHDIAL_ANALYSIS_MAX_OUTPUT_TOKENS" "$MAX_SCORING_FALLBACK_RATE" "$MAX_SCORING_INVALID_RATE" "$SCORING_PILOT_RECORDS" "$SCORING_PRESET" "$SCORING_PRESET_VERSION" "$INVALID_OBSERVATION_RETRIES" "$SELECTION_LABEL_METHOD" "$SELECTION_EMISSION_MARGIN" "$MODEL_EMISSION_QUALITY_MARGIN" "$MODEL_MIN_NEGATIVE_OBSERVATIONS" "$REUSE_DATA_RUN_TAG" "${REUSE_DATA_ROOT:-}" "$REUSE_BASIS_RUN_TAG" "${REUSE_BASIS_ROOT:-}" "$REUSE_SCORING_RUN_TAG" "${REUSE_SCORING_ROOT:-}" "$WARN_SCORING_FALLBACK_RATE" "$FATAL_SCORING_FALLBACK_RATE" "$SCORING_REPAIR_WORKERS" "$SCORING_REPAIR_ROUNDS" "$ADAPTIVE_SCORING" "$SCORING_BATCH_RECORDS" "$WILDCHAT_FULL_SCAN" "$DPO_MAX_SOURCE_CHARACTERS" "$DPO_MAX_OUTPUT_TOKENS" "$REUSE_DPO_RUN_TAG" "${REUSE_DPO_ROOT:-}" "$CUDA_DEVICES" "$TRAIN_DEVICE_MAP" "$TRAIN_MAX_MEMORY" "$EVAL_CUDA_DEVICES" "$EVAL_MAX_MEMORY" "$PIPELINE_MIN_FREE_GB" "$TRAIN_SAVE_TOTAL_LIMIT" <<'PY'
 import hashlib,json,pathlib,sys
-configs=["configs/datasets/mathdial.yaml","configs/datasets/wildchat_tutoring.yaml","configs/evaluations/mathdial_oracle_v1.yaml","configs/training/mathdial_dpo.yaml","tools/mathdial_dataset.py","tools/prepare_mathdial.py","tools/prepare_mathdial_for_analysis.py","tools/analyze_mathdial_corpus_transition_bayes.py","tools/score_dialogue_with_transition_bayes_model.py","tools/prioritize_tutoring_candidates.py","tools/measure_basis_selection_pool.py","tools/translate_and_generate_dpo.py","tools/reuse_mathdial_dpo.py","tools/extract_high_posterior_dialogues.py","tools/mathdial_selection.py","tools/validate_mathdial_scoring_pilot.py","tools/validate_scoring_fallbacks.py","tools/reuse_mathdial_pipeline_data.py","tools/reuse_transition_scoring.py","scripts/run_mathdial_wildchat_pipeline.sh"]
+configs=["configs/datasets/mathdial.yaml","configs/datasets/wildchat_tutoring.yaml","configs/evaluations/mathdial_oracle_v1.yaml","configs/training/mathdial_dpo.yaml","tools/mathdial_dataset.py","tools/prepare_mathdial.py","tools/prepare_mathdial_for_analysis.py","tools/analyze_mathdial_corpus_transition_bayes.py","tools/score_dialogue_with_transition_bayes_model.py","tools/prioritize_tutoring_candidates.py","tools/measure_basis_selection_pool.py","tools/translate_and_generate_dpo.py","tools/reuse_mathdial_dpo.py","tools/extract_high_posterior_dialogues.py","tools/mathdial_selection.py","tools/validate_mathdial_scoring_pilot.py","tools/validate_scoring_fallbacks.py","tools/reuse_mathdial_pipeline_data.py","tools/reuse_transition_scoring.py","tools/train_qwen35_dpo_lora.py","tools/mathdial_evaluation.py","tools/run_oracle_evaluation_lora_pair.py","core/oracle_eval_common.py","scripts/eval_oracle_mathdial.py","scripts/run_mathdial_statistics.py","scripts/run_mathdial_wildchat_pipeline.sh","scripts/run_mathdial_wildchat_watchdog.sh"]
 payload={"values":sys.argv[1:],"files":{p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in configs}}
 for key,value in (("data",sys.argv[26]),("basis",sys.argv[28]),("scoring",sys.argv[30]),("dpo",sys.argv[41])):
  reuse_root=pathlib.Path(value) if value else None
@@ -117,11 +125,11 @@ PY
   EXPERIMENT_FINGERPRINT="$OPERATIONAL_FINGERPRINT_OVERRIDE"
 fi
 
-python3 - "$OUTPUT_ROOT/run_metadata.json" "$OUTPUT_ROOT/run_attempts.jsonl" "$EXPERIMENT_FINGERPRINT" "$RUN_TAG" "$SEED" "$DRY_RUN" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$WORKERS" "$SELECTION_POOL_COUNT" "$WILDCHAT_CANDIDATE_TARGET_RECORDS" "$WILDCHAT_SCORING_TARGET_RECORDS" "$MATHDIAL_ANALYSIS_CONVERSATIONS" "$MATHDIAL_ANALYSIS_MAX_INPUT_CHARS" "$MATHDIAL_ANALYSIS_MAX_OUTPUT_TOKENS" "$MAX_SCORING_FALLBACK_RATE" "$MAX_SCORING_INVALID_RATE" "$SCORING_PILOT_RECORDS" "$SCORING_PRESET" "$SCORING_PRESET_VERSION" "$INVALID_OBSERVATION_RETRIES" "$SELECTION_LABEL_METHOD" "$SELECTION_EMISSION_MARGIN" "$MODEL_EMISSION_QUALITY_MARGIN" "$MODEL_MIN_NEGATIVE_OBSERVATIONS" "$REUSE_DATA_RUN_TAG" "$REUSE_BASIS_RUN_TAG" "$REUSE_SCORING_RUN_TAG" "$WARN_SCORING_FALLBACK_RATE" "$FATAL_SCORING_FALLBACK_RATE" "$SCORING_REPAIR_WORKERS" "$SCORING_REPAIR_ROUNDS" "$ADAPTIVE_SCORING" "$SCORING_BATCH_RECORDS" "$WILDCHAT_FULL_SCAN" "$DPO_MAX_SOURCE_CHARACTERS" "$DPO_MAX_OUTPUT_TOKENS" "$REUSE_DPO_RUN_TAG" <<'PY'
+python3 - "$OUTPUT_ROOT/run_metadata.json" "$OUTPUT_ROOT/run_attempts.jsonl" "$EXPERIMENT_FINGERPRINT" "$RUN_TAG" "$SEED" "$DRY_RUN" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$WORKERS" "$SELECTION_POOL_COUNT" "$WILDCHAT_CANDIDATE_TARGET_RECORDS" "$WILDCHAT_SCORING_TARGET_RECORDS" "$MATHDIAL_ANALYSIS_CONVERSATIONS" "$MATHDIAL_ANALYSIS_MAX_INPUT_CHARS" "$MATHDIAL_ANALYSIS_MAX_OUTPUT_TOKENS" "$MAX_SCORING_FALLBACK_RATE" "$MAX_SCORING_INVALID_RATE" "$SCORING_PILOT_RECORDS" "$SCORING_PRESET" "$SCORING_PRESET_VERSION" "$INVALID_OBSERVATION_RETRIES" "$SELECTION_LABEL_METHOD" "$SELECTION_EMISSION_MARGIN" "$MODEL_EMISSION_QUALITY_MARGIN" "$MODEL_MIN_NEGATIVE_OBSERVATIONS" "$REUSE_DATA_RUN_TAG" "$REUSE_BASIS_RUN_TAG" "$REUSE_SCORING_RUN_TAG" "$WARN_SCORING_FALLBACK_RATE" "$FATAL_SCORING_FALLBACK_RATE" "$SCORING_REPAIR_WORKERS" "$SCORING_REPAIR_ROUNDS" "$ADAPTIVE_SCORING" "$SCORING_BATCH_RECORDS" "$WILDCHAT_FULL_SCAN" "$DPO_MAX_SOURCE_CHARACTERS" "$DPO_MAX_OUTPUT_TOKENS" "$REUSE_DPO_RUN_TAG" "$CUDA_DEVICES" "$TRAIN_DEVICE_MAP" "$TRAIN_MAX_MEMORY" "$EVAL_CUDA_DEVICES" "$EVAL_MAX_MEMORY" "$PIPELINE_MIN_FREE_GB" "$TRAIN_SAVE_TOTAL_LIMIT" <<'PY'
 import datetime,hashlib,json,os,pathlib,sys
 path=pathlib.Path(sys.argv[1]); attempts=pathlib.Path(sys.argv[2]); fingerprint=sys.argv[3]
-configs=["configs/datasets/mathdial.yaml","configs/datasets/wildchat_tutoring.yaml","configs/evaluations/mathdial_oracle_v1.yaml","configs/training/mathdial_dpo.yaml","tools/mathdial_dataset.py","tools/prepare_mathdial.py","tools/prepare_mathdial_for_analysis.py","tools/analyze_mathdial_corpus_transition_bayes.py","tools/score_dialogue_with_transition_bayes_model.py","tools/prioritize_tutoring_candidates.py","tools/measure_basis_selection_pool.py","tools/translate_and_generate_dpo.py","tools/reuse_mathdial_dpo.py","tools/extract_high_posterior_dialogues.py","tools/mathdial_selection.py","tools/validate_mathdial_scoring_pilot.py","tools/validate_scoring_fallbacks.py","tools/reuse_mathdial_pipeline_data.py","tools/reuse_transition_scoring.py","scripts/run_mathdial_wildchat_pipeline.sh"]
-payload={"experiment_fingerprint":fingerprint,"run_tag":sys.argv[4],"seed":int(sys.argv[5]),"dry_run":sys.argv[6]=="1","models":{"analysis":sys.argv[7],"scoring":sys.argv[8],"generation":sys.argv[9],"judge":sys.argv[10],"local":sys.argv[11]},"early_stop":{"selection_pool_records":int(sys.argv[13]),"initial_wildchat_candidate_records":int(sys.argv[14]),"legacy_wildchat_scoring_records":int(sys.argv[15]),"scoring_pilot_records":int(sys.argv[21]),"adaptive_scoring":sys.argv[36]=="1","scoring_batch_records":int(sys.argv[37]),"wildchat_full_scan":sys.argv[38]=="1"},"basis_analysis":{"conversations":int(sys.argv[16]),"max_input_chars":int(sys.argv[17]),"max_output_tokens":int(sys.argv[18])},"scoring":{"preset":sys.argv[22],"preset_version":sys.argv[23],"invalid_observation_retries":int(sys.argv[24]),"repair_workers":int(sys.argv[34]),"repair_rounds":int(sys.argv[35])},"selection":{"label_derivation_method":sys.argv[25],"emission_margin":float(sys.argv[26]),"max_source_characters":int(sys.argv[39]),"length_policy":"exclude_whole_sample_without_truncating_history"},"dpo":{"max_output_tokens":int(sys.argv[40]),"rejected_candidates":8},"quality_gates":{"pilot_max_fallback_rate":float(sys.argv[19]),"max_scoring_invalid_rate":float(sys.argv[20]),"full_warning_fallback_rate":float(sys.argv[32]),"full_fatal_fallback_rate":float(sys.argv[33]),"model_emission_margin":float(sys.argv[27]),"minimum_negative_observations":int(sys.argv[28])},"reuse_data_run_tag":sys.argv[29],"reuse_basis_run_tag":sys.argv[30],"reuse_scoring_run_tag":sys.argv[31],"reuse_dpo_run_tag":sys.argv[41],"configs":{name:hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest() for name in configs}}
+configs=["configs/datasets/mathdial.yaml","configs/datasets/wildchat_tutoring.yaml","configs/evaluations/mathdial_oracle_v1.yaml","configs/training/mathdial_dpo.yaml","tools/mathdial_dataset.py","tools/prepare_mathdial.py","tools/prepare_mathdial_for_analysis.py","tools/analyze_mathdial_corpus_transition_bayes.py","tools/score_dialogue_with_transition_bayes_model.py","tools/prioritize_tutoring_candidates.py","tools/measure_basis_selection_pool.py","tools/translate_and_generate_dpo.py","tools/reuse_mathdial_dpo.py","tools/extract_high_posterior_dialogues.py","tools/mathdial_selection.py","tools/validate_mathdial_scoring_pilot.py","tools/validate_scoring_fallbacks.py","tools/reuse_mathdial_pipeline_data.py","tools/reuse_transition_scoring.py","tools/train_qwen35_dpo_lora.py","tools/mathdial_evaluation.py","tools/run_oracle_evaluation_lora_pair.py","core/oracle_eval_common.py","scripts/eval_oracle_mathdial.py","scripts/run_mathdial_statistics.py","scripts/run_mathdial_wildchat_pipeline.sh","scripts/run_mathdial_wildchat_watchdog.sh"]
+payload={"experiment_fingerprint":fingerprint,"run_tag":sys.argv[4],"seed":int(sys.argv[5]),"dry_run":sys.argv[6]=="1","models":{"analysis":sys.argv[7],"scoring":sys.argv[8],"generation":sys.argv[9],"judge":sys.argv[10],"local":sys.argv[11]},"early_stop":{"selection_pool_records":int(sys.argv[13]),"initial_wildchat_candidate_records":int(sys.argv[14]),"legacy_wildchat_scoring_records":int(sys.argv[15]),"scoring_pilot_records":int(sys.argv[21]),"adaptive_scoring":sys.argv[36]=="1","scoring_batch_records":int(sys.argv[37]),"wildchat_full_scan":sys.argv[38]=="1"},"basis_analysis":{"conversations":int(sys.argv[16]),"max_input_chars":int(sys.argv[17]),"max_output_tokens":int(sys.argv[18])},"scoring":{"preset":sys.argv[22],"preset_version":sys.argv[23],"invalid_observation_retries":int(sys.argv[24]),"repair_workers":int(sys.argv[34]),"repair_rounds":int(sys.argv[35])},"selection":{"label_derivation_method":sys.argv[25],"emission_margin":float(sys.argv[26]),"max_source_characters":int(sys.argv[39]),"length_policy":"exclude_whole_sample_without_truncating_history"},"dpo":{"max_output_tokens":int(sys.argv[40]),"rejected_candidates":8},"training":{"cuda_visible_devices":sys.argv[42],"device_map":sys.argv[43],"max_memory":sys.argv[44],"save_total_limit":int(sys.argv[48])},"evaluation":{"cuda_visible_devices":sys.argv[45],"max_memory":sys.argv[46]},"storage":{"minimum_free_gb":int(sys.argv[47])},"quality_gates":{"pilot_max_fallback_rate":float(sys.argv[19]),"max_scoring_invalid_rate":float(sys.argv[20]),"full_warning_fallback_rate":float(sys.argv[32]),"full_fatal_fallback_rate":float(sys.argv[33]),"model_emission_margin":float(sys.argv[27]),"minimum_negative_observations":int(sys.argv[28])},"reuse_data_run_tag":sys.argv[29],"reuse_basis_run_tag":sys.argv[30],"reuse_scoring_run_tag":sys.argv[31],"reuse_dpo_run_tag":sys.argv[41],"configs":{name:hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest() for name in configs}}
 if path.exists():
     current=json.loads(path.read_text())
     if current.get("experiment_fingerprint") != fingerprint:
@@ -140,6 +148,46 @@ stage_index() {
 START_INDEX="$(stage_index "$START_STAGE")"
 END_INDEX="$(stage_index "$END_STAGE")"
 [[ "$START_INDEX" -le "$END_INDEX" ]] || { echo "START_STAGE must precede END_STAGE" >&2; exit 2; }
+
+preflight_storage() {
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  local available_kb required_kb
+  available_kb="$(df -Pk "$OUTPUT_ROOT" | awk 'NR==2 {print $4}')"
+  required_kb=$((PIPELINE_MIN_FREE_GB * 1024 * 1024))
+  if [[ "$available_kb" -lt "$required_kb" ]]; then
+    echo "ディスク空き容量が不足しています: available=$((available_kb / 1024 / 1024))GiB required=${PIPELINE_MIN_FREE_GB}GiB path=$OUTPUT_ROOT" >&2
+    exit 20
+  fi
+  echo "[preflight] storage available=$((available_kb / 1024 / 1024))GiB required=${PIPELINE_MIN_FREE_GB}GiB"
+}
+
+gpu_preflight() {
+  local devices="$1" label="$2"
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  command -v nvidia-smi >/dev/null || { echo "$label: nvidia-smiが見つかりません。" >&2; return 20; }
+  python3 - "$devices" "$TRAIN_MIN_FREE_MEMORY_MIB" "$label" <<'PY'
+import subprocess,sys
+devices=[item.strip() for item in sys.argv[1].split(",") if item.strip()]
+minimum=int(sys.argv[2]); label=sys.argv[3]
+if not devices or any(not item.isdecimal() for item in devices):
+    raise SystemExit(f"{label}: CUDA deviceは数値indexのカンマ区切りで指定してください: {sys.argv[1]}")
+rows=subprocess.check_output(
+    ["nvidia-smi","--query-gpu=index,memory.free","--format=csv,noheader,nounits"],
+    text=True,
+)
+free={index.strip():int(memory.strip()) for index,memory in (line.split(",",1) for line in rows.splitlines() if line.strip())}
+missing=[device for device in devices if device not in free]
+low={device:free.get(device,0) for device in devices if free.get(device,0)<minimum}
+if missing:
+    raise SystemExit(f"{label}: GPU indexが存在しません: {missing}")
+if low:
+    raise SystemExit(f"{label}: GPU空きメモリが不足しています: {low} MiB; required_each={minimum} MiB")
+selected={device:free[device] for device in devices}
+print(f"[preflight] {label} GPU free_mib={selected} required_each={minimum}")
+PY
+}
+
+preflight_storage
 
 run_stage() {
   local name="$1" index marker
@@ -209,10 +257,18 @@ def count(relative):
  path=root/relative
  if not path.exists(): return 0
  with path.open(encoding="utf-8",errors="replace") as f: return sum(bool(line.strip()) for line in f)
+def json_value(relative, *keys):
+ path=root/relative
+ if not path.exists(): return 0
+ try:
+  value=json.loads(path.read_text(encoding="utf-8"))
+  for key in keys: value=value[key]
+  return int(value)
+ except Exception: return 0
 counts={
  "analysis_conversations":count("basis_model/mathdial_analysis_corpus.jsonl"),
- "wildchat_candidates":count("wildchat/general_tutoring_candidates.jsonl"),
- "scored":count("scoring/wildchat_scored.jsonl"),
+ "wildchat_candidates":json_value("wildchat/manifest.json","statistics","general_candidate_records"),
+ "scored":json_value("scoring/selection_pool_progress.json","scored_records"),
  "basis_selected":count("selections/basis_top.jsonl"),
  "basis_dpo":count("dpo/mathdial_basis_train.jsonl"),
  "random_dpo":count("dpo/mathdial_random_train.jsonl"),
@@ -346,10 +402,12 @@ score_wildchat_stage() {
     python3 -m tools.mathdial_pipeline_support mock-score --input "$WILD_DIR/general_tutoring_candidates.jsonl" --output "$SCORED_RAW" --bayes-model "$COMPAT_MODEL"
     pilot_records=6
   else
-    python3 -m tools.prioritize_tutoring_candidates --input "$WILD_DIR/general_tutoring_candidates.jsonl" --output "$prioritized" --report "$priority_report" --seed "$SEED"
     if [[ -n "$REUSE_SCORING_RUN_TAG" && ! -f "$SCORED_RAW" ]]; then
       python3 -m tools.reuse_transition_scoring --source-root "$REUSE_SCORING_ROOT" --target-root "$OUTPUT_ROOT"
-    elif [[ ! -f "$SCORED_RAW" ]]; then
+    else
+      [[ -f "$prioritized" ]] || python3 -m tools.prioritize_tutoring_candidates --input "$WILD_DIR/general_tutoring_candidates.jsonl" --output "$prioritized" --report "$priority_report" --seed "$SEED"
+    fi
+    if [[ ! -f "$SCORED_RAW" ]]; then
       retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-records "$pilot_records" --include-crossing-conversation --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" --fallback-on-errors
     fi
   fi
@@ -363,11 +421,15 @@ score_wildchat_stage() {
   if [[ "$ADAPTIVE_SCORING" == "1" ]]; then
     local before_count after_count sufficient
     while true; do
-      python3 -m tools.mathdial_pipeline_support enrich-score --input "$SCORED_RAW" --output "$SCORED"
+      [[ -f "$SCORED" ]] || python3 -m tools.mathdial_pipeline_support enrich-score --input "$SCORED_RAW" --output "$SCORED"
       python3 -m tools.measure_basis_selection_pool --input "$SCORED" --bayes-model "$COMPAT_MODEL" --output "$pool_report" --history "$pool_history" --method "$SELECTION_LABEL_METHOD" --margin "$SELECTION_EMISSION_MARGIN" --required "$SELECTION_POOL_COUNT" --exclude-fallback-conversations --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS"
       sufficient="$(python3 -c 'import json,sys; print("1" if json.load(open(sys.argv[1]))["sufficient"] else "0")' "$pool_report")"
       if [[ "$sufficient" == "1" ]]; then
         break
+      fi
+      if [[ -n "$REUSE_SCORING_RUN_TAG" && -L "$SCORED_RAW" ]]; then
+        echo "再利用済みscoringではclean選別候補が不足しています。再利用元を変更するか、新runで追加scoringしてください。" >&2
+        return 20
       fi
       before_count="$(wc -l < "$SCORED_RAW")"
       retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-new-records "$SCORING_BATCH_RECORDS" --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" --fallback-on-errors
@@ -431,17 +493,24 @@ build_dpo_stage() {
 
 train_stage() {
   mkdir -p "$TRAIN_DIR"
-  local dry=()
-  [[ "$DRY_RUN" == "1" ]] && dry+=(--dry-run)
-  COMMAND_MAX_ATTEMPTS=2 retry_command env CUDA_VISIBLE_DEVICES="$CUDA_DEVICES" python3 -m tools.train_qwen35_dpo_lora --dataset "$DPO_DIR/mathdial_basis_train.jsonl" --model-id "$LOCAL_MODEL" --output-dir "$TRAIN_DIR/basis_lora" --num-train-epochs 1 --learning-rate 5e-6 --beta 0.1 --per-device-train-batch-size 1 --gradient-accumulation-steps 8 --lora-r 8 --lora-alpha 16 --lora-dropout 0.05 --save-steps 25 --warmup-ratio 0.03 --eval-ratio 0 --seed "$SEED" --no-4bit --resume-from-checkpoint auto "${dry[@]}" || return 20
-  COMMAND_MAX_ATTEMPTS=2 retry_command env CUDA_VISIBLE_DEVICES="$CUDA_DEVICES" python3 -m tools.train_qwen35_dpo_lora --dataset "$DPO_DIR/mathdial_random_train.jsonl" --model-id "$LOCAL_MODEL" --output-dir "$TRAIN_DIR/random_lora" --num-train-epochs 1 --learning-rate 5e-6 --beta 0.1 --per-device-train-batch-size 1 --gradient-accumulation-steps 8 --lora-r 8 --lora-alpha 16 --lora-dropout 0.05 --save-steps 25 --warmup-ratio 0.03 --eval-ratio 0 --seed "$SEED" --no-4bit --resume-from-checkpoint auto "${dry[@]}" || return 20
+  local common=(--model-id "$LOCAL_MODEL" --num-train-epochs 1 --learning-rate 5e-6 --beta 0.1 --per-device-train-batch-size 1 --gradient-accumulation-steps 8 --lora-r 8 --lora-alpha 16 --lora-dropout 0.05 --save-steps 25 --save-total-limit "$TRAIN_SAVE_TOTAL_LIMIT" --warmup-ratio 0.03 --eval-ratio 0 --seed "$SEED" --no-4bit --device-map "$TRAIN_DEVICE_MAP" --max-memory "$TRAIN_MAX_MEMORY" --resume-from-checkpoint auto)
+  python3 -m tools.train_qwen35_dpo_lora --dataset "$DPO_DIR/mathdial_basis_train.jsonl" --output-dir "$TRAIN_DIR/basis_lora" "${common[@]}" --dry-run || return 20
+  python3 -m tools.train_qwen35_dpo_lora --dataset "$DPO_DIR/mathdial_random_train.jsonl" --output-dir "$TRAIN_DIR/random_lora" "${common[@]}" --dry-run || return 20
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  gpu_preflight "$CUDA_DEVICES" "DPO training" || return 20
+  COMMAND_MAX_ATTEMPTS=2 retry_command env CUDA_VISIBLE_DEVICES="$CUDA_DEVICES" python3 -m tools.train_qwen35_dpo_lora --dataset "$DPO_DIR/mathdial_basis_train.jsonl" --output-dir "$TRAIN_DIR/basis_lora" "${common[@]}" || return 20
+  [[ -s "$TRAIN_DIR/basis_lora/adapter_config.json" ]] || { echo "BASiS LoRA adapterが保存されていません。" >&2; return 20; }
+  gpu_preflight "$CUDA_DEVICES" "Random-DPO training" || return 20
+  COMMAND_MAX_ATTEMPTS=2 retry_command env CUDA_VISIBLE_DEVICES="$CUDA_DEVICES" python3 -m tools.train_qwen35_dpo_lora --dataset "$DPO_DIR/mathdial_random_train.jsonl" --output-dir "$TRAIN_DIR/random_lora" "${common[@]}" || return 20
+  [[ -s "$TRAIN_DIR/random_lora/adapter_config.json" ]] || { echo "Random LoRA adapterが保存されていません。" >&2; return 20; }
 }
 
 generate_responses_stage() {
   local count=100 mock=()
   [[ "$DRY_RUN" == "1" ]] && { count=5; mock+=(--mock); }
   python3 -m tools.mathdial_evaluation prepare --samples "$MATH_SAMPLES" --conversations "$MATH_CONV" --output "$EVAL_DIR/prompts_ja.jsonl" --errors-output "$EVAL_DIR/translation_errors.jsonl" --skip-sample-errors --count "$count" --seed "$SEED" --model "$SCORING_MODEL" --resume "${mock[@]}"
-  python3 -m tools.mathdial_evaluation generate --input "$EVAL_DIR/prompts_ja.jsonl" --output "$EVAL_DIR/responses.jsonl" --errors-output "$EVAL_DIR/generation_errors.jsonl" --skip-sample-errors --oracle-output "$EVAL_DIR/oracle_input.jsonl" --base-model "$LOCAL_MODEL" --basis-lora "$TRAIN_DIR/basis_lora" --random-lora "$TRAIN_DIR/random_lora" --seed "$SEED" "${mock[@]}"
+  gpu_preflight "$EVAL_CUDA_DEVICES" "evaluation response generation" || return 20
+  env CUDA_VISIBLE_DEVICES="$EVAL_CUDA_DEVICES" DPO_COMPARE_MAX_MEMORY="$EVAL_MAX_MEMORY" python3 -m tools.mathdial_evaluation generate --input "$EVAL_DIR/prompts_ja.jsonl" --output "$EVAL_DIR/responses.jsonl" --errors-output "$EVAL_DIR/generation_errors.jsonl" --skip-sample-errors --oracle-output "$EVAL_DIR/oracle_input.jsonl" --base-model "$LOCAL_MODEL" --basis-lora "$TRAIN_DIR/basis_lora" --random-lora "$TRAIN_DIR/random_lora" --seed "$SEED" "${mock[@]}"
   python3 - "$EVAL_DIR/prompts_ja.jsonl" "$EVAL_DIR/responses.jsonl" "$EVAL_DIR/oracle_input.jsonl" "$count" <<'PY' || return 1
 import json,pathlib,sys
 def rows(path): return [json.loads(line) for line in pathlib.Path(path).open(encoding="utf-8") if line.strip()]
@@ -460,8 +529,10 @@ oracle_eval_stage() {
   python3 scripts/eval_oracle_mathdial.py --input "$EVAL_DIR/oracle_input.jsonl" --output_dir "$EVAL_DIR/oracle/general" --category general --judge_model "$JUDGE_MODEL" --score-scale 10 --oracle-workers "$WORKERS" --resume "${dry[@]}"
   local category_dir
   for category_dir in "$EVAL_DIR/oracle/pedagogical" "$EVAL_DIR/oracle/general"; do
-    cp "$category_dir/summary.csv" "$category_dir/model_summary.csv"
-    cp "$category_dir/summary.csv" "$category_dir/axis_summary.csv"
+    [[ -s "$category_dir/model_summary.csv" && -s "$category_dir/axis_summary.csv" ]] || {
+      echo "Oracle summary成果物が不足しています: $category_dir" >&2
+      return 20
+    }
     [[ -f "$category_dir/errors.jsonl" ]] || : > "$category_dir/errors.jsonl"
   done
   local required=300

@@ -17,6 +17,7 @@ from core.oracle_eval_common import (
     parse_score_payload,
     parse_strategy_payload,
     strategy_pairwise_rows,
+    summarize_axis_records,
     summarize_score_records,
     summarize_strategy_records,
     write_metadata,
@@ -168,6 +169,17 @@ def test_parse_score_payload_and_summary():
     assert rows[0]["model_name"] == "dry_run_model"
     assert rows[0]["overall_score_mean"] == 4.5
     assert rows[0]["axis_a_mean"] == 4.0
+
+    axis_rows = summarize_axis_records([record], spec, seed=1)
+    assert axis_rows[0] == {
+        "model_name": "dry_run_model",
+        "axis": "axis_a",
+        "count": 1,
+        "mean": 4.0,
+        "std": 0.0,
+        "ci95_low": 4.0,
+        "ci95_high": 4.0,
+    }
 
 
 def test_parse_score_payload_accepts_10_point_integer_scores():

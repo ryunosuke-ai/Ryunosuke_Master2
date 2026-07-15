@@ -75,6 +75,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true", help="学習せず、データと設定だけ確認します。")
     parser.add_argument("--logging-steps", type=int, default=1, help="ログ出力間隔。")
     parser.add_argument("--save-steps", type=int, default=25, help="チェックポイント保存間隔。")
+    parser.add_argument(
+        "--save-total-limit",
+        type=int,
+        default=None,
+        help="保持するcheckpoint数。未指定なら全checkpointを保持します。",
+    )
     parser.add_argument("--resume-from-checkpoint", default="", help="再開するcheckpointパス。`auto`なら最新を自動検出します。")
     parser.add_argument("--max-grad-norm", type=float, default=0.3, help="勾配クリッピング。")
     parser.add_argument("--warmup-ratio", type=float, default=0.03, help="ウォームアップ割合。")
@@ -395,6 +401,7 @@ def build_training_args(args: argparse.Namespace, deps: dict[str, Any], *, dtype
         "gradient_checkpointing": True,
         "logging_steps": args.logging_steps,
         "save_steps": args.save_steps,
+        "save_total_limit": args.save_total_limit,
         "save_strategy": "steps",
         "eval_strategy": "steps" if has_eval else "no",
         "eval_steps": args.save_steps if has_eval else None,
