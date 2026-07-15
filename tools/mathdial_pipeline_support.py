@@ -58,6 +58,49 @@ def enrich_scores(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return output
 
 
+def enrich_score_file(
+    input_path: Path,
+    output_path: Path,
+    *,
+    skip_records: int = 0,
+    append: bool = False,
+) -> int:
+    """巨大なscoring JSONLを全件メモリへ載せず診断schemaへ補完する。"""
+    if skip_records < 0:
+        raise ValueError("skip_recordsは0以上にしてください。")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    written = 0
+    if append:
+        destination = output_path
+        mode = "a"
+    else:
+        destination = output_path.with_suffix(output_path.suffix + ".tmp")
+        mode = "w"
+    try:
+        with input_path.open(encoding="utf-8") as source, destination.open(
+            mode, encoding="utf-8"
+        ) as target:
+            record_index = 0
+            for line in source:
+                if not line.strip():
+                    continue
+                if record_index < skip_records:
+                    record_index += 1
+                    continue
+                row = json.loads(line)
+                enriched = enrich_scores([row])[0]
+                target.write(json.dumps(enriched, ensure_ascii=False) + "\n")
+                written += 1
+                record_index += 1
+        if not append:
+            destination.replace(output_path)
+    except Exception:
+        if not append:
+            destination.unlink(missing_ok=True)
+        raise
+    return written
+
+
 def mock_dpo(rows: list[dict[str, Any]], *, count: int, source_dataset: str, gold: bool) -> list[dict[str, Any]]:
     if len(rows) < count:
         raise ValueError(f"mock DPO入力不足: {len(rows)}/{count}")
@@ -94,6 +137,8 @@ def main() -> int:
     enrich = sub.add_parser("enrich-score")
     enrich.add_argument("--input", required=True)
     enrich.add_argument("--output", required=True)
+    enrich.add_argument("--skip-records", type=int, default=0)
+    enrich.add_argument("--append", action="store_true")
     dpo = sub.add_parser("mock-dpo")
     dpo.add_argument("--input", required=True)
     dpo.add_argument("--output", required=True)
@@ -107,7 +152,13 @@ def main() -> int:
     if args.command == "mock-score":
         write_jsonl(mock_score(read_jsonl(args.input), args.bayes_model), args.output)
     elif args.command == "enrich-score":
-        write_jsonl(enrich_scores(read_jsonl(args.input)), args.output)
+        written = enrich_score_file(
+            Path(args.input),
+            Path(args.output),
+            skip_records=args.skip_records,
+            append=args.append,
+        )
+        print(f"[enrich-score] written={written} append={args.append}", flush=True)
     elif args.command == "mock-dpo":
         write_jsonl(mock_dpo(read_jsonl(args.input), count=args.count, source_dataset=args.source_dataset, gold=args.gold), args.output)
     else:

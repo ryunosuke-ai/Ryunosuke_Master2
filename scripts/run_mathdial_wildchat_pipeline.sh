@@ -52,11 +52,13 @@ SELECTION_EMISSION_MARGIN="${SELECTION_EMISSION_MARGIN:-0.05}"
 MODEL_EMISSION_QUALITY_MARGIN="${MODEL_EMISSION_QUALITY_MARGIN:-0.10}"
 MODEL_MIN_NEGATIVE_OBSERVATIONS="${MODEL_MIN_NEGATIVE_OBSERVATIONS:-2}"
 SELECTION_POOL_COUNT="${SELECTION_POOL_COUNT:-5000}"
+DPO_INITIAL_SELECTION_POOL_COUNT="${DPO_INITIAL_SELECTION_POOL_COUNT:-3000}"
 DPO_MAX_SOURCE_CHARACTERS="${DPO_MAX_SOURCE_CHARACTERS:-16000}"
 DPO_MAX_OUTPUT_TOKENS="${DPO_MAX_OUTPUT_TOKENS:-6144}"
 PIPELINE_MIN_FREE_GB="${PIPELINE_MIN_FREE_GB:-8}"
 [[ "$DPO_MAX_SOURCE_CHARACTERS" -gt 0 ]] || { echo "DPO_MAX_SOURCE_CHARACTERSは正数にしてください。" >&2; exit 20; }
 [[ "$DPO_MAX_OUTPUT_TOKENS" -gt 0 ]] || { echo "DPO_MAX_OUTPUT_TOKENSは正数にしてください。" >&2; exit 20; }
+[[ "$DPO_INITIAL_SELECTION_POOL_COUNT" -gt 0 && "$DPO_INITIAL_SELECTION_POOL_COUNT" -le "$SELECTION_POOL_COUNT" ]] || { echo "DPO_INITIAL_SELECTION_POOL_COUNTは1以上SELECTION_POOL_COUNT以下にしてください。" >&2; exit 20; }
 WILDCHAT_SCORING_TARGET_RECORDS="${WILDCHAT_SCORING_TARGET_RECORDS:-$((SELECTION_POOL_COUNT * 4))}"
 WILDCHAT_CANDIDATE_TARGET_RECORDS="${WILDCHAT_CANDIDATE_TARGET_RECORDS:-$((WILDCHAT_SCORING_TARGET_RECORDS + SELECTION_POOL_COUNT))}"
 WILDCHAT_CHECKPOINT_EVERY="${WILDCHAT_CHECKPOINT_EVERY:-100000}"
@@ -89,7 +91,7 @@ mkdir -p "$LOG_DIR" "$STATE_DIR"
 LOG_FILE="$LOG_DIR/pipeline_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-EXPERIMENT_FINGERPRINT="$(python3 - "$RUN_TAG" "$SEED" "$DRY_RUN" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$SELECTION_POOL_COUNT" "$WILDCHAT_CANDIDATE_TARGET_RECORDS" "$WILDCHAT_SCORING_TARGET_RECORDS" "$MATHDIAL_ANALYSIS_CONVERSATIONS" "$MATHDIAL_ANALYSIS_MAX_INPUT_CHARS" "$MATHDIAL_ANALYSIS_MAX_OUTPUT_TOKENS" "$MAX_SCORING_FALLBACK_RATE" "$MAX_SCORING_INVALID_RATE" "$SCORING_PILOT_RECORDS" "$SCORING_PRESET" "$SCORING_PRESET_VERSION" "$INVALID_OBSERVATION_RETRIES" "$SELECTION_LABEL_METHOD" "$SELECTION_EMISSION_MARGIN" "$MODEL_EMISSION_QUALITY_MARGIN" "$MODEL_MIN_NEGATIVE_OBSERVATIONS" "$REUSE_DATA_RUN_TAG" "${REUSE_DATA_ROOT:-}" "$REUSE_BASIS_RUN_TAG" "${REUSE_BASIS_ROOT:-}" "$REUSE_SCORING_RUN_TAG" "${REUSE_SCORING_ROOT:-}" "$WARN_SCORING_FALLBACK_RATE" "$FATAL_SCORING_FALLBACK_RATE" "$SCORING_REPAIR_WORKERS" "$SCORING_REPAIR_ROUNDS" "$ADAPTIVE_SCORING" "$SCORING_BATCH_RECORDS" "$WILDCHAT_FULL_SCAN" "$DPO_MAX_SOURCE_CHARACTERS" "$DPO_MAX_OUTPUT_TOKENS" "$REUSE_DPO_RUN_TAG" "${REUSE_DPO_ROOT:-}" "$CUDA_DEVICES" "$TRAIN_DEVICE_MAP" "$TRAIN_MAX_MEMORY" "$EVAL_CUDA_DEVICES" "$EVAL_MAX_MEMORY" "$PIPELINE_MIN_FREE_GB" "$TRAIN_SAVE_TOTAL_LIMIT" <<'PY'
+EXPERIMENT_FINGERPRINT="$(python3 - "$RUN_TAG" "$SEED" "$DRY_RUN" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$SELECTION_POOL_COUNT" "$WILDCHAT_CANDIDATE_TARGET_RECORDS" "$WILDCHAT_SCORING_TARGET_RECORDS" "$MATHDIAL_ANALYSIS_CONVERSATIONS" "$MATHDIAL_ANALYSIS_MAX_INPUT_CHARS" "$MATHDIAL_ANALYSIS_MAX_OUTPUT_TOKENS" "$MAX_SCORING_FALLBACK_RATE" "$MAX_SCORING_INVALID_RATE" "$SCORING_PILOT_RECORDS" "$SCORING_PRESET" "$SCORING_PRESET_VERSION" "$INVALID_OBSERVATION_RETRIES" "$SELECTION_LABEL_METHOD" "$SELECTION_EMISSION_MARGIN" "$MODEL_EMISSION_QUALITY_MARGIN" "$MODEL_MIN_NEGATIVE_OBSERVATIONS" "$REUSE_DATA_RUN_TAG" "${REUSE_DATA_ROOT:-}" "$REUSE_BASIS_RUN_TAG" "${REUSE_BASIS_ROOT:-}" "$REUSE_SCORING_RUN_TAG" "${REUSE_SCORING_ROOT:-}" "$WARN_SCORING_FALLBACK_RATE" "$FATAL_SCORING_FALLBACK_RATE" "$SCORING_REPAIR_WORKERS" "$SCORING_REPAIR_ROUNDS" "$ADAPTIVE_SCORING" "$SCORING_BATCH_RECORDS" "$WILDCHAT_FULL_SCAN" "$DPO_MAX_SOURCE_CHARACTERS" "$DPO_MAX_OUTPUT_TOKENS" "$REUSE_DPO_RUN_TAG" "${REUSE_DPO_ROOT:-}" "$CUDA_DEVICES" "$TRAIN_DEVICE_MAP" "$TRAIN_MAX_MEMORY" "$EVAL_CUDA_DEVICES" "$EVAL_MAX_MEMORY" "$PIPELINE_MIN_FREE_GB" "$TRAIN_SAVE_TOTAL_LIMIT" "$DPO_INITIAL_SELECTION_POOL_COUNT" <<'PY'
 import hashlib,json,pathlib,sys
 configs=["configs/datasets/mathdial.yaml","configs/datasets/wildchat_tutoring.yaml","configs/evaluations/mathdial_oracle_v1.yaml","configs/training/mathdial_dpo.yaml","tools/mathdial_dataset.py","tools/prepare_mathdial.py","tools/prepare_mathdial_for_analysis.py","tools/analyze_mathdial_corpus_transition_bayes.py","tools/score_dialogue_with_transition_bayes_model.py","tools/prioritize_tutoring_candidates.py","tools/measure_basis_selection_pool.py","tools/translate_and_generate_dpo.py","tools/reuse_mathdial_dpo.py","tools/extract_high_posterior_dialogues.py","tools/mathdial_selection.py","tools/validate_mathdial_scoring_pilot.py","tools/validate_scoring_fallbacks.py","tools/reuse_mathdial_pipeline_data.py","tools/reuse_transition_scoring.py","tools/train_qwen35_dpo_lora.py","tools/mathdial_evaluation.py","tools/run_oracle_evaluation_lora_pair.py","core/oracle_eval_common.py","scripts/eval_oracle_mathdial.py","scripts/run_mathdial_statistics.py","scripts/run_mathdial_wildchat_pipeline.sh","scripts/run_mathdial_wildchat_watchdog.sh"]
 payload={"values":sys.argv[1:],"files":{p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in configs}}
@@ -125,11 +127,11 @@ PY
   EXPERIMENT_FINGERPRINT="$OPERATIONAL_FINGERPRINT_OVERRIDE"
 fi
 
-python3 - "$OUTPUT_ROOT/run_metadata.json" "$OUTPUT_ROOT/run_attempts.jsonl" "$EXPERIMENT_FINGERPRINT" "$RUN_TAG" "$SEED" "$DRY_RUN" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$WORKERS" "$SELECTION_POOL_COUNT" "$WILDCHAT_CANDIDATE_TARGET_RECORDS" "$WILDCHAT_SCORING_TARGET_RECORDS" "$MATHDIAL_ANALYSIS_CONVERSATIONS" "$MATHDIAL_ANALYSIS_MAX_INPUT_CHARS" "$MATHDIAL_ANALYSIS_MAX_OUTPUT_TOKENS" "$MAX_SCORING_FALLBACK_RATE" "$MAX_SCORING_INVALID_RATE" "$SCORING_PILOT_RECORDS" "$SCORING_PRESET" "$SCORING_PRESET_VERSION" "$INVALID_OBSERVATION_RETRIES" "$SELECTION_LABEL_METHOD" "$SELECTION_EMISSION_MARGIN" "$MODEL_EMISSION_QUALITY_MARGIN" "$MODEL_MIN_NEGATIVE_OBSERVATIONS" "$REUSE_DATA_RUN_TAG" "$REUSE_BASIS_RUN_TAG" "$REUSE_SCORING_RUN_TAG" "$WARN_SCORING_FALLBACK_RATE" "$FATAL_SCORING_FALLBACK_RATE" "$SCORING_REPAIR_WORKERS" "$SCORING_REPAIR_ROUNDS" "$ADAPTIVE_SCORING" "$SCORING_BATCH_RECORDS" "$WILDCHAT_FULL_SCAN" "$DPO_MAX_SOURCE_CHARACTERS" "$DPO_MAX_OUTPUT_TOKENS" "$REUSE_DPO_RUN_TAG" "$CUDA_DEVICES" "$TRAIN_DEVICE_MAP" "$TRAIN_MAX_MEMORY" "$EVAL_CUDA_DEVICES" "$EVAL_MAX_MEMORY" "$PIPELINE_MIN_FREE_GB" "$TRAIN_SAVE_TOTAL_LIMIT" <<'PY'
+python3 - "$OUTPUT_ROOT/run_metadata.json" "$OUTPUT_ROOT/run_attempts.jsonl" "$EXPERIMENT_FINGERPRINT" "$RUN_TAG" "$SEED" "$DRY_RUN" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$WORKERS" "$SELECTION_POOL_COUNT" "$WILDCHAT_CANDIDATE_TARGET_RECORDS" "$WILDCHAT_SCORING_TARGET_RECORDS" "$MATHDIAL_ANALYSIS_CONVERSATIONS" "$MATHDIAL_ANALYSIS_MAX_INPUT_CHARS" "$MATHDIAL_ANALYSIS_MAX_OUTPUT_TOKENS" "$MAX_SCORING_FALLBACK_RATE" "$MAX_SCORING_INVALID_RATE" "$SCORING_PILOT_RECORDS" "$SCORING_PRESET" "$SCORING_PRESET_VERSION" "$INVALID_OBSERVATION_RETRIES" "$SELECTION_LABEL_METHOD" "$SELECTION_EMISSION_MARGIN" "$MODEL_EMISSION_QUALITY_MARGIN" "$MODEL_MIN_NEGATIVE_OBSERVATIONS" "$REUSE_DATA_RUN_TAG" "$REUSE_BASIS_RUN_TAG" "$REUSE_SCORING_RUN_TAG" "$WARN_SCORING_FALLBACK_RATE" "$FATAL_SCORING_FALLBACK_RATE" "$SCORING_REPAIR_WORKERS" "$SCORING_REPAIR_ROUNDS" "$ADAPTIVE_SCORING" "$SCORING_BATCH_RECORDS" "$WILDCHAT_FULL_SCAN" "$DPO_MAX_SOURCE_CHARACTERS" "$DPO_MAX_OUTPUT_TOKENS" "$REUSE_DPO_RUN_TAG" "$CUDA_DEVICES" "$TRAIN_DEVICE_MAP" "$TRAIN_MAX_MEMORY" "$EVAL_CUDA_DEVICES" "$EVAL_MAX_MEMORY" "$PIPELINE_MIN_FREE_GB" "$TRAIN_SAVE_TOTAL_LIMIT" "$DPO_INITIAL_SELECTION_POOL_COUNT" <<'PY'
 import datetime,hashlib,json,os,pathlib,sys
 path=pathlib.Path(sys.argv[1]); attempts=pathlib.Path(sys.argv[2]); fingerprint=sys.argv[3]
 configs=["configs/datasets/mathdial.yaml","configs/datasets/wildchat_tutoring.yaml","configs/evaluations/mathdial_oracle_v1.yaml","configs/training/mathdial_dpo.yaml","tools/mathdial_dataset.py","tools/prepare_mathdial.py","tools/prepare_mathdial_for_analysis.py","tools/analyze_mathdial_corpus_transition_bayes.py","tools/score_dialogue_with_transition_bayes_model.py","tools/prioritize_tutoring_candidates.py","tools/measure_basis_selection_pool.py","tools/translate_and_generate_dpo.py","tools/reuse_mathdial_dpo.py","tools/extract_high_posterior_dialogues.py","tools/mathdial_selection.py","tools/validate_mathdial_scoring_pilot.py","tools/validate_scoring_fallbacks.py","tools/reuse_mathdial_pipeline_data.py","tools/reuse_transition_scoring.py","tools/train_qwen35_dpo_lora.py","tools/mathdial_evaluation.py","tools/run_oracle_evaluation_lora_pair.py","core/oracle_eval_common.py","scripts/eval_oracle_mathdial.py","scripts/run_mathdial_statistics.py","scripts/run_mathdial_wildchat_pipeline.sh","scripts/run_mathdial_wildchat_watchdog.sh"]
-payload={"experiment_fingerprint":fingerprint,"run_tag":sys.argv[4],"seed":int(sys.argv[5]),"dry_run":sys.argv[6]=="1","models":{"analysis":sys.argv[7],"scoring":sys.argv[8],"generation":sys.argv[9],"judge":sys.argv[10],"local":sys.argv[11]},"early_stop":{"selection_pool_records":int(sys.argv[13]),"initial_wildchat_candidate_records":int(sys.argv[14]),"legacy_wildchat_scoring_records":int(sys.argv[15]),"scoring_pilot_records":int(sys.argv[21]),"adaptive_scoring":sys.argv[36]=="1","scoring_batch_records":int(sys.argv[37]),"wildchat_full_scan":sys.argv[38]=="1"},"basis_analysis":{"conversations":int(sys.argv[16]),"max_input_chars":int(sys.argv[17]),"max_output_tokens":int(sys.argv[18])},"scoring":{"preset":sys.argv[22],"preset_version":sys.argv[23],"invalid_observation_retries":int(sys.argv[24]),"repair_workers":int(sys.argv[34]),"repair_rounds":int(sys.argv[35])},"selection":{"label_derivation_method":sys.argv[25],"emission_margin":float(sys.argv[26]),"max_source_characters":int(sys.argv[39]),"length_policy":"exclude_whole_sample_without_truncating_history"},"dpo":{"max_output_tokens":int(sys.argv[40]),"rejected_candidates":8},"training":{"cuda_visible_devices":sys.argv[42],"device_map":sys.argv[43],"max_memory":sys.argv[44],"save_total_limit":int(sys.argv[48])},"evaluation":{"cuda_visible_devices":sys.argv[45],"max_memory":sys.argv[46]},"storage":{"minimum_free_gb":int(sys.argv[47])},"quality_gates":{"pilot_max_fallback_rate":float(sys.argv[19]),"max_scoring_invalid_rate":float(sys.argv[20]),"full_warning_fallback_rate":float(sys.argv[32]),"full_fatal_fallback_rate":float(sys.argv[33]),"model_emission_margin":float(sys.argv[27]),"minimum_negative_observations":int(sys.argv[28])},"reuse_data_run_tag":sys.argv[29],"reuse_basis_run_tag":sys.argv[30],"reuse_scoring_run_tag":sys.argv[31],"reuse_dpo_run_tag":sys.argv[41],"configs":{name:hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest() for name in configs}}
+payload={"experiment_fingerprint":fingerprint,"run_tag":sys.argv[4],"seed":int(sys.argv[5]),"dry_run":sys.argv[6]=="1","models":{"analysis":sys.argv[7],"scoring":sys.argv[8],"generation":sys.argv[9],"judge":sys.argv[10],"local":sys.argv[11]},"early_stop":{"selection_pool_records":int(sys.argv[13]),"initial_selection_pool_records":int(sys.argv[49]),"initial_wildchat_candidate_records":int(sys.argv[14]),"legacy_wildchat_scoring_records":int(sys.argv[15]),"scoring_pilot_records":int(sys.argv[21]),"adaptive_scoring":sys.argv[36]=="1","scoring_batch_records":int(sys.argv[37]),"wildchat_full_scan":sys.argv[38]=="1"},"basis_analysis":{"conversations":int(sys.argv[16]),"max_input_chars":int(sys.argv[17]),"max_output_tokens":int(sys.argv[18])},"scoring":{"preset":sys.argv[22],"preset_version":sys.argv[23],"invalid_observation_retries":int(sys.argv[24]),"repair_workers":int(sys.argv[34]),"repair_rounds":int(sys.argv[35])},"selection":{"label_derivation_method":sys.argv[25],"emission_margin":float(sys.argv[26]),"max_source_characters":int(sys.argv[39]),"length_policy":"exclude_whole_sample_without_truncating_history"},"dpo":{"max_output_tokens":int(sys.argv[40]),"rejected_candidates":8},"training":{"cuda_visible_devices":sys.argv[42],"device_map":sys.argv[43],"max_memory":sys.argv[44],"save_total_limit":int(sys.argv[48])},"evaluation":{"cuda_visible_devices":sys.argv[45],"max_memory":sys.argv[46]},"storage":{"minimum_free_gb":int(sys.argv[47])},"quality_gates":{"pilot_max_fallback_rate":float(sys.argv[19]),"max_scoring_invalid_rate":float(sys.argv[20]),"full_warning_fallback_rate":float(sys.argv[32]),"full_fatal_fallback_rate":float(sys.argv[33]),"model_emission_margin":float(sys.argv[27]),"minimum_negative_observations":int(sys.argv[28])},"reuse_data_run_tag":sys.argv[29],"reuse_basis_run_tag":sys.argv[30],"reuse_scoring_run_tag":sys.argv[31],"reuse_dpo_run_tag":sys.argv[41],"configs":{name:hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest() for name in configs}}
 if path.exists():
     current=json.loads(path.read_text())
     if current.get("experiment_fingerprint") != fingerprint:
@@ -185,6 +187,37 @@ if low:
 selected={device:free[device] for device in devices}
 print(f"[preflight] {label} GPU free_mib={selected} required_each={minimum}")
 PY
+}
+
+materialize_reused_scoring_for_extension() {
+  local path source temporary
+  for path in "$SCORED_RAW" "$SCORED"; do
+    [[ -L "$path" ]] || continue
+    source="$(readlink -f "$path")"
+    temporary="${path}.materializing"
+    rm -f "$temporary"
+    if ! cp --reflink=always --preserve=mode,timestamps "$source" "$temporary"; then
+      rm -f "$temporary"
+      echo "scoring再利用成果物をcopy-on-write cloneできません: $path" >&2
+      return 20
+    fi
+    mv "$temporary" "$path"
+    echo "[reuse scoring] extension clone created: $path"
+  done
+}
+
+reconcile_scoring_enrichment() {
+  local raw_count enriched_count
+  [[ -f "$SCORED" ]] || python3 -m tools.mathdial_pipeline_support enrich-score --input "$SCORED_RAW" --output "$SCORED" || return 20
+  raw_count="$(wc -l < "$SCORED_RAW")"
+  enriched_count="$(wc -l < "$SCORED")"
+  if [[ "$enriched_count" -gt "$raw_count" ]]; then
+    echo "enriched scoring件数がrawを超えています: enriched=$enriched_count raw=$raw_count" >&2
+    return 20
+  fi
+  if [[ "$enriched_count" -lt "$raw_count" ]]; then
+    python3 -m tools.mathdial_pipeline_support enrich-score --input "$SCORED_RAW" --output "$SCORED" --skip-records "$enriched_count" --append || return 20
+  fi
 }
 
 preflight_storage
@@ -419,18 +452,19 @@ score_wildchat_stage() {
     return 0
   fi
   if [[ "$ADAPTIVE_SCORING" == "1" ]]; then
-    local before_count after_count sufficient
+    local before_count after_count eligible_count sufficient
     while true; do
-      [[ -f "$SCORED" ]] || python3 -m tools.mathdial_pipeline_support enrich-score --input "$SCORED_RAW" --output "$SCORED"
+      reconcile_scoring_enrichment || return 20
       python3 -m tools.measure_basis_selection_pool --input "$SCORED" --bayes-model "$COMPAT_MODEL" --output "$pool_report" --history "$pool_history" --method "$SELECTION_LABEL_METHOD" --margin "$SELECTION_EMISSION_MARGIN" --required "$SELECTION_POOL_COUNT" --exclude-fallback-conversations --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS"
       sufficient="$(python3 -c 'import json,sys; print("1" if json.load(open(sys.argv[1]))["sufficient"] else "0")' "$pool_report")"
-      if [[ "$sufficient" == "1" ]]; then
+      eligible_count="$(python3 -c 'import json,sys; print(int(json.load(open(sys.argv[1]))["eligible_records"]))' "$pool_report")"
+      if [[ "$sufficient" == "1" || "$eligible_count" -ge "$DPO_INITIAL_SELECTION_POOL_COUNT" ]]; then
+        if [[ "$sufficient" != "1" ]]; then
+          echo "[selection pool] DPO先行試行へ進みます: eligible=$eligible_count initial_required=$DPO_INITIAL_SELECTION_POOL_COUNT final_cap=$SELECTION_POOL_COUNT"
+        fi
         break
       fi
-      if [[ -n "$REUSE_SCORING_RUN_TAG" && -L "$SCORED_RAW" ]]; then
-        echo "再利用済みscoringではclean選別候補が不足しています。再利用元を変更するか、新runで追加scoringしてください。" >&2
-        return 20
-      fi
+      materialize_reused_scoring_for_extension || return 20
       before_count="$(wc -l < "$SCORED_RAW")"
       retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-new-records "$SCORING_BATCH_RECORDS" --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" --fallback-on-errors
       after_count="$(wc -l < "$SCORED_RAW")"
@@ -448,9 +482,30 @@ score_wildchat_stage() {
 
 select_data_stage() {
   # DPO閾値落ちを見込み、最終採用数より大きい同数の比較候補プールを作る。
-  local count="$SELECTION_POOL_COUNT" random_count="$SELECTION_POOL_COUNT"
+  local count="$SELECTION_POOL_COUNT" random_count="$SELECTION_POOL_COUNT" eligible_count
+  if [[ "$DRY_RUN" != "1" && -f "$OUTPUT_ROOT/scoring/selection_pool_progress.json" ]]; then
+    eligible_count="$(python3 -c 'import json,sys; print(int(json.load(open(sys.argv[1]))["eligible_records"]))' "$OUTPUT_ROOT/scoring/selection_pool_progress.json")"
+    (( eligible_count < count )) && count="$eligible_count"
+    random_count="$count"
+  fi
   [[ "$DRY_RUN" == "1" ]] && { count=4; random_count=6; }
+  [[ "$count" -ge 2500 || "$DRY_RUN" == "1" ]] || { echo "DPO比較群を作る候補が不足しています: $count/2500" >&2; return 20; }
+  echo "[select_data] comparison pool count=$count"
   python3 -m tools.mathdial_selection --scored "$SCORED" --mathdial-conversations "$MATH_CONV" --bayes-model "$COMPAT_MODEL" --output-dir "$SELECT_DIR" --count "$count" --random-count "$random_count" --seed "$SEED" --label-derivation-method "$SELECTION_LABEL_METHOD" --selection-margin "$SELECTION_EMISSION_MARGIN" --exclude-fallback-conversations --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS" || return 20
+}
+
+extend_scoring_and_selection_once() {
+  local before_count after_count
+  materialize_reused_scoring_for_extension || return 20
+  reconcile_scoring_enrichment || return 20
+  before_count="$(wc -l < "$SCORED_RAW")"
+  retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$OUTPUT_ROOT/scoring/prioritized_candidates.jsonl" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-new-records "$SCORING_BATCH_RECORDS" --scoring-preset "$SCORING_PRESET" --invalid-observation-retries "$INVALID_OBSERVATION_RETRIES" --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" --fallback-on-errors || return 20
+  after_count="$(wc -l < "$SCORED_RAW")"
+  [[ "$after_count" -gt "$before_count" ]] || { echo "追加scoring可能なWildChat候補がありません。" >&2; return 20; }
+  reconcile_scoring_enrichment || return 20
+  python3 -m tools.measure_basis_selection_pool --input "$SCORED" --bayes-model "$COMPAT_MODEL" --output "$OUTPUT_ROOT/scoring/selection_pool_progress.json" --history "$OUTPUT_ROOT/scoring/selection_pool_history.jsonl" --method "$SELECTION_LABEL_METHOD" --margin "$SELECTION_EMISSION_MARGIN" --required "$SELECTION_POOL_COUNT" --exclude-fallback-conversations --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS" || return 20
+  rm -f "$STATE_DIR/score_wildchat_SUCCESS.json" "$STATE_DIR/select_data_SUCCESS.json"
+  select_data_stage || return 20
 }
 
 build_dpo_stage() {
@@ -463,7 +518,7 @@ build_dpo_stage() {
     python3 -m tools.mathdial_pipeline_support mock-dpo --input "$DPO_DIR/gold_candidates_en.jsonl" --output "$DPO_DIR/mathdial_gold_ja.jsonl" --count "$gold_count" --source-dataset MathDial --gold
     python3 -m tools.mathdial_pipeline_support mock-dpo --input "$SELECT_DIR/domain_random.jsonl" --output "$DPO_DIR/random_ja.jsonl" --count "$random_count" --source-dataset WildChat-Random
   else
-    if [[ -n "$REUSE_DPO_ROOT" ]]; then
+    if [[ -n "$REUSE_DPO_ROOT" && ! -f "$DPO_DIR/basis_selected_ja.jsonl" ]]; then
       [[ -f "$REUSE_DPO_ROOT/dpo/basis_selected_ja.jsonl" ]] || {
         echo "DPO再利用元の採択済み出力がありません: $REUSE_DPO_ROOT/dpo/basis_selected_ja.jsonl" >&2
         return 20
@@ -484,7 +539,19 @@ build_dpo_stage() {
         --min-chosen-posterior 0.70 \
         --max-rejected-posterior 0.55 || return 20
     fi
-    retry_command python3 -m tools.translate_and_generate_dpo --input "$SELECT_DIR/basis_top.jsonl" --bayes-model "$COMPAT_MODEL" --output "$DPO_DIR/basis_selected_ja.jsonl" --model "$GENERATION_MODEL" --score-model "$SCORING_MODEL" --style-preset mathdial_tutoring --candidates 8 --max-output-tokens "$DPO_MAX_OUTPUT_TOKENS" --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS" --min-score-gap 0.20 --min-chosen-posterior 0.70 --max-rejected-posterior 0.55 --target-records "$basis_count" --workers "$WORKERS" --skip-sample-errors --heartbeat-file "$HEARTBEAT_FILE" --heartbeat-stage-prefix basis_dpo --seed "$SEED" || return 20
+    while true; do
+      retry_command python3 -m tools.translate_and_generate_dpo --input "$SELECT_DIR/basis_top.jsonl" --bayes-model "$COMPAT_MODEL" --output "$DPO_DIR/basis_selected_ja.jsonl" --model "$GENERATION_MODEL" --score-model "$SCORING_MODEL" --style-preset mathdial_tutoring --candidates 8 --max-output-tokens "$DPO_MAX_OUTPUT_TOKENS" --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS" --min-score-gap 0.20 --min-chosen-posterior 0.70 --max-rejected-posterior 0.55 --target-records "$basis_count" --workers "$WORKERS" --skip-sample-errors --allow-target-shortfall --heartbeat-file "$HEARTBEAT_FILE" --heartbeat-stage-prefix basis_dpo --seed "$SEED" || return 20
+      local accepted_count eligible_count
+      accepted_count="$(wc -l < "$DPO_DIR/basis_selected_ja.jsonl")"
+      [[ "$accepted_count" -ge "$basis_count" ]] && break
+      eligible_count="$(python3 -c 'import json,sys; print(int(json.load(open(sys.argv[1]))["eligible_records"]))' "$OUTPUT_ROOT/scoring/selection_pool_progress.json")"
+      if [[ "$eligible_count" -ge "$SELECTION_POOL_COUNT" ]]; then
+        echo "clean候補${eligible_count}件を処理してもBASiS DPOが不足しています: accepted=$accepted_count/$basis_count" >&2
+        return 20
+      fi
+      echo "[build_dpo] accepted=$accepted_count/$basis_count; WildChat scoringを${SCORING_BATCH_RECORDS}件追加します。"
+      extend_scoring_and_selection_once || return 20
+    done
     retry_command python3 -m tools.translate_and_generate_dpo --input "$DPO_DIR/gold_candidates_en.jsonl" --bayes-model "$COMPAT_MODEL" --output "$DPO_DIR/mathdial_gold_ja.jsonl" --model "$GENERATION_MODEL" --score-model "$SCORING_MODEL" --style-preset mathdial_tutoring --candidates 8 --max-output-tokens "$DPO_MAX_OUTPUT_TOKENS" --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS" --min-score-gap 0.20 --min-chosen-posterior 0.70 --max-rejected-posterior 0.55 --target-records "$gold_count" --workers "$WORKERS" --skip-sample-errors --heartbeat-file "$HEARTBEAT_FILE" --heartbeat-stage-prefix gold_dpo --seed "$SEED" || return 20
     retry_command python3 -m tools.build_random_dailydialog_dpo --input "$SELECT_DIR/domain_random.jsonl" --source-dataset WildChat --prompt-preset mathdial_tutoring --output "$DPO_DIR/random_ja.jsonl" --daily-output "$DPO_DIR/random_ja.jsonl" --target-records "$random_count" --candidates 8 --max-output-tokens "$DPO_MAX_OUTPUT_TOKENS" --model "$GENERATION_MODEL" --workers "$WORKERS" --skip-sample-errors --heartbeat-file "$HEARTBEAT_FILE" --seed "$SEED" || return 20
   fi

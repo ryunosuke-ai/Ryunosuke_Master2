@@ -21,7 +21,7 @@ from scripts.eval_oracle_mathdial import GENERAL, PEDAGOGICAL
 from scripts.run_mathdial_statistics import analyze
 from tools.mathdial_evaluation import blind_oracle_rows, select_test_prompts, validate_translation
 from tools.mathdial_features import normalize_extraction_payload, quality_metrics, validate_with_llm
-from tools.mathdial_pipeline_support import mock_dpo, mock_score
+from tools.mathdial_pipeline_support import enrich_score_file, mock_dpo, mock_score
 from tools.mathdial_selection import mmr_select, select_groups
 from tools.prepare_mathdial_for_analysis import (
     select_analysis_conversations,
@@ -588,6 +588,37 @@ def test_statistics_runs_friedman_and_conditional_posthoc():
 def test_shell_scripts_have_valid_syntax():
     for script in ("scripts/run_mathdial_wildchat_pipeline.sh", "scripts/run_mathdial_wildchat_dry_run.sh", "scripts/run_mathdial_wildchat_watchdog.sh"):
         subprocess.run(["bash", "-n", str(ROOT / script)], check=True)
+
+
+def test_enrich_score_file_appends_only_missing_raw_records(tmp_path: Path):
+    source = tmp_path / "raw.jsonl"
+    output = tmp_path / "enriched.jsonl"
+    rows = [
+        {
+            "conversation_id": f"c{index}",
+            "turn_index": index,
+            "posterior": 0.8,
+            "prior": 0.5,
+            "observation_score": 0.7,
+            "delta": 0.3,
+            "observation": "diagnostic_probe",
+            "state_posteriors": {"repair": 0.8},
+            "most_likely_state": "repair",
+        }
+        for index in range(3)
+    ]
+    source.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+    )
+
+    assert enrich_score_file(source, output, skip_records=0, append=False) == 3
+    with source.open("a", encoding="utf-8") as file:
+        file.write(json.dumps({**rows[-1], "conversation_id": "c3", "turn_index": 3}) + "\n")
+    assert enrich_score_file(source, output, skip_records=3, append=True) == 1
+
+    enriched = [json.loads(line) for line in output.open(encoding="utf-8")]
+    assert len(enriched) == 4
+    assert enriched[-1]["basis_score"] == 0.8
 
 
 def test_watchdog_terminates_stall_and_restarts(tmp_path):

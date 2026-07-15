@@ -139,6 +139,11 @@ def parse_args() -> argparse.Namespace:
         help="完全なprompt+responseの最大文字数。超過サンプルはAPI呼び出し前に除外します。",
     )
     parser.add_argument("--target-records", type=int, default=None, help="accepted DPO件数の目標。達したら処理を終了します。")
+    parser.add_argument(
+        "--allow-target-shortfall",
+        action="store_true",
+        help="入力を処理し切って目標未達でも部分成果物を保存して正常終了します。候補追加型pipeline専用です。",
+    )
     parser.add_argument("--workers", type=int, default=1, help="サンプル単位で並列生成するworker数。1なら逐次処理。")
     parser.add_argument(
         "--skip-sample-errors",
@@ -1288,10 +1293,20 @@ def main() -> int:
         heartbeat_stage_prefix=args.heartbeat_stage_prefix,
         max_source_characters=args.max_source_characters,
     )
-    if args.target_records is not None and len(dpo_records) < args.target_records:
+    if (
+        args.target_records is not None
+        and len(dpo_records) < args.target_records
+        and not args.allow_target_shortfall
+    ):
         raise RuntimeError(
             f"DPO採用件数がtarget_recordsへ届きませんでした: "
             f"accepted={len(dpo_records)}, target={args.target_records}"
+        )
+    if args.target_records is not None and len(dpo_records) < args.target_records:
+        print(
+            "[STEP 5/6] target shortfall retained for candidate expansion: "
+            f"accepted={len(dpo_records)} target={args.target_records}",
+            flush=True,
         )
     write_jsonl(dpo_records, args.output)
     manifest_path = Path(args.output).with_suffix(".manifest.json")
