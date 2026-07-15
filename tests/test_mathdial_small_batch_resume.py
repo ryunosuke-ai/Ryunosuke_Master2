@@ -59,11 +59,18 @@ def test_small_batch_resume_records_auditable_amendment(tmp_path: Path):
     amendments = [json.loads(line) for line in amendment_path.open(encoding="utf-8")]
     assert len(amendments) == 1
     amendment = amendments[0]
-    assert amendment["amendment_id"] == "clean_fallback_v1:fixture-fingerprint:3000"
+    assert amendment["amendment_id"] == (
+        "length_bounded_v1:fixture-fingerprint:3000:16000:6144"
+    )
     assert amendment["experiment_fingerprint"] == "fixture-fingerprint"
     assert amendment["original_scoring_batch_records"] == 20000
     assert amendment["continued_scoring_batch_records"] == 3000
     assert amendment["selection_pool_records"] == 5000
+    assert amendment["length_eligibility"] == {
+        "max_source_characters": 16000,
+        "policy": "exclude_whole_sample_without_truncating_history",
+    }
+    assert amendment["dpo_max_output_tokens"] == 6144
     assert amendment["starting_scored_records"] == 1
     assert amendment["mandatory_fallback_repair"] is False
     assert amendment["exclude_fallback_conversations_from_basis"] is True

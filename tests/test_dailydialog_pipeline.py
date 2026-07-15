@@ -879,6 +879,39 @@ def test_build_dpo_records_stops_at_target_records(tmp_path: Path):
     assert len(generator.calls) == 4
 
 
+def test_build_dpo_records_excludes_long_source_before_api(tmp_path: Path):
+    payload = make_transition_payload()
+    model_path = tmp_path / "transition_model.json"
+    model_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    generator = StubGenerator([])
+    records = build_dpo_records(
+        [
+            {
+                "conversation_id": "long",
+                "turn_index": 2,
+                "prompt": "x" * 200,
+                "response": "response",
+                "metadata": {"source_dataset": "DailyDialog"},
+            }
+        ],
+        bayes_model=parse_transition_bayes_model(payload),
+        bayes_model_path=model_path,
+        generator=generator,
+        model="gpt-5.4",
+        score_model="gpt-5.4",
+        max_output_tokens=512,
+        candidates=2,
+        min_score_gap=0.0,
+        min_chosen_posterior=0.0,
+        max_rejected_posterior=1.0,
+        seed=42,
+        max_records=None,
+        max_source_characters=100,
+    )
+    assert records == []
+    assert generator.calls == []
+
+
 def test_stream_dpo_from_existing_scored_rows_generates_without_rescoring(tmp_path: Path):
     payload = make_transition_payload()
     model_path = tmp_path / "transition_model.json"

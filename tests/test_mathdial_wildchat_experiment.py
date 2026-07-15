@@ -361,6 +361,42 @@ def test_selection_builds_three_groups_with_esconv_selector():
     assert {key: len(value) for key, value in groups.items()} == {"domain_random": 4, "topic_similarity_top": 3, "basis_top": 3}
 
 
+def test_selection_excludes_long_samples_without_truncating_history():
+    short = [
+        {
+            "sample_id": f"short-{index}",
+            "conversation_id": f"short-c{index}",
+            "turn_index": 1,
+            "prompt": "learn math",
+            "response": f"response {index}",
+            "metadata": {"context_turns": 3},
+        }
+        for index in range(6)
+    ]
+    long_record = {
+        "sample_id": "long",
+        "conversation_id": "long-c",
+        "turn_index": 1,
+        "prompt": "x" * 200,
+        "response": "response",
+        "metadata": {"context_turns": 20},
+    }
+    groups = select_groups(
+        mock_score(short + [long_record]),
+        [{"split": "train", "metadata": {"question": "math equation"}}],
+        count=3,
+        random_count=4,
+        seed=42,
+        max_source_characters=100,
+    )
+    assert all(
+        row["sample_id"] != "long"
+        for rows in groups.values()
+        for row in rows
+    )
+    assert all(row["prompt"] == "learn math" for rows in groups.values() for row in rows)
+
+
 def test_optimized_mmr_matches_reference_selection():
     rows = [
         {

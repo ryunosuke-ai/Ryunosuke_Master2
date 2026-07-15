@@ -20,6 +20,25 @@ from tools.extract_high_posterior_dialogues import (
 from tools.wildchat_tutoring import tokenize
 
 
+def source_text_characters(row: dict[str, Any]) -> int:
+    """完全なpromptとresponseの文字数を返す。履歴自体は切り詰めない。"""
+    return len(str(row.get("prompt", ""))) + len(str(row.get("response", "")))
+
+
+def length_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """選別群の入力長を再現性レポート用に要約する。"""
+    lengths = sorted(source_text_characters(row) for row in rows)
+    if not lengths:
+        return {"records": 0, "mean": 0.0, "median": 0, "p90": 0, "maximum": 0}
+    return {
+        "records": len(lengths),
+        "mean": sum(lengths) / len(lengths),
+        "median": lengths[len(lengths) // 2],
+        "p90": lengths[min(len(lengths) - 1, int(len(lengths) * 0.9))],
+        "maximum": lengths[-1],
+    }
+
+
 def read_jsonl(path: Path | str) -> list[dict[str, Any]]:
     return [json.loads(line) for line in Path(path).open(encoding="utf-8") if line.strip()]
 
@@ -104,6 +123,7 @@ def select_groups(
     label_derivation_method: str = "state_specific_margin",
     selection_margin: float = 0.05,
     exclude_fallback_conversations: bool = False,
+    max_source_characters: int | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """既存posterior抽出を用いて3比較群を作る。"""
     deduped = {}
@@ -111,7 +131,7 @@ def select_groups(
         key = (row["conversation_id"], row["turn_index"])
         if key not in deduped or float(row.get("posterior", 0.0)) > float(deduped[key].get("posterior", 0.0)):
             deduped[key] = row
-    pool = sorted(
+    unbounded_pool = sorted(
         deduped.values(),
         key=lambda row: (
             str(row.get("conversation_id", "")),
@@ -119,6 +139,12 @@ def select_groups(
             str(row.get("sample_id", "")),
         ),
     )
+    pool = [
+        row
+        for row in unbounded_pool
+        if max_source_characters is None
+        or source_text_characters(row) <= max_source_characters
+    ]
     fallback_conversations = {
         str(row.get("conversation_id", ""))
         for row in scored
@@ -202,6 +228,12 @@ def main() -> int:
         action="store_true",
         help="fallbackを含む会話全体をBASiS選別から除外します。",
     )
+    parser.add_argument(
+        "--max-source-characters",
+        type=int,
+        default=None,
+        help="完全なprompt+responseの最大文字数。超過会話は切らずに選別対象外とします。",
+    )
     args = parser.parse_args()
     scored = read_jsonl(args.scored)
     groups = select_groups(
@@ -211,6 +243,7 @@ def main() -> int:
         label_derivation_method=args.label_derivation_method,
         selection_margin=args.selection_margin,
         exclude_fallback_conversations=args.exclude_fallback_conversations,
+        max_source_characters=args.max_source_characters,
     )
     shortages = {
         name: (len(rows), args.random_count if name == "domain_random" else args.count)
@@ -236,6 +269,16 @@ def main() -> int:
             str(row.get("conversation_id", "")) in fallback_conversations
             for row in groups["basis_top"]
         ),
+        "max_source_characters": args.max_source_characters,
+        "length_filter_policy": "exclude_whole_sample_without_truncating_history",
+        "scored_records_over_length_limit": sum(
+            args.max_source_characters is not None
+            and source_text_characters(row) > args.max_source_characters
+            for row in scored
+        ),
+    }
+    report["source_length_characters"] = {
+        name: length_summary(rows) for name, rows in groups.items()
     }
     report["label_derivation"] = derive_selection_label_diagnostics(
         load_transition_bayes_model(args.bayes_model),

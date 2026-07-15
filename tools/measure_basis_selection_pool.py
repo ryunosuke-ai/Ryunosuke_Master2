@@ -12,6 +12,7 @@ from tools.extract_high_posterior_dialogues import (
     derive_selection_labels_from_model,
     select_high_posterior_records,
 )
+from tools.mathdial_selection import source_text_characters
 
 
 def measure_pool(
@@ -22,6 +23,7 @@ def measure_pool(
     margin: float,
     per_dialogue_limit: int = 3,
     exclude_fallback_conversations: bool = False,
+    max_source_characters: int | None = None,
 ) -> dict:
     model = load_transition_bayes_model(model_path)
     labels = derive_selection_labels_from_model(
@@ -50,11 +52,17 @@ def measure_pool(
             require_preferred=True,
         )
 
-    selected_before_exclusion = select(scored)
+    length_eligible = [
+        row
+        for row in scored
+        if max_source_characters is None
+        or source_text_characters(row) <= max_source_characters
+    ]
+    selected_before_exclusion = select(length_eligible)
     if exclude_fallback_conversations:
         eligible_input = [
             row
-            for row in scored
+            for row in length_eligible
             if str(row.get("conversation_id", "")) not in fallback_conversations
         ]
         selected = select(eligible_input)
@@ -77,6 +85,9 @@ def measure_pool(
         "fallback_conversations": len(fallback_conversations),
         "excluded_eligible_records": len(selected_before_exclusion) - len(selected),
         "exclude_fallback_conversations": exclude_fallback_conversations,
+        "max_source_characters": max_source_characters,
+        "length_filter_policy": "exclude_whole_sample_without_truncating_history",
+        "records_over_length_limit": len(scored) - len(length_eligible),
         "label_derivation": labels,
     }
 
@@ -90,6 +101,12 @@ def main() -> int:
         "--method",
         choices=("mean_difference", "state_specific_margin"),
         default="state_specific_margin",
+    )
+    parser.add_argument(
+        "--max-source-characters",
+        type=int,
+        default=None,
+        help="完全なprompt+responseの最大文字数。超過サンプルは候補数に含めません。",
     )
     parser.add_argument("--margin", type=float, default=0.05)
     parser.add_argument("--required", type=int, default=0)
@@ -111,6 +128,7 @@ def main() -> int:
         method=args.method,
         margin=args.margin,
         exclude_fallback_conversations=args.exclude_fallback_conversations,
+        max_source_characters=args.max_source_characters,
     )
     report["required_records"] = args.required
     report["sufficient"] = report["eligible_records"] >= args.required
@@ -146,6 +164,7 @@ def main() -> int:
         "[selection pool] "
         f"eligible={report['eligible_records']}/{args.required} "
         f"scored={report['scored_records']} "
+        f"over_length={report['records_over_length_limit']} "
         f"excluded_fallback_conversations={report['fallback_conversations'] if args.exclude_fallback_conversations else 0}",
         flush=True,
     )

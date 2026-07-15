@@ -75,6 +75,7 @@ class DpoGenerationStats:
     skipped_content_filter_generation: int = 0
     skipped_invalid_generation: int = 0
     skipped_sample_error: int = 0
+    skipped_source_too_long: int = 0
 
     def as_dict(self) -> dict[str, int]:
         """JSONへ書けるdictに変換する。"""
@@ -88,6 +89,7 @@ class DpoGenerationStats:
             "skipped_content_filter_generation": self.skipped_content_filter_generation,
             "skipped_invalid_generation": self.skipped_invalid_generation,
             "skipped_sample_error": self.skipped_sample_error,
+            "skipped_source_too_long": self.skipped_source_too_long,
         }
 
 
@@ -130,6 +132,12 @@ def parse_args() -> argparse.Namespace:
         help="rejected上限を緩める場合に必要なscore_gap下限。未指定なら救済条件を使いません。",
     )
     parser.add_argument("--max-records", type=int, default=None, help="処理件数の上限。")
+    parser.add_argument(
+        "--max-source-characters",
+        type=int,
+        default=None,
+        help="完全なprompt+responseの最大文字数。超過サンプルはAPI呼び出し前に除外します。",
+    )
     parser.add_argument("--target-records", type=int, default=None, help="accepted DPO件数の目標。達したら処理を終了します。")
     parser.add_argument("--workers", type=int, default=1, help="サンプル単位で並列生成するworker数。1なら逐次処理。")
     parser.add_argument(
@@ -863,6 +871,7 @@ def build_dpo_records(
     stats: DpoGenerationStats | None = None,
     heartbeat_path: Path | str | None = None,
     heartbeat_stage_prefix: str = "dpo_generation",
+    max_source_characters: int | None = None,
 ) -> list[dict[str, Any]]:
     """抽出済み英語レコードから日本語DPOレコードを作る。"""
     dpo_records: list[dict[str, Any]] = list(existing_records or [])
@@ -872,6 +881,28 @@ def build_dpo_records(
     instructions = build_translation_rejected_instructions(bayes_model, style_preset=style_preset)
     model_version = bayes_model_version(bayes_model_path)
     source_records = selected_records[:max_records] if max_records is not None else selected_records
+    over_length_records = [
+        record
+        for record in source_records
+        if max_source_characters is not None
+        and len(str(record.get("prompt", ""))) + len(str(record.get("response", "")))
+        > max_source_characters
+    ]
+    if over_length_records:
+        print(
+            f"[STEP 5/6] exclude over-length sources before API: "
+            f"count={len(over_length_records)} max_source_characters={max_source_characters}",
+            flush=True,
+        )
+        if stats is not None:
+            stats.skipped_source_too_long += len(over_length_records)
+    source_records = [
+        record
+        for record in source_records
+        if max_source_characters is None
+        or len(str(record.get("prompt", ""))) + len(str(record.get("response", "")))
+        <= max_source_characters
+    ]
     done_keys = {dpo_record_key(record) for record in dpo_records}
     promoted_from_skipped = 0
     for skipped_record in skipped_records:
@@ -1188,6 +1219,7 @@ def build_dpo_records(
                 f"skip content_filter generation: {skipped_content_filter_generation}",
                 f"skip invalid generation: {skipped_invalid_generation}",
                 f"skip sample error: {skipped_sample_error}",
+                f"skip source too long before API: {len(over_length_records)}",
             ],
             risks=[
                 "content_filter_generationは該当サンプルをDPOデータから除外するため、件数不足時は候補数を増やす必要がある。",
@@ -1254,6 +1286,7 @@ def main() -> int:
         stats=stats,
         heartbeat_path=args.heartbeat_file,
         heartbeat_stage_prefix=args.heartbeat_stage_prefix,
+        max_source_characters=args.max_source_characters,
     )
     if args.target_records is not None and len(dpo_records) < args.target_records:
         raise RuntimeError(
@@ -1283,6 +1316,9 @@ def main() -> int:
             "gap_rescue_max_rejected_posterior": args.gap_rescue_max_rejected_posterior,
             "gap_rescue_min_score_gap": args.gap_rescue_min_score_gap,
             "generation_stats": stats.as_dict(),
+            "max_output_tokens": args.max_output_tokens,
+            "max_source_characters": args.max_source_characters,
+            "source_length_policy": "exclude_whole_sample_without_truncating_history",
             "workers": max(1, args.workers),
             "target_records": args.target_records,
             "records_written": len(dpo_records),

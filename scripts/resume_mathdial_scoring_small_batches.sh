@@ -16,6 +16,8 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-artifacts/mathdial_wildchat/runs/${RUN_TAG}}"
 SCORING_BATCH_RECORDS="${SCORING_BATCH_RECORDS:-3000}"
 ORIGINAL_SCORING_BATCH_RECORDS="${ORIGINAL_SCORING_BATCH_RECORDS:-20000}"
 SELECTION_POOL_COUNT="${SELECTION_POOL_COUNT:-5000}"
+DPO_MAX_SOURCE_CHARACTERS="${DPO_MAX_SOURCE_CHARACTERS:-16000}"
+DPO_MAX_OUTPUT_TOKENS="${DPO_MAX_OUTPUT_TOKENS:-6144}"
 WORKERS="${WORKERS:-4}"
 SCORING_REPAIR_WORKERS="${SCORING_REPAIR_WORKERS:-4}"
 SCORING_REPAIR_ROUNDS="${SCORING_REPAIR_ROUNDS:-2}"
@@ -36,6 +38,8 @@ CONTINUATION_END_STAGE="${CONTINUATION_END_STAGE:-build_dpo}"
 MAIN_PIPELINE="${MATHDIAL_MAIN_PIPELINE_SCRIPT:-$PROJECT_ROOT/scripts/run_mathdial_wildchat_pipeline.sh}"
 
 [[ "$SCORING_BATCH_RECORDS" -gt 0 ]] || { echo "SCORING_BATCH_RECORDSは正数にしてください。" >&2; exit 20; }
+[[ "$DPO_MAX_SOURCE_CHARACTERS" -gt 0 ]] || { echo "DPO_MAX_SOURCE_CHARACTERSは正数にしてください。" >&2; exit 20; }
+[[ "$DPO_MAX_OUTPUT_TOKENS" -gt 0 ]] || { echo "DPO_MAX_OUTPUT_TOKENSは正数にしてください。" >&2; exit 20; }
 [[ "$SCORING_BATCH_RECORDS" -lt "$ORIGINAL_SCORING_BATCH_RECORDS" ]] || {
   echo "小batch再開ではSCORING_BATCH_RECORDSを元のbatchより小さくしてください。" >&2
   exit 20
@@ -61,7 +65,8 @@ done
 # 元runの研究条件は変更せず、batch幅だけを運用上のamendmentとして追跡する。
 python3 - "$OUTPUT_ROOT/run_metadata.json" "$RUN_TAG" "$SCORING_MODEL" \
   "$SCORING_PRESET" "$ORIGINAL_SCORING_BATCH_RECORDS" "$SCORING_BATCH_RECORDS" \
-  "$SELECTION_POOL_COUNT" "$RAW" "$AMENDMENTS" <<'PY'
+  "$SELECTION_POOL_COUNT" "$RAW" "$AMENDMENTS" "$DPO_MAX_SOURCE_CHARACTERS" \
+  "$DPO_MAX_OUTPUT_TOKENS" <<'PY'
 import datetime
 import json
 import os
@@ -86,7 +91,10 @@ raw = pathlib.Path(sys.argv[8])
 with raw.open(encoding="utf-8", errors="strict") as file:
     records = sum(bool(line.strip()) for line in file)
 payload = {
-    "amendment_id": f"clean_fallback_v1:{metadata['experiment_fingerprint']}:{sys.argv[6]}",
+    "amendment_id": (
+        f"length_bounded_v1:{metadata['experiment_fingerprint']}:"
+        f"{sys.argv[6]}:{sys.argv[10]}:{sys.argv[11]}"
+    ),
     "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "experiment_fingerprint": metadata["experiment_fingerprint"],
     "reason": "fallback会話をBASiS対象外にし、clean候補を小batchで必要数まで追加評価",
@@ -105,6 +113,11 @@ payload = {
         "initial_backoff_seconds": float(os.environ["SCORING_RATE_LIMIT_BACKOFF_SECONDS"]),
     },
     "selection": metadata.get("selection", {}),
+    "length_eligibility": {
+        "max_source_characters": int(sys.argv[10]),
+        "policy": "exclude_whole_sample_without_truncating_history",
+    },
+    "dpo_max_output_tokens": int(sys.argv[11]),
 }
 amendments = pathlib.Path(sys.argv[9])
 amendments.parent.mkdir(parents=True, exist_ok=True)
@@ -155,7 +168,8 @@ while true; do
     --method "$SELECTION_LABEL_METHOD" \
     --margin "$SELECTION_EMISSION_MARGIN" \
     --required "$SELECTION_POOL_COUNT" \
-    --exclude-fallback-conversations
+    --exclude-fallback-conversations \
+    --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS"
   sufficient="$(python3 -c 'import json,sys; print("1" if json.load(open(sys.argv[1]))["sufficient"] else "0")' "$POOL_REPORT")"
   if [[ "$sufficient" == "1" ]]; then
     break
@@ -237,6 +251,8 @@ env \
   END_STAGE="$CONTINUATION_END_STAGE" \
   SCORING_BATCH_RECORDS="$ORIGINAL_SCORING_BATCH_RECORDS" \
   WORKERS="$WORKERS" \
+  DPO_MAX_SOURCE_CHARACTERS="$DPO_MAX_SOURCE_CHARACTERS" \
+  DPO_MAX_OUTPUT_TOKENS="$DPO_MAX_OUTPUT_TOKENS" \
   SCORING_REPAIR_WORKERS="$SCORING_REPAIR_WORKERS" \
   ALLOW_CLEAN_FALLBACK_CONTINUATION=1 \
   OPERATIONAL_FINGERPRINT_OVERRIDE="$ORIGINAL_FINGERPRINT" \

@@ -299,6 +299,45 @@ def test_clean_selection_pool_excludes_whole_fallback_conversation(tmp_path: Pat
     assert report["fallback_conversations"] == 1
 
 
+def test_selection_pool_counts_only_complete_histories_within_length_limit(
+    tmp_path: Path,
+):
+    model_path = tmp_path / "model.json"
+    model_path.write_text(json.dumps(mock_model()), encoding="utf-8")
+    rows = [
+        {
+            "conversation_id": "short",
+            "turn_index": 0,
+            "prompt": "question",
+            "response": "hint",
+            "observation": "elicit_reasoning",
+            "most_likely_state": "active_diagnosis",
+            "posterior": 0.8,
+        },
+        {
+            "conversation_id": "long",
+            "turn_index": 0,
+            "prompt": "x" * 200,
+            "response": "hint",
+            "observation": "elicit_reasoning",
+            "most_likely_state": "active_diagnosis",
+            "posterior": 0.8,
+        },
+    ]
+    report = measure_pool(
+        rows,
+        model_path=model_path,
+        method="state_specific_margin",
+        margin=0.05,
+        max_source_characters=100,
+    )
+    assert report["eligible_records"] == 1
+    assert report["records_over_length_limit"] == 1
+    assert report["length_filter_policy"] == (
+        "exclude_whole_sample_without_truncating_history"
+    )
+
+
 def test_full_fallback_gate_warns_before_fatal():
     records = [{"conversation_id": f"c{i}"} for i in range(100)]
     for index in range(3):
@@ -529,8 +568,12 @@ def test_reuse_complete_scoring_validates_candidates_and_pilot(tmp_path: Path):
     ]
     for root in (source, target):
         (root / "wildchat").mkdir(parents=True)
+        (root / "scoring").mkdir(parents=True)
         (root / "basis_model").mkdir(parents=True)
         (root / "wildchat/general_tutoring_candidates.jsonl").write_text(
+            "".join(json.dumps(row) + "\n" for row in candidates), encoding="utf-8"
+        )
+        (root / "scoring/prioritized_candidates.jsonl").write_text(
             "".join(json.dumps(row) + "\n" for row in candidates), encoding="utf-8"
         )
         (root / "basis_model/mathdial_transition_compat.json").write_text(
@@ -548,14 +591,13 @@ def test_reuse_complete_scoring_validates_candidates_and_pilot(tmp_path: Path):
             ),
             encoding="utf-8",
         )
-    (source / "scoring").mkdir()
     (source / "scoring/wildchat_scored_raw.jsonl").write_text(
         "".join(json.dumps(row) + "\n" for row in scored), encoding="utf-8"
     )
     (source / "scoring/pilot_diagnostics.json").write_text(
         json.dumps({"passed": True, "records": 3}), encoding="utf-8"
     )
-    with (target / "wildchat/general_tutoring_candidates.jsonl").open(
+    with (target / "scoring/prioritized_candidates.jsonl").open(
         "a", encoding="utf-8"
     ) as file:
         file.write(
@@ -573,7 +615,7 @@ def test_reuse_complete_scoring_validates_candidates_and_pilot(tmp_path: Path):
     report = validate_and_reuse_scoring(
         source_root=source,
         target_root=target,
-        expected_records=3,
+        expected_records=None,
     )
     assert report["records"] == 3
     assert (target / "scoring/wildchat_scored_raw.jsonl").exists()

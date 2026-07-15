@@ -43,9 +43,11 @@ def validate_and_reuse_scoring(
             target_value = target_value.get(key) if isinstance(target_value, dict) else None
         if source_value != target_value:
             raise ValueError(f"scoring再利用元と再利用先の実験条件が一致しません: {'.'.join(path)}")
-    relative_input = Path("wildchat/general_tutoring_candidates.jsonl")
+    # scoringは粗候補を優先順位付けしたJSONLを入力にするため、その実入力を照合する。
+    relative_input = Path("scoring/prioritized_candidates.jsonl")
     relative_model = Path("basis_model/mathdial_transition_compat.json")
     relative_scored = Path("scoring/wildchat_scored_raw.jsonl")
+    source_scored = source_root / relative_scored
     source_model = source_root / relative_model
     target_model = target_root / relative_model
     if not source_model.is_file() or not target_model.is_file() or sha256(source_model) != sha256(target_model):
@@ -53,6 +55,11 @@ def validate_and_reuse_scoring(
     if expected_records is None:
         expected_records = int(
             source_metadata.get("early_stop", {}).get("wildchat_scoring_records", 0)
+        )
+    if expected_records <= 0 and source_scored.is_file():
+        expected_records = sum(
+            bool(line.strip())
+            for line in source_scored.open(encoding="utf-8")
         )
     if expected_records <= 0:
         raise ValueError("再利用するscoring期待件数を決定できません。")
@@ -79,7 +86,6 @@ def validate_and_reuse_scoring(
             for field in ("prompt", "response")
         ):
             raise ValueError("scoring再利用元と再利用先の候補prefixが一致しません。")
-    source_scored = source_root / relative_scored
     pilot_report_path = source_root / "scoring/pilot_diagnostics.json"
     pilot_report = json.loads(pilot_report_path.read_text(encoding="utf-8"))
     if not isinstance(pilot_report, dict) or not pilot_report.get("passed"):
