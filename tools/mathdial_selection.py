@@ -51,24 +51,24 @@ def build_topic_reference(mathdial_conversations: list[dict[str, Any]]) -> dict[
 
 
 def mmr_select(rows: list[dict[str, Any]], count: int, *, lambda_relevance: float = 0.8) -> list[dict[str, Any]]:
-    """posterior選別候補へ決定論的MMRを適用する。"""
+    """posterior選別候補へ決定論的MMRを適用する。
+
+    各候補の選択済み集合に対する最大類似度だけを保持する。選択のたびに
+    新規1件との類似度を更新するため、全選択済み候補との再計算を避けつつ、
+    従来実装と同じMMR値とtie-breakを維持する。
+    """
     if len(rows) <= count:
         return rows
     vectors = {str(row.get("sample_id")): tokenize(f"{row.get('prompt', '')} {row.get('response', '')}") for row in rows}
     selected: list[dict[str, Any]] = []
     remaining = list(rows)
+    maximum_redundancy = {id(row): 0.0 for row in remaining}
     while remaining and len(selected) < count:
         best = None
         best_score = -float("inf")
         for row in remaining:
-            tokens = vectors[str(row.get("sample_id"))]
-            redundancy = 0.0
-            for chosen in selected:
-                other = vectors[str(chosen.get("sample_id"))]
-                union = tokens | other
-                redundancy = max(redundancy, len(tokens & other) / len(union) if union else 0.0)
             relevance = float(row.get("selection_score", row.get("posterior", 0.0)))
-            score = lambda_relevance * relevance - (1.0 - lambda_relevance) * redundancy
+            score = lambda_relevance * relevance - (1.0 - lambda_relevance) * maximum_redundancy[id(row)]
             if score > best_score:
                 best, best_score = row, score
         assert best is not None
@@ -77,6 +77,19 @@ def mmr_select(rows: list[dict[str, Any]], count: int, *, lambda_relevance: floa
         enriched["selection_metadata"]["mmr_lambda"] = lambda_relevance
         selected.append(enriched)
         remaining.remove(best)
+        chosen_tokens = vectors[str(best.get("sample_id"))]
+        for row in remaining:
+            tokens = vectors[str(row.get("sample_id"))]
+            union = tokens | chosen_tokens
+            similarity = len(tokens & chosen_tokens) / len(union) if union else 0.0
+            maximum_redundancy[id(row)] = max(
+                maximum_redundancy[id(row)], similarity
+            )
+        if len(selected) % 250 == 0 or len(selected) == count:
+            print(
+                f"[MMR] selected={len(selected)}/{count} remaining={len(remaining)}",
+                flush=True,
+            )
     return selected
 
 

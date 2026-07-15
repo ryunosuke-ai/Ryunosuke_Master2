@@ -21,7 +21,7 @@ from scripts.run_mathdial_statistics import analyze
 from tools.mathdial_evaluation import blind_oracle_rows, select_test_prompts, validate_translation
 from tools.mathdial_features import normalize_extraction_payload, quality_metrics, validate_with_llm
 from tools.mathdial_pipeline_support import mock_dpo, mock_score
-from tools.mathdial_selection import select_groups
+from tools.mathdial_selection import mmr_select, select_groups
 from tools.prepare_mathdial_for_analysis import (
     select_analysis_conversations,
     summarize as summarize_analysis_corpus,
@@ -41,6 +41,7 @@ from tools.wildchat_tutoring import (
     extract_candidates,
     normalize_wildchat_row,
     sample_to_scoring_record,
+    tokenize,
 )
 from core.dialogue_schema import build_assistant_samples
 
@@ -358,6 +359,51 @@ def test_selection_builds_three_groups_with_esconv_selector():
     mathdial = [{"split": "train", "metadata": {"question": "math equation"}}]
     groups = select_groups(scored, mathdial, count=3, random_count=4, seed=42)
     assert {key: len(value) for key, value in groups.items()} == {"domain_random": 4, "topic_similarity_top": 3, "basis_top": 3}
+
+
+def test_optimized_mmr_matches_reference_selection():
+    rows = [
+        {
+            "sample_id": f"s{index}",
+            "prompt": f"shared topic {index % 3}",
+            "response": f"response {index % 4}",
+            "selection_score": 1.0 - index * 0.03,
+        }
+        for index in range(12)
+    ]
+
+    def reference(candidates, count, lambda_relevance=0.8):
+        vectors = {
+            row["sample_id"]: tokenize(f"{row['prompt']} {row['response']}")
+            for row in candidates
+        }
+        selected = []
+        remaining = list(candidates)
+        while remaining and len(selected) < count:
+            best = None
+            best_score = -float("inf")
+            for row in remaining:
+                tokens = vectors[row["sample_id"]]
+                redundancy = 0.0
+                for chosen in selected:
+                    other = vectors[chosen["sample_id"]]
+                    union = tokens | other
+                    redundancy = max(
+                        redundancy,
+                        len(tokens & other) / len(union) if union else 0.0,
+                    )
+                score = (
+                    lambda_relevance * row["selection_score"]
+                    - (1.0 - lambda_relevance) * redundancy
+                )
+                if score > best_score:
+                    best, best_score = row, score
+            selected.append(best)
+            remaining.remove(best)
+        return [row["sample_id"] for row in selected]
+
+    optimized = mmr_select(rows, 9, lambda_relevance=0.8)
+    assert [row["sample_id"] for row in optimized] == reference(rows, 9)
 
 
 def test_selection_uses_generated_state_and_observation_names(tmp_path):
