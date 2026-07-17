@@ -12,7 +12,7 @@ if [[ -f "$PROJECT_ROOT/.env" ]]; then
 fi
 
 SOURCE_RUN="${SOURCE_RUN:-artifacts/mathdial_wildchat/runs/mathdial_wildchat_gpt56_v6_candidates4_mixed}"
-RUN_TAG="${RUN_TAG:-mathdial_wildchat_gpt56_v9_neutral_prompt_v2_confirm}"
+RUN_TAG="${RUN_TAG:-mathdial_wildchat_gpt56_v10_neutral_prompt_boundary_fixed}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-artifacts/mathdial_wildchat/runs/${RUN_TAG}}"
 DRY_RUN="${DRY_RUN:-0}"
 START_STAGE="${START_STAGE:-rewrite_dpo}"
@@ -135,7 +135,7 @@ payload = {
     "files": files,
     "values": sys.argv[6:],
     "local_prompt_mode": "neutral_conversation",
-    "template_version": "dpo_user_ai_neutral_instruction.v2",
+    "template_version": "dpo_user_ai_neutral_instruction.v3",
 }
 print(hashlib.sha256(
     json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -169,7 +169,7 @@ payload = {
         "records_per_arm": int(sys.argv[11]),
         "basis_gold_records": int(sys.argv[12]),
         "prompt_mode": "neutral_conversation",
-        "prompt_template_version": "dpo_user_ai_neutral_instruction.v2",
+        "prompt_template_version": "dpo_user_ai_neutral_instruction.v3",
         "chosen_rejected_policy": "unchanged_from_source_run",
     },
     "evaluation": {
@@ -368,6 +368,7 @@ train_stage() {
     --device-map "$TRAIN_DEVICE_MAP"
     --max-memory "$TRAIN_MAX_MEMORY"
     --resume-from-checkpoint auto
+    --require-tokenizer-prefix-match
   )
   python3 -m tools.train_qwen35_dpo_lora \
     --dataset "$CONTEXT_BASIS" \
@@ -446,8 +447,8 @@ for row in current:
     prompt = str(row.get("model_prompt", ""))
     if row.get("local_prompt_mode") != "neutral_conversation":
         raise SystemExit("評価promptがneutral_conversationではありません。")
-    if not prompt.endswith("AI:"):
-        raise SystemExit("評価promptが末尾のAI:で終わっていません。")
+    if not prompt.endswith("AI:\n"):
+        raise SystemExit("評価promptが末尾のAI:と改行で終わっていません。")
     instruction = "以下の会話の文脈に沿って、次のAIの応答を自然な日本語で生成してください。"
     if not prompt.startswith(instruction + "\n\nUser:"):
         raise SystemExit("評価promptの中立的な会話指示が不正です。")
@@ -587,7 +588,7 @@ manifest = {
     "translation_model": sys.argv[7],
     "judge_model": sys.argv[8],
     "local_prompt_mode": "neutral_conversation",
-    "prompt_template_version": "dpo_user_ai_neutral_instruction.v2",
+    "prompt_template_version": "dpo_user_ai_neutral_instruction.v3",
     "prompt_overlap_with_v1": 0,
     "training_data_policy": {
         "chosen_rejected": "unchanged_from_source_run",

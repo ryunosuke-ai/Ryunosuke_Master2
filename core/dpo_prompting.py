@@ -9,7 +9,7 @@ from typing import Any
 DPO_PROMPT_TEMPLATE_VERSION = "dpo_user_ai_instruction.v1"
 CONTEXT_ONLY_DPO_PROMPT_TEMPLATE_VERSION = "dpo_user_ai_context_only.v1"
 NEUTRAL_CONVERSATION_DPO_PROMPT_TEMPLATE_VERSION = (
-    "dpo_user_ai_neutral_instruction.v2"
+    "dpo_user_ai_neutral_instruction.v3"
 )
 DEFAULT_MAX_HISTORY_TURNS = 10
 MATHDIAL_CONTEXT_MARKER = "\n\nこれまでの学習対話:\n"
@@ -153,7 +153,8 @@ def build_neutral_conversation_dpo_prompt(
         history_turns=history_turns,
         max_history_turns=max_history_turns,
     )
-    return f"{NEUTRAL_CONVERSATION_INSTRUCTION}\n\n{context}"
+    # completion先頭と末尾の`AI:`がBPE結合しないよう、境界を改行で固定する。
+    return f"{NEUTRAL_CONVERSATION_INSTRUCTION}\n\n{context}\n"
 
 
 def _mathdial_instruction_prompt_turns(

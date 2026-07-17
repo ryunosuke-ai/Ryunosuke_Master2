@@ -11,7 +11,7 @@ if [[ -f "$PROJECT_ROOT/.env" ]]; then
   set +a
 fi
 
-RUN_TAG="${RUN_TAG:-mathdial_wildchat_gpt56_v9_neutral_prompt_v2_confirm}"
+RUN_TAG="${RUN_TAG:-mathdial_wildchat_gpt56_v10_neutral_prompt_boundary_fixed}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-artifacts/mathdial_wildchat/runs/${RUN_TAG}}"
 PIPELINE="${MATHDIAL_NEUTRAL_PROMPT_PIPELINE_SCRIPT:-${MATHDIAL_CONTEXT_ONLY_PIPELINE_SCRIPT:-$PROJECT_ROOT/scripts/run_mathdial_context_only_v2_pipeline.sh}}"
 WATCHDOG_MAX_RESTARTS="${WATCHDOG_MAX_RESTARTS:-20}"

@@ -31,6 +31,7 @@ from tools.rewrite_mathdial_dpo_context_only import (
     rewrite_file,
     rewrite_record,
 )
+from tools.train_qwen35_dpo_lora import validate_tokenizer_prefix_alignment
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -132,7 +133,7 @@ def test_neutral_conversation_prompt_adds_only_minimum_task_instruction():
         "User: 2 + 3は何ですか。\n"
         "AI: どう考えましたか。\n"
         "User: 6だと思います。\n"
-        "AI:"
+        "AI:\n"
     )
     assert not any(token in prompt for token in FORBIDDEN_GENERATION_TEXT)
     assert "質問" not in prompt
@@ -185,7 +186,7 @@ def test_rewrite_changes_only_prompt_fields_and_keeps_ordered_preferences(
         assert output_row["metadata"]["frozen_rejected_sha256"] == hashlib.sha256(
             str(source_row["rejected"]).encode("utf-8")
         ).hexdigest()
-    assert all(str(row["prompt"]).endswith("AI:") for row in rewritten)
+    assert all(str(row["prompt"]).endswith("AI:\n") for row in rewritten)
     assert all(
         not any(token in str(row["prompt"]) for token in FORBIDDEN_GENERATION_TEXT)
         for row in rewritten
@@ -224,7 +225,7 @@ def test_neutral_evaluation_prompt_keeps_problem_and_hides_references(
         f"{NEUTRAL_CONVERSATION_INSTRUCTION}\n\n"
         "User: 2 + 2を計算してください。"
     )
-    assert prompt.endswith("AI:")
+    assert prompt.endswith("AI:\n")
     assert "5だと思います。" in prompt
     assert "ground_truth" not in prompt
     assert "Teacher" not in prompt
@@ -251,6 +252,37 @@ def test_neutral_evaluation_prompt_keeps_problem_and_hides_references(
         for item in oracle
     )
     assert all("basis" not in item["prompt"].lower() for item in oracle)
+
+
+def test_tokenizer_prefix_gate_accepts_newline_and_rejects_merged_boundary():
+    class BoundaryMergingTokenizer:
+        def __call__(self, text: str) -> dict[str, list[int]]:
+            ids = [ord(character) for character in text]
+            marker = "AI:"
+            marker_index = text.rfind(marker)
+            if marker_index >= 0 and marker_index + len(marker) < len(text):
+                following = text[marker_index + len(marker)]
+                if following != "\n":
+                    colon_index = marker_index + len(marker) - 1
+                    ids[colon_index : colon_index + 2] = [1_000_000]
+            return {"input_ids": ids}
+
+    tokenizer = BoundaryMergingTokenizer()
+    valid = {
+        "prompt": "User: 質問です。\nAI:\n",
+        "chosen": "応答です。",
+        "rejected": "別の応答です。",
+    }
+    assert validate_tokenizer_prefix_alignment([valid], tokenizer) == {
+        "records": 1,
+        "chosen_mismatches": 0,
+        "rejected_mismatches": 0,
+    }
+
+    invalid = dict(valid)
+    invalid["prompt"] = "User: 質問です。\nAI:"
+    with pytest.raises(ValueError, match="tokenizer境界"):
+        validate_tokenizer_prefix_alignment([invalid], tokenizer)
 
 
 def test_resume_rejects_mixed_prompt_modes(tmp_path: Path):

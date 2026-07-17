@@ -73,6 +73,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--load-check", action="store_true", help="モデル配置を検証し、学習せず終了します。")
     parser.add_argument("--dry-run", action="store_true", help="学習せず、データと設定だけ確認します。")
+    parser.add_argument(
+        "--require-tokenizer-prefix-match",
+        action="store_true",
+        help=(
+            "prompt単体とprompt+completionのtoken列境界が完全一致することを"
+            "モデル読込前に検証します。"
+        ),
+    )
     parser.add_argument("--logging-steps", type=int, default=1, help="ログ出力間隔。")
     parser.add_argument("--save-steps", type=int, default=25, help="チェックポイント保存間隔。")
     parser.add_argument(
@@ -226,6 +234,36 @@ def load_tokenizer(model_id: str, deps: dict[str, Any]):
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
     return tokenizer
+
+
+def validate_tokenizer_prefix_alignment(
+    records: list[dict[str, str]],
+    tokenizer: Any,
+) -> dict[str, int]:
+    """TRLがcompletion先頭tokenを欠落させない境界であることを検証する。"""
+    mismatches = {"chosen": 0, "rejected": 0}
+    examples: list[str] = []
+    for record_index, record in enumerate(records, start=1):
+        prompt_ids = tokenizer(record["prompt"])["input_ids"]
+        for side in ("chosen", "rejected"):
+            combined_ids = tokenizer(record["prompt"] + record[side])["input_ids"]
+            if combined_ids[: len(prompt_ids)] == prompt_ids:
+                continue
+            mismatches[side] += 1
+            if len(examples) < 5:
+                examples.append(f"{record_index}:{side}")
+    total = mismatches["chosen"] + mismatches["rejected"]
+    if total:
+        raise ValueError(
+            "tokenizer境界が一致しないDPO応答があります。"
+            f" chosen={mismatches['chosen']}, rejected={mismatches['rejected']},"
+            f" examples={examples}。prompt末尾の区切りを確認してください。"
+        )
+    return {
+        "records": len(records),
+        "chosen_mismatches": 0,
+        "rejected_mismatches": 0,
+    }
 
 
 def resolve_device_map_mode(args: argparse.Namespace) -> str:
@@ -429,6 +467,16 @@ def train(args: argparse.Namespace, split: PreferenceDatasetSplit) -> None:
     if args.no_4bit:
         disable_peft_bitsandbytes_dispatch()
     tokenizer = load_tokenizer(args.model_id, deps)
+    if args.require_tokenizer_prefix_match:
+        alignment = validate_tokenizer_prefix_alignment(
+            [*split.train, *split.eval],
+            tokenizer,
+        )
+        print(
+            "tokenizer境界検証に成功しました: "
+            f"records={alignment['records']} chosen_mismatches=0 "
+            "rejected_mismatches=0"
+        )
     model, dtype = load_model(args, deps)
     if args.load_check:
         print("モデル配置チェックに成功しました。")

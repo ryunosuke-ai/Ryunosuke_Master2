@@ -17,7 +17,7 @@ from core.dpo_prompting import (
 )
 
 
-PROMPT_REWRITE_VERSION = "mathdial_prompt_only_rewrite.v3"
+PROMPT_REWRITE_VERSION = "mathdial_prompt_only_rewrite.v4"
 PROMPT_MODES = ("context_only", "neutral_conversation")
 PROMPT_METADATA_KEYS = {
     "source_dpo_prompt_template",
@@ -313,6 +313,9 @@ def main() -> int:
         "version": PROMPT_REWRITE_VERSION,
         "local_prompt_mode": args.prompt_mode,
         "output_template": basis_summary["output_template"],
+        "completion_separator": (
+            "\\n" if args.prompt_mode == "neutral_conversation" else ""
+        ),
         "invariants": {
             "only_prompt_and_prompt_metadata_changed": True,
             "chosen_rejected_unchanged": True,
