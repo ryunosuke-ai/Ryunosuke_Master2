@@ -52,26 +52,65 @@ def append_error(path: Path | str | None, row: dict[str, Any], exc: Exception) -
         file.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
-def select_test_prompts(samples: list[dict[str, Any]], conversations: list[dict[str, Any]], *, count: int, seed: int) -> list[dict[str, Any]]:
+def select_test_prompts(
+    samples: list[dict[str, Any]],
+    conversations: list[dict[str, Any]],
+    *,
+    count: int,
+    seed: int,
+    excluded_sample_ids: set[str] | None = None,
+    excluded_qids: set[str] | None = None,
+    stratify_teacher_moves: bool = False,
+    prompt_id_prefix: str = "mathdial_eval",
+) -> list[dict[str, Any]]:
     """qidと会話を重複させずheld-out test promptを固定する。"""
     conversation_by_id = {row["conversation_id"]: row for row in conversations if row["split"] == "test"}
+    excluded_sample_ids = excluded_sample_ids or set()
+    excluded_qids = excluded_qids or set()
     candidates = []
     for sample in samples:
         if sample.get("metadata", {}).get("split") != "test" or not sample.get("metadata", {}).get("history_ends_with_user"):
             continue
+        if str(sample.get("sample_id", "")) in excluded_sample_ids:
+            continue
         conversation = conversation_by_id.get(sample["conversation_id"])
         if not conversation:
+            continue
+        qid = str(conversation.get("metadata", {}).get("qid", ""))
+        if qid in excluded_qids:
             continue
         candidates.append((sample, conversation))
     rng = random.Random(seed)
     rng.shuffle(candidates)
+
+    if stratify_teacher_moves:
+        move_order = ("probing", "focus", "telling", "generic")
+        buckets = {move: [] for move in move_order}
+        remainder = []
+        for pair in candidates:
+            moves = [
+                str(move).strip().lower()
+                for move in pair[0].get("metadata", {}).get("teacher_moves", [])
+            ]
+            assigned = next((move for move in move_order if move in moves), None)
+            if assigned is None:
+                remainder.append(pair)
+            else:
+                buckets[assigned].append(pair)
+        interleaved = []
+        while any(buckets.values()):
+            for move in move_order:
+                if buckets[move]:
+                    interleaved.append(buckets[move].pop())
+        candidates = interleaved + remainder
+
     selected, seen_qids, seen_conversations = [], set(), set()
     for sample, conversation in candidates:
         qid = str(conversation.get("metadata", {}).get("qid", ""))
         if qid in seen_qids or sample["conversation_id"] in seen_conversations:
             continue
         selected.append({
-            "prompt_id": f"mathdial_eval_{len(selected):03d}",
+            "prompt_id": f"{prompt_id_prefix}_{len(selected):03d}",
             "sample_id": sample["sample_id"],
             "conversation_id": sample["conversation_id"],
             "qid": qid,
@@ -88,6 +127,21 @@ def select_test_prompts(samples: list[dict[str, Any]], conversations: list[dict[
     if len(selected) < count:
         raise ValueError(f"qid一意なtest評価promptが不足しています: {len(selected)}/{count}")
     return selected
+
+
+def exclusion_ids_from_prompts(paths: list[Path | str]) -> tuple[set[str], set[str]]:
+    """既存評価promptから再利用禁止sample idとqidを読む。"""
+    sample_ids: set[str] = set()
+    qids: set[str] = set()
+    for path in paths:
+        for row in read_jsonl(path):
+            sample_id = str(row.get("sample_id", "")).strip()
+            qid = str(row.get("qid", "")).strip()
+            if sample_id:
+                sample_ids.add(sample_id)
+            if qid:
+                qids.add(qid)
+    return sample_ids, qids
 
 
 def translation_instructions() -> str:
@@ -207,6 +261,9 @@ def main() -> int:
     prepare.add_argument("--output", required=True)
     prepare.add_argument("--count", type=int, default=100)
     prepare.add_argument("--seed", type=int, default=42)
+    prepare.add_argument("--exclude-prompts", action="append", default=[])
+    prepare.add_argument("--stratify-teacher-moves", action="store_true")
+    prepare.add_argument("--prompt-id-prefix", default="mathdial_eval")
     prepare.add_argument("--model", default=resolve_scoring_model())
     prepare.add_argument("--resume", action="store_true")
     prepare.add_argument("--mock", action="store_true")
@@ -225,7 +282,19 @@ def main() -> int:
     generate.add_argument("--skip-sample-errors", action="store_true")
     args = parser.parse_args()
     if args.command == "prepare":
-        selected = select_test_prompts(read_jsonl(args.samples), read_jsonl(args.conversations), count=args.count, seed=args.seed)
+        excluded_sample_ids, excluded_qids = exclusion_ids_from_prompts(
+            [Path(path) for path in args.exclude_prompts]
+        )
+        selected = select_test_prompts(
+            read_jsonl(args.samples),
+            read_jsonl(args.conversations),
+            count=args.count,
+            seed=args.seed,
+            excluded_sample_ids=excluded_sample_ids,
+            excluded_qids=excluded_qids,
+            stratify_teacher_moves=args.stratify_teacher_moves,
+            prompt_id_prefix=args.prompt_id_prefix,
+        )
         existing = read_jsonl(args.output) if args.resume and Path(args.output).exists() else []
         translated = translate_prompts(selected, generator=None if args.mock else OpenAIResponsesGenerator(), model=args.model, mock=args.mock, existing=existing, output_path=args.output, errors_path=args.errors_output, skip_sample_errors=args.skip_sample_errors)
         write_jsonl(translated, args.output)

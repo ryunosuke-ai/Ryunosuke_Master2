@@ -1,0 +1,38 @@
+name: mathdial_oracle
+version: mathdial_oracle_v2_confirmatory
+score_scale: 10
+primary_axes:
+  - equitable_tutoring
+  - learner_reasoning_diagnosis
+  - mistake_location_and_targeting
+  - guidance_quality
+  - feedback_actionability
+  - answer_revealing_calibration
+  - teacher_move_stage_alignment
+general_axes:
+  - correctness
+  - understandable
+  - natural_japanese
+  - maintains_context
+  - overall_quality
+judge_temperature: 0.0
+response_order_seed: 20260717
+confirmation_prompt_seed: 20260717
+confirmation_prompt_count: 100
+prompt_sampling:
+  split: test
+  exclude_previous_evaluation_qids: true
+  unique_qid: true
+  unique_conversation: true
+  stratify_by_source_teacher_move: true
+  teacher_moves:
+    - probing
+    - focus
+    - telling
+    - generic
+methodology:
+  v1_status: exploratory_after_axis_review
+  v2_status: confirmatory_only_on_untouched_prompts
+  forbid_axis_changes_after_confirmation_scoring: true
+  primary_family: mathdial_pedagogy_v2
+  general_quality_reported_separately: true
