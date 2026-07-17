@@ -29,11 +29,14 @@ JUDGE_MODEL="${MATHDIAL_JUDGE_MODEL:-${AZURE_OPENAI_GPT56_TERRA_DEPLOYMENT:-gpt-
 TRAIN_CUDA_DEVICES="${TRAIN_CUDA_VISIBLE_DEVICES:-0,1}"
 EVAL_CUDA_DEVICES="${EVAL_CUDA_VISIBLE_DEVICES:-0,1}"
 TRAIN_DEVICE_MAP="${TRAIN_DEVICE_MAP:-auto}"
-TRAIN_MAX_MEMORY="${TRAIN_MAX_MEMORY:-0=46GiB,1=46GiB,cpu=0GiB}"
-EVAL_MAX_MEMORY="${EVAL_MAX_MEMORY:-$TRAIN_MAX_MEMORY}"
+TRAIN_MAX_MEMORY="${TRAIN_MAX_MEMORY:-0=38GiB,1=46GiB,cpu=0GiB}"
+EVAL_MAX_MEMORY="${EVAL_MAX_MEMORY:-0=46GiB,1=46GiB,cpu=0GiB}"
 TRAIN_SAVE_TOTAL_LIMIT="${TRAIN_SAVE_TOTAL_LIMIT:-2}"
 TRAIN_MAX_LENGTH="${TRAIN_MAX_LENGTH:-4096}"
 TRAIN_MIN_FREE_MEMORY_MIB="${TRAIN_MIN_FREE_MEMORY_MIB:-36000}"
+TRAIN_GPU0_MIN_HEADROOM_MIB="${TRAIN_GPU0_MIN_HEADROOM_MIB:-8192}"
+TRAIN_CUDA_ALLOC_CONF="${TRAIN_CUDA_ALLOC_CONF:-expandable_segments:True}"
+ALLOW_TRAIN_PLACEMENT_CONTINUATION="${ALLOW_TRAIN_PLACEMENT_CONTINUATION:-0}"
 PIPELINE_MIN_FREE_GB="${PIPELINE_MIN_FREE_GB:-8}"
 RECORDS_PER_ARM="${RECORDS_PER_ARM:-2500}"
 BASIS_GOLD_RECORDS="${BASIS_GOLD_RECORDS:-500}"
@@ -100,7 +103,7 @@ END_INDEX="$(stage_index "$END_STAGE")"
   exit 2
 }
 
-EXPERIMENT_FINGERPRINT="$(
+COMPUTED_EXPERIMENT_FINGERPRINT="$(
   python3 - "$SOURCE_BASIS" "$SOURCE_RANDOM" "$SOURCE_SAMPLES" \
     "$SOURCE_CONVERSATIONS" "$PREVIOUS_PROMPTS" "$TRAIN_SEED" "$EVAL_SEED" \
     "$EVAL_COUNT" "$LOCAL_MODEL" "$TRANSLATION_MODEL" "$JUDGE_MODEL" \
@@ -144,11 +147,68 @@ print(hashlib.sha256(
 ).hexdigest())
 PY
 )"
+EXPERIMENT_FINGERPRINT="$COMPUTED_EXPERIMENT_FINGERPRINT"
+
+if [[ -s "$OUTPUT_ROOT/run_metadata.json" ]]; then
+  EXISTING_EXPERIMENT_FINGERPRINT="$(
+    python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["experiment_fingerprint"])' \
+      "$OUTPUT_ROOT/run_metadata.json"
+  )"
+  if [[ "$EXISTING_EXPERIMENT_FINGERPRINT" != "$COMPUTED_EXPERIMENT_FINGERPRINT" ]]; then
+    if [[ "$ALLOW_TRAIN_PLACEMENT_CONTINUATION" != "1" ]]; then
+      echo "同じRUN_TAGのコードfingerprintが変わっています。" >&2
+      echo "学習配置だけを修正してcheckpointから続ける場合は、ALLOW_TRAIN_PLACEMENT_CONTINUATION=1を指定してください。" >&2
+      exit 20
+    fi
+    python3 - "$OUTPUT_ROOT/run_metadata.json" "$RUN_TAG" "$SOURCE_RUN" \
+      "$TRAIN_SEED" "$EVAL_SEED" "$EVAL_COUNT" "$LOCAL_MODEL" \
+      "$TRANSLATION_MODEL" "$JUDGE_MODEL" "$RECORDS_PER_ARM" \
+      "$BASIS_GOLD_RECORDS" "$EVAL_CANDIDATE_RESERVE" "$TRAIN_MAX_LENGTH" <<'PY'
+import json
+import pathlib
+import sys
+
+metadata = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected = {
+    "run_tag": sys.argv[2],
+    "source_run": sys.argv[3],
+    "training_seed": int(sys.argv[4]),
+    "evaluation_seed": int(sys.argv[5]),
+    "evaluation_count": int(sys.argv[6]),
+    "models": {
+        "local": sys.argv[7],
+        "translation": sys.argv[8],
+        "judge": sys.argv[9],
+    },
+}
+for key, value in expected.items():
+    if metadata.get(key) != value:
+        raise SystemExit(
+            f"配置変更として継続できない研究条件差分です: {key} "
+            f"existing={metadata.get(key)!r} current={value!r}"
+        )
+dpo = metadata.get("dpo", {})
+if int(dpo.get("records_per_arm", -1)) != int(sys.argv[10]):
+    raise SystemExit("records_per_armが変わっているため継続できません。")
+if int(dpo.get("basis_gold_records", -1)) != int(sys.argv[11]):
+    raise SystemExit("basis_gold_recordsが変わっているため継続できません。")
+evaluation = metadata.get("evaluation", {})
+if int(evaluation.get("candidate_reserve", -1)) != int(sys.argv[12]):
+    raise SystemExit("candidate_reserveが変わっているため継続できません。")
+training = metadata.get("training", {})
+if int(training.get("max_length", -1)) != int(sys.argv[13]):
+    raise SystemExit("max_lengthが変わっているため継続できません。")
+PY
+    EXPERIMENT_FINGERPRINT="$EXISTING_EXPERIMENT_FINGERPRINT"
+  fi
+fi
 
 python3 - "$OUTPUT_ROOT/run_metadata.json" "$EXPERIMENT_FINGERPRINT" \
   "$RUN_TAG" "$SOURCE_RUN" "$TRAIN_SEED" "$EVAL_SEED" "$EVAL_COUNT" \
   "$LOCAL_MODEL" "$TRANSLATION_MODEL" "$JUDGE_MODEL" "$RECORDS_PER_ARM" \
-  "$BASIS_GOLD_RECORDS" "$EVAL_CANDIDATE_RESERVE" "$TRAIN_MAX_LENGTH" <<'PY'
+  "$BASIS_GOLD_RECORDS" "$EVAL_CANDIDATE_RESERVE" "$TRAIN_MAX_LENGTH" \
+  "$TRAIN_DEVICE_MAP" "$TRAIN_MAX_MEMORY" "$TRAIN_GPU0_MIN_HEADROOM_MIB" \
+  "$TRAIN_CUDA_ALLOC_CONF" <<'PY'
 import json
 import pathlib
 import sys
@@ -177,6 +237,10 @@ payload = {
     "training": {
         "max_length": int(sys.argv[14]),
         "token_truncation_policy": "reject_if_exceeds",
+        "device_map": sys.argv[15],
+        "max_memory": sys.argv[16],
+        "gpu0_minimum_activation_headroom_mib": int(sys.argv[17]),
+        "cuda_allocator_configuration": sys.argv[18],
     },
     "evaluation": {
         "status": "confirmatory_axes_frozen_before_scoring",
@@ -197,6 +261,33 @@ else:
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+PY
+
+python3 - "$OUTPUT_ROOT/training_runtime_attempts.jsonl" \
+  "$RUN_TAG" "$EXPERIMENT_FINGERPRINT" "$COMPUTED_EXPERIMENT_FINGERPRINT" \
+  "$TRAIN_DEVICE_MAP" "$TRAIN_MAX_MEMORY" "$TRAIN_GPU0_MIN_HEADROOM_MIB" \
+  "$TRAIN_CUDA_ALLOC_CONF" "${WATCHDOG_ATTEMPT:-1}" <<'PY'
+import json
+import pathlib
+import sys
+from datetime import datetime, timezone
+
+path = pathlib.Path(sys.argv[1])
+record = {
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "run_tag": sys.argv[2],
+    "experiment_fingerprint": sys.argv[3],
+    "computed_code_fingerprint": sys.argv[4],
+    "placement_only_continuation": sys.argv[3] != sys.argv[4],
+    "device_map": sys.argv[5],
+    "max_memory": sys.argv[6],
+    "gpu0_minimum_activation_headroom_mib": int(sys.argv[7]),
+    "cuda_allocator_configuration": sys.argv[8],
+    "watchdog_attempt": int(sys.argv[9]),
+}
+path.parent.mkdir(parents=True, exist_ok=True)
+with path.open("a", encoding="utf-8") as file:
+    file.write(json.dumps(record, ensure_ascii=False) + "\n")
 PY
 
 write_status() {
@@ -342,6 +433,122 @@ if missing:
 PY
 }
 
+train_placement_preflight() {
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  [[ "$TRAIN_DEVICE_MAP" == "auto" ]] || return 0
+  python3 - "$TRAIN_CUDA_DEVICES" "$TRAIN_MAX_MEMORY" \
+    "$TRAIN_GPU0_MIN_HEADROOM_MIB" <<'PY'
+import re
+import subprocess
+import sys
+
+physical_devices = [
+    int(value) for value in sys.argv[1].split(",") if value.strip()
+]
+if not physical_devices:
+    raise SystemExit("TRAIN_CUDA_VISIBLE_DEVICESが空です。")
+
+budgets = {}
+for item in sys.argv[2].split(","):
+    key, separator, raw_value = item.partition("=")
+    if not separator or key.strip().lower() == "cpu":
+        continue
+    match = re.fullmatch(
+        r"\s*(\d+(?:\.\d+)?)\s*(GiB|MiB)\s*",
+        raw_value,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        raise SystemExit(f"TRAIN_MAX_MEMORYを解釈できません: {item}")
+    amount = float(match.group(1))
+    unit = match.group(2).lower()
+    budgets[int(key.strip())] = amount * (1024 if unit == "gib" else 1)
+
+if 0 not in budgets:
+    raise SystemExit(
+        "device_map=autoではTRAIN_MAX_MEMORYにlogical GPU 0の上限が必要です。"
+    )
+
+rows = subprocess.check_output(
+    [
+        "nvidia-smi",
+        "--query-gpu=index,memory.total",
+        "--format=csv,noheader,nounits",
+    ],
+    text=True,
+)
+totals = {}
+for row in rows.splitlines():
+    index, memory = [item.strip() for item in row.split(",", 1)]
+    totals[int(index)] = int(memory)
+
+physical_gpu0 = physical_devices[0]
+total_mib = totals.get(physical_gpu0)
+if total_mib is None:
+    raise SystemExit(f"GPU total memoryを取得できません: {physical_gpu0}")
+headroom_mib = total_mib - budgets[0]
+minimum_mib = int(sys.argv[3])
+print(
+    "[preflight] training placement "
+    f"physical_gpu0={physical_gpu0} total={total_mib}MiB "
+    f"model_budget={budgets[0]:.0f}MiB "
+    f"activation_headroom={headroom_mib:.0f}MiB "
+    f"required={minimum_mib}MiB"
+)
+if headroom_mib < minimum_mib:
+    raise SystemExit(
+        "GPU 0のactivation用余白が不足しています。"
+        f" headroom={headroom_mib:.0f}MiB required={minimum_mib}MiB。"
+        "TRAIN_MAX_MEMORYのlogical GPU 0上限を下げてください。"
+    )
+PY
+}
+
+run_training_arm() {
+  local arm="$1" dataset="$2" output_dir="$3"
+  local attempt="${WATCHDOG_ATTEMPT:-1}"
+  local attempt_log="$TRAIN_DIR/${arm}_training_attempt_${attempt}.log"
+  local oom_marker="$TRAIN_DIR/OOM_DETECTED.json"
+  local status
+  rm -f "$oom_marker"
+  set +e
+  env CUDA_VISIBLE_DEVICES="$TRAIN_CUDA_DEVICES" \
+    PYTORCH_CUDA_ALLOC_CONF="$TRAIN_CUDA_ALLOC_CONF" \
+    python3 -m tools.train_qwen35_dpo_lora \
+      --dataset "$dataset" \
+      --output-dir "$output_dir" \
+      "${common[@]}" 2>&1 | tee -a "$attempt_log"
+  status="${PIPESTATUS[0]}"
+  set -e
+  if [[ "$status" -ne 0 ]] && grep -q "CUDA out of memory" "$attempt_log"; then
+    python3 - "$oom_marker" "$arm" "$attempt" "$TRAIN_MAX_MEMORY" \
+      "$TRAIN_GPU0_MIN_HEADROOM_MIB" "$attempt_log" <<'PY'
+import json
+import pathlib
+import sys
+from datetime import datetime, timezone
+
+path = pathlib.Path(sys.argv[1])
+path.write_text(
+    json.dumps(
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "arm": sys.argv[2],
+            "watchdog_attempt": int(sys.argv[3]),
+            "max_memory": sys.argv[4],
+            "gpu0_minimum_activation_headroom_mib": int(sys.argv[5]),
+            "attempt_log": sys.argv[6],
+        },
+        ensure_ascii=False,
+        indent=2,
+    ) + "\n",
+    encoding="utf-8",
+)
+PY
+  fi
+  return "$status"
+}
+
 rewrite_dpo_stage() {
   python3 -m tools.rewrite_mathdial_dpo_context_only \
     --basis-input "$SOURCE_BASIS" \
@@ -393,20 +600,12 @@ train_stage() {
     return 0
   fi
   gpu_preflight "$TRAIN_CUDA_DEVICES" "BASiS DPO training" || return 20
-  env CUDA_VISIBLE_DEVICES="$TRAIN_CUDA_DEVICES" \
-    PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}" \
-    python3 -m tools.train_qwen35_dpo_lora \
-      --dataset "$CONTEXT_BASIS" \
-      --output-dir "$TRAIN_DIR/basis_lora" \
-      "${common[@]}"
+  train_placement_preflight || return 20
+  run_training_arm "basis" "$CONTEXT_BASIS" "$TRAIN_DIR/basis_lora"
   [[ -s "$TRAIN_DIR/basis_lora/adapter_model.safetensors" ]] || return 20
   gpu_preflight "$TRAIN_CUDA_DEVICES" "Random DPO training" || return 20
-  env CUDA_VISIBLE_DEVICES="$TRAIN_CUDA_DEVICES" \
-    PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}" \
-    python3 -m tools.train_qwen35_dpo_lora \
-      --dataset "$CONTEXT_RANDOM" \
-      --output-dir "$TRAIN_DIR/random_lora" \
-      "${common[@]}"
+  train_placement_preflight || return 20
+  run_training_arm "random" "$CONTEXT_RANDOM" "$TRAIN_DIR/random_lora"
 }
 
 prepare_eval_stage() {
@@ -579,13 +778,22 @@ report_stage() {
   python3 - "$OUTPUT_ROOT" "$SOURCE_RUN" "$EXPERIMENT_FINGERPRINT" \
     "$EVAL_COUNT" "$TRAIN_SEED" "$EVAL_SEED" "$TRANSLATION_MODEL" \
     "$JUDGE_MODEL" "$RECORDS_PER_ARM" "$BASIS_GOLD_RECORDS" \
-    "$TRAIN_MAX_LENGTH" <<'PY'
+    "$TRAIN_MAX_LENGTH" "$TRAIN_DEVICE_MAP" "$TRAIN_MAX_MEMORY" \
+    "$TRAIN_GPU0_MIN_HEADROOM_MIB" "$TRAIN_CUDA_ALLOC_CONF" <<'PY'
 import json
 import pathlib
 import sys
 from datetime import datetime, timezone
 
 root = pathlib.Path(sys.argv[1])
+runtime_attempts_path = root / "training_runtime_attempts.jsonl"
+runtime_attempts = []
+if runtime_attempts_path.is_file():
+    runtime_attempts = [
+        json.loads(line)
+        for line in runtime_attempts_path.open(encoding="utf-8")
+        if line.strip()
+    ]
 manifest = {
     "created_at": datetime.now(timezone.utc).isoformat(),
     "status": "confirmatory_axes_frozen_before_scoring",
@@ -602,6 +810,11 @@ manifest = {
     "training": {
         "max_length": int(sys.argv[11]),
         "token_truncation_policy": "reject_if_exceeds",
+        "device_map": sys.argv[12],
+        "max_memory": sys.argv[13],
+        "gpu0_minimum_activation_headroom_mib": int(sys.argv[14]),
+        "cuda_allocator_configuration": sys.argv[15],
+        "runtime_attempts": runtime_attempts,
     },
     "training_data_policy": {
         "chosen_rejected": "unchanged_from_source_run",

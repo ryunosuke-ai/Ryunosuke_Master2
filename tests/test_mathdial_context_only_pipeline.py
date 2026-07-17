@@ -403,6 +403,14 @@ def test_neutral_prompt_pipeline_fixture_runs_without_api_or_gpu(tmp_path: Path)
         (output / "manifest.json").read_text(encoding="utf-8")
     )
     assert manifest["local_prompt_mode"] == "neutral_conversation"
+    assert manifest["training"]["max_length"] == 4096
+    assert manifest["training"]["device_map"] == "auto"
+    assert manifest["training"]["max_memory"] == "0=38GiB,1=46GiB,cpu=0GiB"
+    assert manifest["training"]["gpu0_minimum_activation_headroom_mib"] == 8192
+    assert manifest["training"]["cuda_allocator_configuration"] == (
+        "expandable_segments:True"
+    )
+    assert manifest["training"]["runtime_attempts"]
     assert manifest["training_data_policy"] == {
         "chosen_rejected": "unchanged_from_source_run",
         "basis_records": 6,
@@ -422,3 +430,102 @@ def test_context_only_shell_scripts_have_valid_syntax():
         "scripts/run_mathdial_context_only_v2_watchdog.sh",
     ):
         subprocess.run(["bash", "-n", str(ROOT / relative)], check=True)
+
+
+def test_context_only_training_reserves_gpu0_headroom_and_bounds_oom_retry():
+    pipeline = (
+        ROOT / "scripts/run_mathdial_context_only_v2_pipeline.sh"
+    ).read_text(encoding="utf-8")
+    watchdog = (
+        ROOT / "scripts/run_mathdial_context_only_v2_watchdog.sh"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        'TRAIN_MAX_MEMORY="${TRAIN_MAX_MEMORY:-0=38GiB,1=46GiB,cpu=0GiB}"'
+        in pipeline
+    )
+    assert 'TRAIN_GPU0_MIN_HEADROOM_MIB="${TRAIN_GPU0_MIN_HEADROOM_MIB:-8192}"' in pipeline
+    assert "train_placement_preflight" in pipeline
+    assert "GPU 0のactivation用余白が不足しています" in pipeline
+    assert "OOM_DETECTED.json" in pipeline
+    assert (
+        'WATCHDOG_OOM_TRAIN_MAX_MEMORY="${WATCHDOG_OOM_TRAIN_MAX_MEMORY:-0=36GiB,1=46GiB,cpu=0GiB}"'
+        in watchdog
+    )
+    assert "oom_fallback_used=0" in watchdog
+    assert "headroom拡大後もCUDA OOMが再発したため、安全に停止します" in watchdog
+    assert "ALLOW_TRAIN_PLACEMENT_CONTINUATION=1" in watchdog
+
+
+def test_placement_only_continuation_preserves_research_conditions(tmp_path: Path):
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    create_pipeline_fixture(source)
+    base_env = {
+        **os.environ,
+        "SOURCE_RUN": str(source),
+        "RUN_TAG": "placement_continuation_fixture",
+        "OUTPUT_ROOT": str(output),
+        "DRY_RUN": "1",
+        "DRY_RUN_RECORDS_PER_ARM": "6",
+        "DRY_RUN_BASIS_GOLD_RECORDS": "2",
+        "DRY_RUN_EVAL_COUNT": "5",
+        "START_STAGE": "rewrite_dpo",
+        "END_STAGE": "rewrite_dpo",
+        "PYTHONUNBUFFERED": "1",
+    }
+    initial = subprocess.run(
+        ["bash", "scripts/run_mathdial_context_only_v2_pipeline.sh"],
+        cwd=ROOT,
+        env=base_env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=120,
+    )
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+
+    metadata_path = output / "run_metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["experiment_fingerprint"] = "legacy-fixture-fingerprint"
+    metadata_path.write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    continued = subprocess.run(
+        ["bash", "scripts/run_mathdial_context_only_v2_pipeline.sh"],
+        cwd=ROOT,
+        env={
+            **base_env,
+            "ALLOW_TRAIN_PLACEMENT_CONTINUATION": "1",
+            "TRAIN_MAX_MEMORY": "0=38GiB,1=46GiB,cpu=0GiB",
+            "FORCE_STAGE": "rewrite_dpo",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=120,
+    )
+    assert continued.returncode == 0, continued.stdout + continued.stderr
+    attempts = read_jsonl(output / "training_runtime_attempts.jsonl")
+    assert attempts[-1]["placement_only_continuation"] is True
+    assert attempts[-1]["experiment_fingerprint"] == "legacy-fixture-fingerprint"
+
+    changed_research_condition = subprocess.run(
+        ["bash", "scripts/run_mathdial_context_only_v2_pipeline.sh"],
+        cwd=ROOT,
+        env={
+            **base_env,
+            "ALLOW_TRAIN_PLACEMENT_CONTINUATION": "1",
+            "TRAIN_MAX_LENGTH": "2048",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=120,
+    )
+    assert changed_research_condition.returncode != 0
+    assert "max_lengthが変わっているため継続できません" in (
+        changed_research_condition.stdout + changed_research_condition.stderr
+    )
