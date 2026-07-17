@@ -12,7 +12,7 @@ if [[ -f "$PROJECT_ROOT/.env" ]]; then
 fi
 
 SOURCE_RUN="${SOURCE_RUN:-artifacts/mathdial_wildchat/runs/mathdial_wildchat_gpt56_v6_candidates4_mixed}"
-RUN_TAG="${RUN_TAG:-mathdial_wildchat_gpt56_v8_neutral_prompt_v2_confirm}"
+RUN_TAG="${RUN_TAG:-mathdial_wildchat_gpt56_v9_neutral_prompt_v2_confirm}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-artifacts/mathdial_wildchat/runs/${RUN_TAG}}"
 DRY_RUN="${DRY_RUN:-0}"
 START_STAGE="${START_STAGE:-rewrite_dpo}"
@@ -135,7 +135,7 @@ payload = {
     "files": files,
     "values": sys.argv[6:],
     "local_prompt_mode": "neutral_conversation",
-    "template_version": "dpo_user_ai_neutral_instruction.v1",
+    "template_version": "dpo_user_ai_neutral_instruction.v2",
 }
 print(hashlib.sha256(
     json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -169,7 +169,7 @@ payload = {
         "records_per_arm": int(sys.argv[11]),
         "basis_gold_records": int(sys.argv[12]),
         "prompt_mode": "neutral_conversation",
-        "prompt_template_version": "dpo_user_ai_neutral_instruction.v1",
+        "prompt_template_version": "dpo_user_ai_neutral_instruction.v2",
         "chosen_rejected_policy": "unchanged_from_source_run",
     },
     "evaluation": {
@@ -448,7 +448,7 @@ for row in current:
         raise SystemExit("評価promptがneutral_conversationではありません。")
     if not prompt.endswith("AI:"):
         raise SystemExit("評価promptが末尾のAI:で終わっていません。")
-    instruction = "以下の会話に続くAIの応答を日本語で生成してください。"
+    instruction = "以下の会話の文脈に沿って、次のAIの応答を自然な日本語で生成してください。"
     if not prompt.startswith(instruction + "\n\nUser:"):
         raise SystemExit("評価promptの中立的な会話指示が不正です。")
     if str(row["problem_ja"]).strip() not in prompt:
@@ -587,7 +587,7 @@ manifest = {
     "translation_model": sys.argv[7],
     "judge_model": sys.argv[8],
     "local_prompt_mode": "neutral_conversation",
-    "prompt_template_version": "dpo_user_ai_neutral_instruction.v1",
+    "prompt_template_version": "dpo_user_ai_neutral_instruction.v2",
     "prompt_overlap_with_v1": 0,
     "training_data_policy": {
         "chosen_rejected": "unchanged_from_source_run",

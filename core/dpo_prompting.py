@@ -9,12 +9,12 @@ from typing import Any
 DPO_PROMPT_TEMPLATE_VERSION = "dpo_user_ai_instruction.v1"
 CONTEXT_ONLY_DPO_PROMPT_TEMPLATE_VERSION = "dpo_user_ai_context_only.v1"
 NEUTRAL_CONVERSATION_DPO_PROMPT_TEMPLATE_VERSION = (
-    "dpo_user_ai_neutral_instruction.v1"
+    "dpo_user_ai_neutral_instruction.v2"
 )
 DEFAULT_MAX_HISTORY_TURNS = 10
 MATHDIAL_CONTEXT_MARKER = "\n\nこれまでの学習対話:\n"
 NEUTRAL_CONVERSATION_INSTRUCTION = (
-    "以下の会話に続くAIの応答を日本語で生成してください。"
+    "以下の会話の文脈に沿って、次のAIの応答を自然な日本語で生成してください。"
 )
 
 INSTRUCTION_LINES = [

@@ -17,7 +17,7 @@ from core.dpo_prompting import (
 )
 
 
-PROMPT_REWRITE_VERSION = "mathdial_prompt_only_rewrite.v2"
+PROMPT_REWRITE_VERSION = "mathdial_prompt_only_rewrite.v3"
 PROMPT_MODES = ("context_only", "neutral_conversation")
 PROMPT_METADATA_KEYS = {
     "source_dpo_prompt_template",

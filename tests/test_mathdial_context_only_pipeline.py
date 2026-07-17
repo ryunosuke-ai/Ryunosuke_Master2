@@ -139,6 +139,7 @@ def test_neutral_conversation_prompt_adds_only_minimum_task_instruction():
     assert "ヒント" not in prompt
     assert "教師" not in prompt
     assert "数学" not in prompt
+    assert "1〜2文" not in prompt
 
 
 def test_rewrite_changes_only_prompt_fields_and_keeps_ordered_preferences(
