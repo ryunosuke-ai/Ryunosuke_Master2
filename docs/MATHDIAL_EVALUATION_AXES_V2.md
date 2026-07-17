@@ -65,6 +65,18 @@ MathDial型の指導過程に直接対応する`mistake identification`、`mista
 7. Kendall's W、Cohen's dz、rank-biserial、bootstrap 95% CIを報告する。
 8. v1とv2を併合して標本数を水増ししない。
 
+## 同一prompt・応答を使う再分析
+
+`scripts/run_mathdial_oracle_v2_reanalysis.sh`は、v1の100 promptと3モデル300応答を
+そのまま再利用し、v2教育軸だけを再採点する。一般品質はrubricが変わらないため、
+v1 rawを再利用する。この経路では翻訳、ローカルLLM応答生成、一般品質Oracleを
+実行しない。
+
+この結果は、モデル出力を完全に固定したまま評価軸変更の影響を調べられる一方、
+v1結果を確認した後の同一標本再分析である。成果物manifestでは
+`post_hoc_reanalysis_on_v1_prompts_and_responses`として、未使用qidを使う
+`run_mathdial_oracle_v2_confirmation.sh`の独立確認結果と区別する。
+
 ## 出典
 
 - Macina et al. (2023), MathDial, Findings of EMNLP:
