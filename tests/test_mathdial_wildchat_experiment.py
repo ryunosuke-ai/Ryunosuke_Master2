@@ -34,7 +34,13 @@ from tools.analyze_mathdial_corpus_transition_bayes import (
     mock_model as mock_mathdial_model,
 )
 from tools.mix_mathdial_dpo import build_training_arms, validate_pair
-from tools.translate_and_generate_dpo import _style_specific_translation_policy
+from tools.translate_and_generate_dpo import (
+    _style_specific_translation_policy,
+    mathdial_translation_fidelity_errors,
+    missing_mathdial_numeric_tokens,
+    retry_mathdial_translation_for_numeric_fidelity,
+    validate_mathdial_translation_fidelity,
+)
 from tools.train_qwen35_dpo_lora import dpo_loss_from_logps
 from tools.score_dialogue_with_transition_bayes_model import limit_records_by_conversation
 from tools.wildchat_tutoring import (
@@ -545,6 +551,69 @@ def test_mathdial_translation_policy_preserves_errors_and_does_not_enhance():
     policy = _style_specific_translation_policy("mathdial_tutoring")
     assert "誤答を翻訳時に訂正しない" in policy
     assert "BASiSらしさを翻訳によって強めない" in policy
+
+
+def test_mathdial_numeric_fidelity_accepts_notation_and_repetition_changes():
+    source = {
+        "prompt": "Use 1,200 words. The chance is 15/100, or 15 out of 100.",
+        "response": "It is now 1.43 am and the rate is 0.10%.",
+    }
+    payload = {
+        "translated_prompt": "1,200語を使います。確率は100分の15です。",
+        "translated_chosen": "現在は午前1時43分で、割合は0.1％です。",
+    }
+    validate_mathdial_translation_fidelity(source, payload)
+    assert missing_mathdial_numeric_tokens("1200 1200", "1,200") == []
+
+
+def test_mathdial_numeric_fidelity_keeps_prompt_and_chosen_separate():
+    source = {"prompt": "Calculate 4000 / 20.", "response": "The result is 200."}
+    payload = {
+        "translated_prompt": "4,000÷20を計算してください。答えは200です。",
+        "translated_chosen": "結果を確認しましょう。",
+    }
+    assert mathdial_translation_fidelity_errors(source, payload) == {"chosen": ["200"]}
+
+
+def test_mathdial_numeric_fidelity_retry_regenerates_translation():
+    class NumericRetryGenerator:
+        def generate(self, **kwargs):
+            assert "欠落判定token" in kwargs["instructions"]
+            return json.dumps(
+                {
+                    "translated_prompt": "4,000÷20を計算してください。",
+                    "translated_chosen": "結果は200です。",
+                    "rejected_candidates": ["すぐ答えを見ましょう。", "別の問題に進みましょう。"],
+                    "translation_quality_score": 0.9,
+                },
+                ensure_ascii=False,
+            )
+
+    source = {
+        "conversation_id": "c1",
+        "turn_index": 1,
+        "prompt": "Calculate 4000 / 20.",
+        "response": "The result is 200.",
+    }
+    incomplete = {
+        "translated_prompt": "計算してください。",
+        "translated_chosen": "結果を確認しましょう。",
+        "rejected_candidates": ["すぐ答えを見ましょう。", "別の問題に進みましょう。"],
+        "translation_quality_score": 0.7,
+    }
+    repaired = retry_mathdial_translation_for_numeric_fidelity(
+        source_record=source,
+        payload=incomplete,
+        index=1,
+        generator=NumericRetryGenerator(),
+        instructions="日本語へ翻訳してください。",
+        model="mock",
+        max_output_tokens=512,
+        candidates=2,
+        seed=42,
+    )
+    assert repaired["generation_retry"] == "mathdial_numeric_fidelity_retry"
+    validate_mathdial_translation_fidelity(source, repaired)
 
 
 def test_dpo_same_context_and_esconv_training_composition():

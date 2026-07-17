@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
+from decimal import Decimal, InvalidOperation
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
@@ -54,6 +56,10 @@ DEFAULT_GAP_RESCUE_MIN_SCORE_GAP: float | None = None
 DEFAULT_SEED = 42
 DEFAULT_STYLE_PRESET = "reminiscence"
 PROMPT_TEMPLATE_VERSION = "translate_and_generate_dpo.v2"
+MATHDIAL_NUMERIC_FIDELITY_VERSION = "mathdial_numeric_fidelity.v2"
+NUMERIC_TOKEN_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])[+-]?\d[\d,]*(?:\.\d+)?(?:/\d[\d,]*(?:\.\d+)?)?%?"
+)
 SKIP_ADMIN_KEYS = {
     "skip_reason",
     "skipped_at",
@@ -453,18 +459,116 @@ def validate_translation_payload(payload: dict[str, Any], *, candidates: int) ->
     }
 
 
+def normalize_numeric_token(token: str) -> str:
+    """桁区切りの差を吸収し、数値・分数tokenを比較可能にする。"""
+    suffix = "%" if token.endswith("%") else ""
+    body = token[:-1] if suffix else token
+    normalized_parts: list[str] = []
+    for part in body.split("/"):
+        compact = part.replace(",", "")
+        try:
+            value = Decimal(compact)
+            normalized = format(value.normalize(), "f")
+            normalized_parts.append("0" if normalized in ("-0", "+0") else normalized)
+        except InvalidOperation:
+            normalized_parts.append(compact)
+    return "/".join(normalized_parts) + suffix
+
+
+def extract_normalized_numeric_tokens(text: str) -> list[str]:
+    """出現順を保ったまま正規化済み数値・分数tokenを抽出する。"""
+    canonical = text.replace("％", "%")
+    canonical = re.sub(r"(\d[\d,]*)\s*分の\s*(\d[\d,]*)", r"\2/\1", canonical)
+    canonical = re.sub(r"(\d{1,2})\s*時\s*(\d{1,2})\s*分", r"\1.\2", canonical)
+    return [normalize_numeric_token(token) for token in NUMERIC_TOKEN_PATTERN.findall(canonical)]
+
+
+def missing_mathdial_numeric_tokens(source_text: str, translated_text: str) -> list[str]:
+    """翻訳側に意味的に存在しない一意な数値・数式tokenを返す。"""
+    source_tokens = list(dict.fromkeys(extract_normalized_numeric_tokens(source_text)))
+    translated_tokens = set(extract_normalized_numeric_tokens(translated_text))
+    translated_components = {
+        component.rstrip("%")
+        for token in translated_tokens
+        for component in token.rstrip("%").split("/")
+    }
+    missing: list[str] = []
+    for token in source_tokens:
+        if token in translated_tokens:
+            continue
+        # 15/100のような式が保たれていれば、周辺説明の単独15や100は欠落としない。
+        if "/" not in token and token.rstrip("%") in translated_components:
+            continue
+        missing.append(token)
+    return missing
+
+
+def mathdial_translation_fidelity_errors(
+    source_record: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, list[str]]:
+    """promptとchosenを分けて数値保持違反を検出する。"""
+    errors = {
+        "prompt": missing_mathdial_numeric_tokens(
+            str(source_record.get("prompt", "")),
+            str(payload["translated_prompt"]),
+        ),
+        "chosen": missing_mathdial_numeric_tokens(
+            str(source_record.get("response", "")),
+            str(payload["translated_chosen"]),
+        ),
+    }
+    return {field: tokens for field, tokens in errors.items() if tokens}
+
+
 def validate_mathdial_translation_fidelity(source_record: dict[str, Any], payload: dict[str, Any]) -> None:
-    """MathDial翻訳が数値・数式tokenを失っていないことを検証する。"""
-    import re
-    pattern = re.compile(r"\d+(?:[.,/]\d+)*")
-    source_tokens = pattern.findall(f"{source_record.get('prompt', '')} {source_record.get('response', '')}")
-    translated_tokens = pattern.findall(f"{payload['translated_prompt']} {payload['translated_chosen']}")
-    missing = list(source_tokens)
-    for token in translated_tokens:
-        if token in missing:
-            missing.remove(token)
-    if missing:
-        raise ValueError(f"MathDial翻訳で数値・数式tokenが失われました: {missing[:10]}")
+    """MathDial翻訳が重要な数値・数式tokenを失っていないことを検証する。"""
+    errors = mathdial_translation_fidelity_errors(source_record, payload)
+    if errors:
+        details = ", ".join(f"{field}={tokens[:10]}" for field, tokens in errors.items())
+        raise ValueError(f"MathDial翻訳で数値・数式tokenが失われました: {details}")
+
+
+def retry_mathdial_translation_for_numeric_fidelity(
+    *,
+    source_record: dict[str, Any],
+    payload: dict[str, Any],
+    index: int,
+    generator: TextGenerator,
+    instructions: str,
+    model: str,
+    max_output_tokens: int,
+    candidates: int,
+    seed: int,
+) -> dict[str, Any]:
+    """数値欠落時だけ、保持すべきtokenを明示して翻訳生成を1回やり直す。"""
+    errors = mathdial_translation_fidelity_errors(source_record, payload)
+    missing = [token for tokens in errors.values() for token in tokens]
+    retry_instructions = (
+        instructions
+        + "\n\n数値保持の再試行です。english_promptとenglish_chosen_responseの数値、"
+        "小数、分数、割合、単位を省略・要約・丸めず、対応する翻訳フィールド内へ保持してください。"
+        "自然な桁区切りの追加は許可します。会話内容や指導戦略は変更しないでください。"
+        f"\n欠落判定token: {json.dumps(errors, ensure_ascii=False)}"
+    )
+    retry_payload, skip_reason = generate_translation_payload(
+        source_record=source_record,
+        index=index,
+        generator=generator,
+        instructions=retry_instructions,
+        model=model,
+        max_output_tokens=max_output_tokens,
+        candidates=candidates,
+        seed=seed + 1_000_003,
+    )
+    if retry_payload is None:
+        raise ValueError(
+            f"MathDial数値保持の再翻訳に失敗しました: reason={skip_reason}, missing={missing[:10]}"
+        )
+    validate_mathdial_translation_fidelity(source_record, retry_payload)
+    retry_payload["generation_retry"] = "mathdial_numeric_fidelity_retry"
+    retry_payload["numeric_fidelity_version"] = MATHDIAL_NUMERIC_FIDELITY_VERSION
+    return retry_payload
 
 
 def score_japanese_response(
@@ -697,7 +801,28 @@ def build_one_dpo_record(
     if translation_payload is None:
         return None, skip_reason, None
     if style_preset == "mathdial_tutoring":
-        validate_mathdial_translation_fidelity(source_record, translation_payload)
+        try:
+            validate_mathdial_translation_fidelity(source_record, translation_payload)
+        except ValueError as exc:
+            print(
+                "[STEP 5/6] MathDial numeric fidelity retry "
+                f"{source_record.get('conversation_id')}#{source_record.get('turn_index')}: {exc}",
+                flush=True,
+            )
+            translation_payload = retry_mathdial_translation_for_numeric_fidelity(
+                source_record=source_record,
+                payload=translation_payload,
+                index=index,
+                generator=generator,
+                instructions=instructions,
+                model=model,
+                max_output_tokens=max_output_tokens,
+                candidates=candidates,
+                seed=seed,
+            )
+        translation_payload.setdefault(
+            "numeric_fidelity_version", MATHDIAL_NUMERIC_FIDELITY_VERSION
+        )
     japanese_record = {
         "conversation_id": source_record["conversation_id"],
         "turn_index": source_record["turn_index"],
@@ -773,6 +898,7 @@ def build_one_dpo_record(
         "translation_quality_score": translation_payload["translation_quality_score"],
         "raw_translated_prompt": translation_payload["translated_prompt"],
         "generation_retry": translation_payload.get("generation_retry"),
+        "numeric_fidelity_version": translation_payload.get("numeric_fidelity_version"),
         "model_used_for_scoring": score_model,
         "model_used_for_translation": model,
         "model_used_for_rejected_generation": model,
@@ -798,6 +924,7 @@ def build_one_dpo_record(
             "style_preset": style_preset,
             "rejected_candidates": candidates,
             "generation_retry": translation_payload.get("generation_retry"),
+            "numeric_fidelity_version": translation_payload.get("numeric_fidelity_version"),
             "source_prompt_hash": hashlib.sha256(str(source_record.get("prompt", "")).encode("utf-8")).hexdigest(),
             "translated_prompt_hash": hashlib.sha256(translation_payload["translated_prompt"].encode("utf-8")).hexdigest(),
             "rejected_prompt_hash": hashlib.sha256(translation_payload["translated_prompt"].encode("utf-8")).hexdigest(),
@@ -1110,7 +1237,24 @@ def build_dpo_records(
                 f"{type(exc).__name__}: {exc}",
                 flush=True,
             )
-            return None, "sample_error", None
+            error_record = {
+                "source_dialogue_id": source_record.get("conversation_id"),
+                "turn_index": source_record.get("turn_index"),
+                "skip_reason": "sample_error",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "source_prompt_hash": hashlib.sha256(
+                    str(source_record.get("prompt", "")).encode("utf-8")
+                ).hexdigest(),
+                "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+                "numeric_fidelity_version": (
+                    MATHDIAL_NUMERIC_FIDELITY_VERSION
+                    if style_preset == "mathdial_tutoring"
+                    else None
+                ),
+                "skipped_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            }
+            return None, "sample_error", error_record
 
     if workers <= 1:
         for index, source_record in indexed_records:

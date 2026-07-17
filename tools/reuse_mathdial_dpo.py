@@ -28,11 +28,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--current-selection", required=True)
     parser.add_argument("--bayes-model", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--source-skipped")
+    parser.add_argument("--skipped-output")
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--generation-model", required=True)
     parser.add_argument("--scoring-model", required=True)
     parser.add_argument("--style-preset", default="mathdial_tutoring")
     parser.add_argument("--candidates", type=int, default=8)
+    parser.add_argument(
+        "--source-candidates",
+        type=int,
+        action="append",
+        default=[],
+        help="再利用を許可する旧runのrejected候補数。未指定時は現在値だけを許可します。",
+    )
+    parser.add_argument(
+        "--reuse-threshold-skips",
+        action="store_true",
+        help="low_chosen/high_rejected/small_gapの判定済みskipも継承します。",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-source-characters", type=int, default=16000)
     parser.add_argument("--min-score-gap", type=float, default=0.20)
@@ -70,6 +84,7 @@ def _validate_record(
     scoring_model: str,
     style_preset: str,
     candidates: int,
+    allowed_source_candidates: set[int] | None,
     seed: int,
     max_source_characters: int,
     min_score_gap: float,
@@ -105,7 +120,9 @@ def _validate_record(
         return "dpo_prompt_template_mismatch"
     if metadata.get("style_preset") != style_preset:
         return "style_preset_mismatch"
-    if int(metadata.get("rejected_candidates", -1)) != candidates:
+    actual_candidates = int(metadata.get("rejected_candidates", -1))
+    allowed_candidates = allowed_source_candidates or {candidates}
+    if actual_candidates not in allowed_candidates:
         return "candidate_count_mismatch"
     if int(metadata.get("seed", -1)) != seed:
         return "seed_mismatch"
@@ -119,17 +136,38 @@ def _validate_record(
     return None
 
 
+def _validate_skipped_record(
+    record: dict[str, Any],
+    selection: dict[str, Any],
+    **kwargs: Any,
+) -> str | None:
+    """候補数以外が一致する確定済みthreshold skipだけを再利用する。"""
+    skip_reason = str(record.get("skip_reason", ""))
+    if skip_reason not in {"low_chosen", "high_rejected", "small_gap"}:
+        return "non_threshold_skip"
+    # 共通条件を検証するため、一時的に採択条件を満たす値へ差し替える。
+    probe = dict(record)
+    probe["score_chosen"] = 1.0
+    probe["score_rejected"] = 0.0
+    probe["score_gap"] = 1.0
+    return _validate_record(probe, selection, **kwargs)
+
+
 def reuse_accepted_records(
     *,
     source_output: Path,
     current_selection: Path,
     bayes_model: Path,
     output: Path,
+    source_skipped: Path | None = None,
+    skipped_output: Path | None = None,
     manifest: Path,
     generation_model: str,
     scoring_model: str,
     style_preset: str,
     candidates: int,
+    allowed_source_candidates: set[int] | None = None,
+    reuse_threshold_skips: bool = False,
     seed: int,
     max_source_characters: int,
     min_score_gap: float,
@@ -163,6 +201,7 @@ def reuse_accepted_records(
             scoring_model=scoring_model,
             style_preset=style_preset,
             candidates=candidates,
+            allowed_source_candidates=allowed_source_candidates,
             seed=seed,
             max_source_characters=max_source_characters,
             min_score_gap=min_score_gap,
@@ -175,11 +214,75 @@ def reuse_accepted_records(
         current = best.get(key)
         if current is None:
             copied = dict(record)
-            copied.setdefault("metadata", {})["reused_from_dpo_output"] = str(source_output)
+            copied_metadata = copied.setdefault("metadata", {})
+            copied_metadata["reused_from_dpo_output"] = str(source_output)
+            copied_metadata["continued_into_rejected_candidates"] = candidates
+            copied_metadata["mixed_candidate_continuation"] = (
+                int(copied_metadata.get("rejected_candidates", -1)) != candidates
+            )
             best[key] = copied
             inherited += 1
         else:
             reasons["already_present"] += 1
+
+    reused_skips = 0
+    skip_reasons: Counter[str] = Counter()
+    if reuse_threshold_skips:
+        if source_skipped is None or skipped_output is None:
+            raise ValueError("threshold skip再利用にはsource_skippedとskipped_outputが必要です。")
+        existing_skips = _read(skipped_output, missing_ok=True)
+        best_skips = {
+            dpo_record_key(row): row
+            for row in existing_skips
+            if "source_dialogue_id" in row and "turn_index" in row
+        }
+        for record in _read(source_skipped, missing_ok=True):
+            try:
+                key = dpo_record_key(record)
+            except (KeyError, TypeError, ValueError):
+                skip_reasons["invalid_source_key"] += 1
+                continue
+            if key in best:
+                skip_reasons["already_accepted"] += 1
+                continue
+            selection = selections.get(key)
+            if selection is None:
+                skip_reasons["not_in_current_selection"] += 1
+                continue
+            reason = _validate_skipped_record(
+                record,
+                selection,
+                model_version=model_version,
+                generation_model=generation_model,
+                scoring_model=scoring_model,
+                style_preset=style_preset,
+                candidates=candidates,
+                allowed_source_candidates=allowed_source_candidates,
+                seed=seed,
+                max_source_characters=max_source_characters,
+                min_score_gap=min_score_gap,
+                min_chosen_posterior=min_chosen_posterior,
+                max_rejected_posterior=max_rejected_posterior,
+            )
+            if reason is not None:
+                skip_reasons[reason] += 1
+                continue
+            if key in best_skips:
+                skip_reasons["already_present"] += 1
+                continue
+            copied = dict(record)
+            copied_metadata = copied.setdefault("metadata", {})
+            copied_metadata["reused_from_dpo_skipped"] = str(source_skipped)
+            copied_metadata["continued_into_rejected_candidates"] = candidates
+            copied_metadata["mixed_candidate_continuation"] = (
+                int(copied_metadata.get("rejected_candidates", -1)) != candidates
+            )
+            best_skips[key] = copied
+            reused_skips += 1
+        skipped_output.parent.mkdir(parents=True, exist_ok=True)
+        with skipped_output.open("w", encoding="utf-8") as file:
+            for record in sorted(best_skips.values(), key=dpo_record_key):
+                file.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     output.parent.mkdir(parents=True, exist_ok=True)
     ordered = sorted(best.values(), key=lambda row: dpo_record_key(row))
@@ -199,12 +302,23 @@ def reuse_accepted_records(
         "inherited_records": inherited,
         "output_records": len(ordered),
         "rejected_reasons": dict(sorted(reasons.items())),
-        "skipped_records_reused": 0,
+        "skipped_records_reused": reused_skips,
+        "skipped_rejected_reasons": dict(sorted(skip_reasons.items())),
+        "source_skipped": str(source_skipped) if source_skipped else None,
+        "source_skipped_sha256": (
+            _sha256(source_skipped)
+            if source_skipped is not None and source_skipped.is_file()
+            else None
+        ),
         "conditions": {
             "generation_model": generation_model,
             "scoring_model": scoring_model,
             "style_preset": style_preset,
             "candidates": candidates,
+            "allowed_source_candidates": sorted(allowed_source_candidates or {candidates}),
+            "mixed_candidate_continuation": bool(
+                allowed_source_candidates and allowed_source_candidates != {candidates}
+            ),
             "seed": seed,
             "max_source_characters": max_source_characters,
             "min_score_gap": min_score_gap,
@@ -226,11 +340,15 @@ def main() -> int:
         current_selection=Path(args.current_selection),
         bayes_model=Path(args.bayes_model),
         output=Path(args.output),
+        source_skipped=Path(args.source_skipped) if args.source_skipped else None,
+        skipped_output=Path(args.skipped_output) if args.skipped_output else None,
         manifest=Path(args.manifest),
         generation_model=args.generation_model,
         scoring_model=args.scoring_model,
         style_preset=args.style_preset,
         candidates=args.candidates,
+        allowed_source_candidates=set(args.source_candidates) or {args.candidates},
+        reuse_threshold_skips=args.reuse_threshold_skips,
         seed=args.seed,
         max_source_characters=args.max_source_characters,
         min_score_gap=args.min_score_gap,
@@ -242,6 +360,7 @@ def main() -> int:
         f"inherited={payload['inherited_records']} "
         f"existing={payload['existing_current_records']} "
         f"output={payload['output_records']} "
+        f"skips={payload['skipped_records_reused']} "
         f"rejected={payload['rejected_reasons']}",
         flush=True,
     )
