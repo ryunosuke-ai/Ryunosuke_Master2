@@ -7,7 +7,9 @@ from typing import Any
 
 
 DPO_PROMPT_TEMPLATE_VERSION = "dpo_user_ai_instruction.v1"
+CONTEXT_ONLY_DPO_PROMPT_TEMPLATE_VERSION = "dpo_user_ai_context_only.v1"
 DEFAULT_MAX_HISTORY_TURNS = 10
+MATHDIAL_CONTEXT_MARKER = "\n\nこれまでの学習対話:\n"
 
 INSTRUCTION_LINES = [
     "以下の会話の次のAI返答を生成してください。",
@@ -107,6 +109,63 @@ def build_mathdial_dpo_prompt(
         lines.append(f"User: {clean_user_text}")
     lines.extend(["", "AI:"])
     return "\n".join(lines)
+
+
+def build_context_only_dpo_prompt(
+    user_text: str = "",
+    history_turns: list[dict[str, str]] | tuple[dict[str, str], ...] | None = None,
+    *,
+    max_history_turns: int = DEFAULT_MAX_HISTORY_TURNS,
+) -> str:
+    """指示を加えず、User/AI履歴だけから次応答用promptを作る。"""
+    if max_history_turns <= 0:
+        raise ValueError("max_history_turnsは正数である必要があります。")
+    lines: list[str] = []
+    for turn in list(history_turns or [])[-max_history_turns:]:
+        speaker = normalize_speaker(turn.get("speaker", "User"))
+        text = clean_turn_text(turn.get("text", ""))
+        if text:
+            lines.append(f"{speaker}: {text}")
+    clean_user_text = clean_turn_text(user_text)
+    if clean_user_text:
+        lines.append(f"User: {clean_user_text}")
+    if not lines:
+        raise ValueError("context-only promptに有効な会話履歴がありません。")
+    lines.append("AI:")
+    return "\n".join(lines)
+
+
+def convert_mathdial_instruction_prompt_to_context_only(prompt: str) -> str:
+    """旧MathDial promptからinstructionを除去し、共通builderで再構築する。"""
+    text = str(prompt)
+    if MATHDIAL_CONTEXT_MARKER not in text:
+        raise ValueError("旧MathDial promptの学習対話markerが見つかりません。")
+    _, context = text.split(MATHDIAL_CONTEXT_MARKER, 1)
+    context = context.strip()
+    if not context:
+        raise ValueError("旧MathDial promptの会話本文が空です。")
+    if not context.endswith("AI:"):
+        raise ValueError("旧MathDial promptが末尾の`AI:`で終わっていません。")
+    lines = [line for line in context.splitlines() if line.strip()]
+    if not lines or lines[-1] != "AI:":
+        raise ValueError("旧MathDial promptの末尾roleが不正です。")
+    turns: list[dict[str, str]] = []
+    for line in lines[:-1]:
+        match = re.fullmatch(r"(User|AI):(?: (.*))?", line)
+        if match is None:
+            raise ValueError(
+                "旧MathDial promptにUser/AI形式ではない会話行があります。"
+            )
+        turns.append(
+            {
+                "speaker": match.group(1),
+                "text": match.group(2) or "",
+            }
+        )
+    return build_context_only_dpo_prompt(
+        history_turns=turns,
+        max_history_turns=len(turns),
+    )
 
 
 def build_dpo_prompt_from_context_text(
