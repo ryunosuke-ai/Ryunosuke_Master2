@@ -12,7 +12,7 @@ if [[ -f "$PROJECT_ROOT/.env" ]]; then
 fi
 
 SOURCE_RUN="${SOURCE_RUN:-artifacts/mathdial_wildchat/runs/mathdial_wildchat_gpt56_v6_candidates4_mixed}"
-RUN_TAG="${RUN_TAG:-mathdial_wildchat_gpt56_v10_neutral_prompt_boundary_fixed}"
+RUN_TAG="${RUN_TAG:-mathdial_wildchat_gpt56_v11_neutral_prompt_v6_length}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-artifacts/mathdial_wildchat/runs/${RUN_TAG}}"
 DRY_RUN="${DRY_RUN:-0}"
 START_STAGE="${START_STAGE:-rewrite_dpo}"
@@ -29,12 +29,13 @@ JUDGE_MODEL="${MATHDIAL_JUDGE_MODEL:-${AZURE_OPENAI_GPT56_TERRA_DEPLOYMENT:-gpt-
 TRAIN_CUDA_DEVICES="${TRAIN_CUDA_VISIBLE_DEVICES:-0,1}"
 EVAL_CUDA_DEVICES="${EVAL_CUDA_VISIBLE_DEVICES:-0,1}"
 TRAIN_DEVICE_MAP="${TRAIN_DEVICE_MAP:-auto}"
-TRAIN_MAX_MEMORY="${TRAIN_MAX_MEMORY:-0=38GiB,1=46GiB,cpu=0GiB}"
+TRAIN_MAX_MEMORY="${TRAIN_MAX_MEMORY:-0=46GiB,1=46GiB,cpu=0GiB}"
 EVAL_MAX_MEMORY="${EVAL_MAX_MEMORY:-0=46GiB,1=46GiB,cpu=0GiB}"
 TRAIN_SAVE_TOTAL_LIMIT="${TRAIN_SAVE_TOTAL_LIMIT:-2}"
-TRAIN_MAX_LENGTH="${TRAIN_MAX_LENGTH:-4096}"
+TRAIN_MAX_LENGTH="${TRAIN_MAX_LENGTH:-1024}"
+TRAIN_TOKEN_TRUNCATION_POLICY="trainer_truncate_to_max_length"
 TRAIN_MIN_FREE_MEMORY_MIB="${TRAIN_MIN_FREE_MEMORY_MIB:-36000}"
-TRAIN_GPU0_MIN_HEADROOM_MIB="${TRAIN_GPU0_MIN_HEADROOM_MIB:-8192}"
+TRAIN_GPU0_MIN_HEADROOM_MIB="${TRAIN_GPU0_MIN_HEADROOM_MIB:-1024}"
 TRAIN_CUDA_ALLOC_CONF="${TRAIN_CUDA_ALLOC_CONF:-expandable_segments:True}"
 ALLOW_TRAIN_PLACEMENT_CONTINUATION="${ALLOW_TRAIN_PLACEMENT_CONTINUATION:-0}"
 PIPELINE_MIN_FREE_GB="${PIPELINE_MIN_FREE_GB:-8}"
@@ -208,7 +209,7 @@ python3 - "$OUTPUT_ROOT/run_metadata.json" "$EXPERIMENT_FINGERPRINT" \
   "$LOCAL_MODEL" "$TRANSLATION_MODEL" "$JUDGE_MODEL" "$RECORDS_PER_ARM" \
   "$BASIS_GOLD_RECORDS" "$EVAL_CANDIDATE_RESERVE" "$TRAIN_MAX_LENGTH" \
   "$TRAIN_DEVICE_MAP" "$TRAIN_MAX_MEMORY" "$TRAIN_GPU0_MIN_HEADROOM_MIB" \
-  "$TRAIN_CUDA_ALLOC_CONF" <<'PY'
+  "$TRAIN_CUDA_ALLOC_CONF" "$TRAIN_TOKEN_TRUNCATION_POLICY" <<'PY'
 import json
 import pathlib
 import sys
@@ -236,7 +237,7 @@ payload = {
     },
     "training": {
         "max_length": int(sys.argv[14]),
-        "token_truncation_policy": "reject_if_exceeds",
+        "token_truncation_policy": sys.argv[19],
         "device_map": sys.argv[15],
         "max_memory": sys.argv[16],
         "gpu0_minimum_activation_headroom_mib": int(sys.argv[17]),
@@ -266,7 +267,8 @@ PY
 python3 - "$OUTPUT_ROOT/training_runtime_attempts.jsonl" \
   "$RUN_TAG" "$EXPERIMENT_FINGERPRINT" "$COMPUTED_EXPERIMENT_FINGERPRINT" \
   "$TRAIN_DEVICE_MAP" "$TRAIN_MAX_MEMORY" "$TRAIN_GPU0_MIN_HEADROOM_MIB" \
-  "$TRAIN_CUDA_ALLOC_CONF" "${WATCHDOG_ATTEMPT:-1}" <<'PY'
+  "$TRAIN_CUDA_ALLOC_CONF" "${WATCHDOG_ATTEMPT:-1}" "$TRAIN_MAX_LENGTH" \
+  "$TRAIN_TOKEN_TRUNCATION_POLICY" <<'PY'
 import json
 import pathlib
 import sys
@@ -284,6 +286,8 @@ record = {
     "gpu0_minimum_activation_headroom_mib": int(sys.argv[7]),
     "cuda_allocator_configuration": sys.argv[8],
     "watchdog_attempt": int(sys.argv[9]),
+    "max_length": int(sys.argv[10]),
+    "token_truncation_policy": sys.argv[11],
 }
 path.parent.mkdir(parents=True, exist_ok=True)
 with path.open("a", encoding="utf-8") as file:
@@ -583,7 +587,6 @@ train_stage() {
     --max-memory "$TRAIN_MAX_MEMORY"
     --resume-from-checkpoint auto
     --require-tokenizer-prefix-match
-    --require-no-token-truncation
   )
   python3 -m tools.train_qwen35_dpo_lora \
     --dataset "$CONTEXT_BASIS" \
@@ -779,7 +782,8 @@ report_stage() {
     "$EVAL_COUNT" "$TRAIN_SEED" "$EVAL_SEED" "$TRANSLATION_MODEL" \
     "$JUDGE_MODEL" "$RECORDS_PER_ARM" "$BASIS_GOLD_RECORDS" \
     "$TRAIN_MAX_LENGTH" "$TRAIN_DEVICE_MAP" "$TRAIN_MAX_MEMORY" \
-    "$TRAIN_GPU0_MIN_HEADROOM_MIB" "$TRAIN_CUDA_ALLOC_CONF" <<'PY'
+    "$TRAIN_GPU0_MIN_HEADROOM_MIB" "$TRAIN_CUDA_ALLOC_CONF" \
+    "$TRAIN_TOKEN_TRUNCATION_POLICY" <<'PY'
 import json
 import pathlib
 import sys
@@ -809,7 +813,7 @@ manifest = {
     "prompt_overlap_with_v1": 0,
     "training": {
         "max_length": int(sys.argv[11]),
-        "token_truncation_policy": "reject_if_exceeds",
+        "token_truncation_policy": sys.argv[16],
         "device_map": sys.argv[12],
         "max_memory": sys.argv[13],
         "gpu0_minimum_activation_headroom_mib": int(sys.argv[14]),

@@ -403,10 +403,13 @@ def test_neutral_prompt_pipeline_fixture_runs_without_api_or_gpu(tmp_path: Path)
         (output / "manifest.json").read_text(encoding="utf-8")
     )
     assert manifest["local_prompt_mode"] == "neutral_conversation"
-    assert manifest["training"]["max_length"] == 4096
+    assert manifest["training"]["max_length"] == 1024
+    assert manifest["training"]["token_truncation_policy"] == (
+        "trainer_truncate_to_max_length"
+    )
     assert manifest["training"]["device_map"] == "auto"
-    assert manifest["training"]["max_memory"] == "0=38GiB,1=46GiB,cpu=0GiB"
-    assert manifest["training"]["gpu0_minimum_activation_headroom_mib"] == 8192
+    assert manifest["training"]["max_memory"] == "0=46GiB,1=46GiB,cpu=0GiB"
+    assert manifest["training"]["gpu0_minimum_activation_headroom_mib"] == 1024
     assert manifest["training"]["cuda_allocator_configuration"] == (
         "expandable_segments:True"
     )
@@ -441,15 +444,18 @@ def test_context_only_training_reserves_gpu0_headroom_and_bounds_oom_retry():
     ).read_text(encoding="utf-8")
 
     assert (
-        'TRAIN_MAX_MEMORY="${TRAIN_MAX_MEMORY:-0=38GiB,1=46GiB,cpu=0GiB}"'
+        'TRAIN_MAX_MEMORY="${TRAIN_MAX_MEMORY:-0=46GiB,1=46GiB,cpu=0GiB}"'
         in pipeline
     )
-    assert 'TRAIN_GPU0_MIN_HEADROOM_MIB="${TRAIN_GPU0_MIN_HEADROOM_MIB:-8192}"' in pipeline
+    assert 'TRAIN_MAX_LENGTH="${TRAIN_MAX_LENGTH:-1024}"' in pipeline
+    assert 'TRAIN_TOKEN_TRUNCATION_POLICY="trainer_truncate_to_max_length"' in pipeline
+    assert "--require-no-token-truncation" not in pipeline
+    assert 'TRAIN_GPU0_MIN_HEADROOM_MIB="${TRAIN_GPU0_MIN_HEADROOM_MIB:-1024}"' in pipeline
     assert "train_placement_preflight" in pipeline
     assert "GPU 0のactivation用余白が不足しています" in pipeline
     assert "OOM_DETECTED.json" in pipeline
     assert (
-        'WATCHDOG_OOM_TRAIN_MAX_MEMORY="${WATCHDOG_OOM_TRAIN_MAX_MEMORY:-0=36GiB,1=46GiB,cpu=0GiB}"'
+        'WATCHDOG_OOM_TRAIN_MAX_MEMORY="${WATCHDOG_OOM_TRAIN_MAX_MEMORY:-0=38GiB,1=46GiB,cpu=0GiB}"'
         in watchdog
     )
     assert "oom_fallback_used=0" in watchdog
