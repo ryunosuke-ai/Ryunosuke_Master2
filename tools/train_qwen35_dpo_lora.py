@@ -81,6 +81,14 @@ def parse_args() -> argparse.Namespace:
             "モデル読込前に検証します。"
         ),
     )
+    parser.add_argument(
+        "--require-no-token-truncation",
+        action="store_true",
+        help=(
+            "prompt+chosen/rejectedがmax_length以内であることをモデル読込前に"
+            "検証し、無言の切り詰めを禁止します。"
+        ),
+    )
     parser.add_argument("--logging-steps", type=int, default=1, help="ログ出力間隔。")
     parser.add_argument("--save-steps", type=int, default=25, help="チェックポイント保存間隔。")
     parser.add_argument(
@@ -263,6 +271,50 @@ def validate_tokenizer_prefix_alignment(
         "records": len(records),
         "chosen_mismatches": 0,
         "rejected_mismatches": 0,
+    }
+
+
+def validate_token_length_budget(
+    records: list[dict[str, str]],
+    tokenizer: Any,
+    *,
+    max_length: int,
+) -> dict[str, int]:
+    """TRLがchosen/rejectedを切り詰めないtoken長であることを検証する。"""
+    if max_length <= 0:
+        raise ValueError("max_lengthは正数である必要があります。")
+    eos_token = str(getattr(tokenizer, "eos_token", "") or "")
+    over_limit = {"chosen": 0, "rejected": 0}
+    maximum = {"chosen": 0, "rejected": 0}
+    examples: list[str] = []
+    for record_index, record in enumerate(records, start=1):
+        for side in ("chosen", "rejected"):
+            completion = record[side]
+            if eos_token and not completion.endswith(eos_token):
+                completion += eos_token
+            total_tokens = len(
+                tokenizer(record["prompt"] + completion)["input_ids"]
+            )
+            maximum[side] = max(maximum[side], total_tokens)
+            if total_tokens <= max_length:
+                continue
+            over_limit[side] += 1
+            if len(examples) < 5:
+                examples.append(
+                    f"{record_index}:{side}={total_tokens}"
+                )
+    if over_limit["chosen"] or over_limit["rejected"]:
+        raise ValueError(
+            "max_lengthを超えるDPO応答があります。"
+            f" max_length={max_length}, chosen={over_limit['chosen']},"
+            f" rejected={over_limit['rejected']}, examples={examples}。"
+            "学習条件または入力データを確認してください。"
+        )
+    return {
+        "records": len(records),
+        "max_length": max_length,
+        "max_chosen_total_tokens": maximum["chosen"],
+        "max_rejected_total_tokens": maximum["rejected"],
     }
 
 
@@ -476,6 +528,19 @@ def train(args: argparse.Namespace, split: PreferenceDatasetSplit) -> None:
             "tokenizer境界検証に成功しました: "
             f"records={alignment['records']} chosen_mismatches=0 "
             "rejected_mismatches=0"
+        )
+    if args.require_no_token_truncation:
+        length_audit = validate_token_length_budget(
+            [*split.train, *split.eval],
+            tokenizer,
+            max_length=args.max_length,
+        )
+        print(
+            "token長検証に成功しました: "
+            f"records={length_audit['records']} "
+            f"max_length={length_audit['max_length']} "
+            f"max_chosen={length_audit['max_chosen_total_tokens']} "
+            f"max_rejected={length_audit['max_rejected_total_tokens']}"
         )
     model, dtype = load_model(args, deps)
     if args.load_check:

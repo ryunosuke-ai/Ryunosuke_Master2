@@ -17,6 +17,7 @@ from tools.train_qwen35_dpo_lora import (
     resolve_device_map_mode,
     split_records,
     summarize_records,
+    validate_token_length_budget,
     validate_model_device_placement,
 )
 
@@ -85,6 +86,15 @@ class FakeModel:
 
     def named_buffers(self):
         return list(self._buffers)
+
+
+class CharacterTokenizer:
+    """token長gate用の単純な文字tokenizer。"""
+
+    eos_token = "<eos>"
+
+    def __call__(self, text: str) -> dict[str, list[int]]:
+        return {"input_ids": [ord(character) for character in text]}
 
 
 def make_args(**overrides) -> Namespace:
@@ -177,6 +187,29 @@ def test_summarize_records_returns_max_lengths():
     assert summary["max_prompt_chars"] == max(len(row["prompt"]) for row in records)
     assert summary["max_chosen_chars"] == max(len(row["chosen"]) for row in records)
     assert summary["max_rejected_chars"] == max(len(row["rejected"]) for row in records)
+
+
+def test_validate_token_length_budget_accepts_exact_limit_and_rejects_overflow():
+    tokenizer = CharacterTokenizer()
+    record = {"prompt": "P", "chosen": "CC", "rejected": "R"}
+    exact = len("PCC<eos>")
+
+    assert validate_token_length_budget(
+        [record],
+        tokenizer,
+        max_length=exact,
+    ) == {
+        "records": 1,
+        "max_length": exact,
+        "max_chosen_total_tokens": exact,
+        "max_rejected_total_tokens": len("PR<eos>"),
+    }
+    with pytest.raises(ValueError, match="max_length"):
+        validate_token_length_budget(
+            [record],
+            tokenizer,
+            max_length=exact - 1,
+        )
 
 
 def test_print_dry_run_summary_outputs_core_settings(capsys):

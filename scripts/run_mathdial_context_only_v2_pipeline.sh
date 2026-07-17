@@ -32,6 +32,7 @@ TRAIN_DEVICE_MAP="${TRAIN_DEVICE_MAP:-auto}"
 TRAIN_MAX_MEMORY="${TRAIN_MAX_MEMORY:-0=46GiB,1=46GiB,cpu=0GiB}"
 EVAL_MAX_MEMORY="${EVAL_MAX_MEMORY:-$TRAIN_MAX_MEMORY}"
 TRAIN_SAVE_TOTAL_LIMIT="${TRAIN_SAVE_TOTAL_LIMIT:-2}"
+TRAIN_MAX_LENGTH="${TRAIN_MAX_LENGTH:-4096}"
 TRAIN_MIN_FREE_MEMORY_MIB="${TRAIN_MIN_FREE_MEMORY_MIB:-36000}"
 PIPELINE_MIN_FREE_GB="${PIPELINE_MIN_FREE_GB:-8}"
 RECORDS_PER_ARM="${RECORDS_PER_ARM:-2500}"
@@ -103,7 +104,8 @@ EXPERIMENT_FINGERPRINT="$(
   python3 - "$SOURCE_BASIS" "$SOURCE_RANDOM" "$SOURCE_SAMPLES" \
     "$SOURCE_CONVERSATIONS" "$PREVIOUS_PROMPTS" "$TRAIN_SEED" "$EVAL_SEED" \
     "$EVAL_COUNT" "$LOCAL_MODEL" "$TRANSLATION_MODEL" "$JUDGE_MODEL" \
-    "$RECORDS_PER_ARM" "$BASIS_GOLD_RECORDS" "$EVAL_CANDIDATE_RESERVE" <<'PY'
+    "$RECORDS_PER_ARM" "$BASIS_GOLD_RECORDS" "$EVAL_CANDIDATE_RESERVE" \
+    "$TRAIN_MAX_LENGTH" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -146,7 +148,7 @@ PY
 python3 - "$OUTPUT_ROOT/run_metadata.json" "$EXPERIMENT_FINGERPRINT" \
   "$RUN_TAG" "$SOURCE_RUN" "$TRAIN_SEED" "$EVAL_SEED" "$EVAL_COUNT" \
   "$LOCAL_MODEL" "$TRANSLATION_MODEL" "$JUDGE_MODEL" "$RECORDS_PER_ARM" \
-  "$BASIS_GOLD_RECORDS" "$EVAL_CANDIDATE_RESERVE" <<'PY'
+  "$BASIS_GOLD_RECORDS" "$EVAL_CANDIDATE_RESERVE" "$TRAIN_MAX_LENGTH" <<'PY'
 import json
 import pathlib
 import sys
@@ -171,6 +173,10 @@ payload = {
         "prompt_mode": "neutral_conversation",
         "prompt_template_version": "dpo_user_ai_neutral_instruction.v3",
         "chosen_rejected_policy": "unchanged_from_source_run",
+    },
+    "training": {
+        "max_length": int(sys.argv[14]),
+        "token_truncation_policy": "reject_if_exceeds",
     },
     "evaluation": {
         "status": "confirmatory_axes_frozen_before_scoring",
@@ -354,6 +360,7 @@ train_stage() {
     --num-train-epochs 1
     --learning-rate 5e-6
     --beta 0.1
+    --max-length "$TRAIN_MAX_LENGTH"
     --per-device-train-batch-size 1
     --gradient-accumulation-steps 8
     --lora-r 8
@@ -369,6 +376,7 @@ train_stage() {
     --max-memory "$TRAIN_MAX_MEMORY"
     --resume-from-checkpoint auto
     --require-tokenizer-prefix-match
+    --require-no-token-truncation
   )
   python3 -m tools.train_qwen35_dpo_lora \
     --dataset "$CONTEXT_BASIS" \
@@ -570,7 +578,8 @@ statistics_stage() {
 report_stage() {
   python3 - "$OUTPUT_ROOT" "$SOURCE_RUN" "$EXPERIMENT_FINGERPRINT" \
     "$EVAL_COUNT" "$TRAIN_SEED" "$EVAL_SEED" "$TRANSLATION_MODEL" \
-    "$JUDGE_MODEL" "$RECORDS_PER_ARM" "$BASIS_GOLD_RECORDS" <<'PY'
+    "$JUDGE_MODEL" "$RECORDS_PER_ARM" "$BASIS_GOLD_RECORDS" \
+    "$TRAIN_MAX_LENGTH" <<'PY'
 import json
 import pathlib
 import sys
@@ -590,6 +599,10 @@ manifest = {
     "local_prompt_mode": "neutral_conversation",
     "prompt_template_version": "dpo_user_ai_neutral_instruction.v3",
     "prompt_overlap_with_v1": 0,
+    "training": {
+        "max_length": int(sys.argv[11]),
+        "token_truncation_policy": "reject_if_exceeds",
+    },
     "training_data_policy": {
         "chosen_rejected": "unchanged_from_source_run",
         "basis_records": int(sys.argv[9]),
