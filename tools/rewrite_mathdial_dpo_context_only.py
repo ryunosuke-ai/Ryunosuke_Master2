@@ -1,4 +1,4 @@
-"""完成済みMathDial DPOデータのpromptだけをcontext-only形式へ変換する。"""
+"""完成済みMathDial DPOデータのpromptだけを中立形式へ変換する。"""
 
 from __future__ import annotations
 
@@ -11,16 +11,21 @@ from typing import Any, Iterable
 from core.dpo_prompting import (
     CONTEXT_ONLY_DPO_PROMPT_TEMPLATE_VERSION,
     DPO_PROMPT_TEMPLATE_VERSION,
+    NEUTRAL_CONVERSATION_DPO_PROMPT_TEMPLATE_VERSION,
     convert_mathdial_instruction_prompt_to_context_only,
+    convert_mathdial_instruction_prompt_to_neutral_conversation,
 )
 
 
-PROMPT_REWRITE_VERSION = "mathdial_context_only_rewrite.v1"
+PROMPT_REWRITE_VERSION = "mathdial_prompt_only_rewrite.v2"
+PROMPT_MODES = ("context_only", "neutral_conversation")
 PROMPT_METADATA_KEYS = {
     "source_dpo_prompt_template",
     "dpo_prompt_template",
     "source_prompt_sha256",
     "context_only_prompt_sha256",
+    "rewritten_prompt_sha256",
+    "local_prompt_mode",
     "frozen_chosen_sha256",
     "frozen_rejected_sha256",
     "prompt_rewrite_version",
@@ -86,7 +91,33 @@ def is_gold_record(record: dict[str, Any]) -> bool:
     return bool(metadata.get("gold")) or str(record.get("source_dataset", "")).lower() == "mathdial"
 
 
-def rewrite_record(record: dict[str, Any], *, line_number: int) -> dict[str, Any]:
+def prompt_template_for_mode(prompt_mode: str) -> str:
+    """指定modeのtemplate versionを返す。"""
+    if prompt_mode == "context_only":
+        return CONTEXT_ONLY_DPO_PROMPT_TEMPLATE_VERSION
+    if prompt_mode == "neutral_conversation":
+        return NEUTRAL_CONVERSATION_DPO_PROMPT_TEMPLATE_VERSION
+    raise ValueError(f"未知のprompt_modeです: {prompt_mode}")
+
+
+def rewrite_prompt(prompt: str, *, prompt_mode: str) -> tuple[str, str]:
+    """指定modeのprompt本文とtemplate versionを返す。"""
+    output_template = prompt_template_for_mode(prompt_mode)
+    if prompt_mode == "context_only":
+        rewritten = convert_mathdial_instruction_prompt_to_context_only(prompt)
+    else:
+        rewritten = convert_mathdial_instruction_prompt_to_neutral_conversation(
+            prompt
+        )
+    return rewritten, output_template
+
+
+def rewrite_record(
+    record: dict[str, Any],
+    *,
+    line_number: int,
+    prompt_mode: str = "context_only",
+) -> dict[str, Any]:
     for key in ("prompt", "chosen", "rejected", "metadata"):
         if key not in record:
             raise ValueError(f"{line_number}行目に`{key}`がありません。")
@@ -101,15 +132,18 @@ def rewrite_record(record: dict[str, Any], *, line_number: int) -> dict[str, Any
             f"{line_number}行目の旧prompt templateが想定外です: {source_template!r}"
         )
 
-    context_only_prompt = convert_mathdial_instruction_prompt_to_context_only(prompt)
+    rewritten_prompt, output_template = rewrite_prompt(
+        prompt,
+        prompt_mode=prompt_mode,
+    )
     metadata = dict(record["metadata"])
     metadata.update(
         {
             "source_dpo_prompt_template": source_template,
-            "dpo_prompt_template": CONTEXT_ONLY_DPO_PROMPT_TEMPLATE_VERSION,
+            "dpo_prompt_template": output_template,
             "source_prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
-            "context_only_prompt_sha256": hashlib.sha256(
-                context_only_prompt.encode("utf-8")
+            "rewritten_prompt_sha256": hashlib.sha256(
+                rewritten_prompt.encode("utf-8")
             ).hexdigest(),
             "frozen_chosen_sha256": hashlib.sha256(
                 chosen.encode("utf-8")
@@ -117,16 +151,17 @@ def rewrite_record(record: dict[str, Any], *, line_number: int) -> dict[str, Any
             "frozen_rejected_sha256": hashlib.sha256(
                 rejected.encode("utf-8")
             ).hexdigest(),
+            "local_prompt_mode": prompt_mode,
             "prompt_rewrite_version": PROMPT_REWRITE_VERSION,
         }
     )
     output = dict(record)
     output.update(
         {
-            "prompt": context_only_prompt,
+            "prompt": rewritten_prompt,
             "metadata": metadata,
             "source_dpo_prompt_template_version": source_template,
-            "dpo_prompt_template_version": CONTEXT_ONLY_DPO_PROMPT_TEMPLATE_VERSION,
+            "dpo_prompt_template_version": output_template,
             "prompt_rewrite_version": PROMPT_REWRITE_VERSION,
         }
     )
@@ -161,6 +196,7 @@ def rewrite_file(
     *,
     expected_records: int,
     expected_gold: int,
+    prompt_mode: str = "context_only",
 ) -> dict[str, Any]:
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")
@@ -180,7 +216,11 @@ def rewrite_file(
     try:
         with temporary.open("w", encoding="utf-8") as file:
             for line_number, record in _read_jsonl(source):
-                rewritten = rewrite_record(record, line_number=line_number)
+                rewritten = rewrite_record(
+                    record,
+                    line_number=line_number,
+                    prompt_mode=prompt_mode,
+                )
                 count += 1
                 gold_count += int(is_gold_record(record))
                 for name, value in (
@@ -210,6 +250,7 @@ def rewrite_file(
         temporary.unlink(missing_ok=True)
         raise
 
+    output_template = prompt_template_for_mode(prompt_mode)
     return {
         "input": str(source),
         "output": str(output),
@@ -227,7 +268,8 @@ def rewrite_file(
         "ordered_source_prompt_sha256": digests["source_prompt"].hexdigest(),
         "ordered_output_prompt_sha256": digests["output_prompt"].hexdigest(),
         "source_template": DPO_PROMPT_TEMPLATE_VERSION,
-        "output_template": CONTEXT_ONLY_DPO_PROMPT_TEMPLATE_VERSION,
+        "output_template": output_template,
+        "local_prompt_mode": prompt_mode,
         "prompt_rewrite_version": PROMPT_REWRITE_VERSION,
         "chosen_rejected_unchanged": True,
         "record_order_unchanged": True,
@@ -237,7 +279,7 @@ def rewrite_file(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="MathDial DPO学習データのpromptだけをcontext-onlyへ変換"
+        description="MathDial DPO学習データのpromptだけを中立形式へ変換"
     )
     parser.add_argument("--basis-input", required=True)
     parser.add_argument("--random-input", required=True)
@@ -245,6 +287,11 @@ def main() -> int:
     parser.add_argument("--manifest")
     parser.add_argument("--records-per-arm", type=int, default=2500)
     parser.add_argument("--basis-gold-records", type=int, default=500)
+    parser.add_argument(
+        "--prompt-mode",
+        choices=PROMPT_MODES,
+        default="context_only",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -253,16 +300,19 @@ def main() -> int:
         output_dir / "mathdial_basis_train.jsonl",
         expected_records=args.records_per_arm,
         expected_gold=args.basis_gold_records,
+        prompt_mode=args.prompt_mode,
     )
     random_summary = rewrite_file(
         Path(args.random_input),
         output_dir / "mathdial_random_train.jsonl",
         expected_records=args.records_per_arm,
         expected_gold=0,
+        prompt_mode=args.prompt_mode,
     )
     manifest = {
         "version": PROMPT_REWRITE_VERSION,
-        "context_only_template": CONTEXT_ONLY_DPO_PROMPT_TEMPLATE_VERSION,
+        "local_prompt_mode": args.prompt_mode,
+        "output_template": basis_summary["output_template"],
         "invariants": {
             "only_prompt_and_prompt_metadata_changed": True,
             "chosen_rejected_unchanged": True,

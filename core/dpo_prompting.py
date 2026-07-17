@@ -8,8 +8,14 @@ from typing import Any
 
 DPO_PROMPT_TEMPLATE_VERSION = "dpo_user_ai_instruction.v1"
 CONTEXT_ONLY_DPO_PROMPT_TEMPLATE_VERSION = "dpo_user_ai_context_only.v1"
+NEUTRAL_CONVERSATION_DPO_PROMPT_TEMPLATE_VERSION = (
+    "dpo_user_ai_neutral_instruction.v1"
+)
 DEFAULT_MAX_HISTORY_TURNS = 10
 MATHDIAL_CONTEXT_MARKER = "\n\nこれまでの学習対話:\n"
+NEUTRAL_CONVERSATION_INSTRUCTION = (
+    "以下の会話に続くAIの応答を日本語で生成してください。"
+)
 
 INSTRUCTION_LINES = [
     "以下の会話の次のAI返答を生成してください。",
@@ -135,8 +141,25 @@ def build_context_only_dpo_prompt(
     return "\n".join(lines)
 
 
-def convert_mathdial_instruction_prompt_to_context_only(prompt: str) -> str:
-    """旧MathDial promptからinstructionを除去し、共通builderで再構築する。"""
+def build_neutral_conversation_dpo_prompt(
+    user_text: str = "",
+    history_turns: list[dict[str, str]] | tuple[dict[str, str], ...] | None = None,
+    *,
+    max_history_turns: int = DEFAULT_MAX_HISTORY_TURNS,
+) -> str:
+    """会話タスクだけを明示し、目的スタイルを指定しないpromptを作る。"""
+    context = build_context_only_dpo_prompt(
+        user_text=user_text,
+        history_turns=history_turns,
+        max_history_turns=max_history_turns,
+    )
+    return f"{NEUTRAL_CONVERSATION_INSTRUCTION}\n\n{context}"
+
+
+def _mathdial_instruction_prompt_turns(
+    prompt: str,
+) -> list[dict[str, str]]:
+    """旧MathDial promptからUser/AI会話行だけを読む。"""
     text = str(prompt)
     if MATHDIAL_CONTEXT_MARKER not in text:
         raise ValueError("旧MathDial promptの学習対話markerが見つかりません。")
@@ -162,7 +185,24 @@ def convert_mathdial_instruction_prompt_to_context_only(prompt: str) -> str:
                 "text": match.group(2) or "",
             }
         )
+    return turns
+
+
+def convert_mathdial_instruction_prompt_to_context_only(prompt: str) -> str:
+    """旧MathDial promptからinstructionを除去し、共通builderで再構築する。"""
+    turns = _mathdial_instruction_prompt_turns(prompt)
     return build_context_only_dpo_prompt(
+        history_turns=turns,
+        max_history_turns=len(turns),
+    )
+
+
+def convert_mathdial_instruction_prompt_to_neutral_conversation(
+    prompt: str,
+) -> str:
+    """旧MathDial promptを中立的な最小会話指示へ変換する。"""
+    turns = _mathdial_instruction_prompt_turns(prompt)
+    return build_neutral_conversation_dpo_prompt(
         history_turns=turns,
         max_history_turns=len(turns),
     )

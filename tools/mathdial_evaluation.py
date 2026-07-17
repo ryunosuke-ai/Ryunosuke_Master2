@@ -12,8 +12,10 @@ from core.dpo_prompting import (
     CONTEXT_ONLY_DPO_PROMPT_TEMPLATE_VERSION,
     DEFAULT_MAX_HISTORY_TURNS,
     DPO_PROMPT_TEMPLATE_VERSION,
+    NEUTRAL_CONVERSATION_DPO_PROMPT_TEMPLATE_VERSION,
     build_context_only_dpo_prompt,
     build_mathdial_dpo_prompt,
+    build_neutral_conversation_dpo_prompt,
 )
 from tools.analyze_small_corpus import OpenAIResponsesGenerator, extract_json_object
 from tools.score_dialogue_with_bayes_model import resolve_scoring_model
@@ -26,7 +28,11 @@ from tools.run_oracle_evaluation_lora_pair import (
 
 
 TRANSLATION_VERSION = "mathdial_eval_translation_v1"
-LOCAL_PROMPT_MODES = ("mathdial_instruction", "context_only")
+LOCAL_PROMPT_MODES = (
+    "mathdial_instruction",
+    "context_only",
+    "neutral_conversation",
+)
 
 
 def read_jsonl(path: Path | str) -> list[dict[str, Any]]:
@@ -213,12 +219,22 @@ def build_mathdial_model_prompt(
         {"speaker": "User", "text": problem},
         *history_turns[-DEFAULT_MAX_HISTORY_TURNS:],
     ]
+    builder = (
+        build_context_only_dpo_prompt
+        if local_prompt_mode == "context_only"
+        else build_neutral_conversation_dpo_prompt
+    )
+    template_version = (
+        CONTEXT_ONLY_DPO_PROMPT_TEMPLATE_VERSION
+        if local_prompt_mode == "context_only"
+        else NEUTRAL_CONVERSATION_DPO_PROMPT_TEMPLATE_VERSION
+    )
     return (
-        build_context_only_dpo_prompt(
+        builder(
             history_turns=context_turns,
             max_history_turns=len(context_turns),
         ),
-        CONTEXT_ONLY_DPO_PROMPT_TEMPLATE_VERSION,
+        template_version,
     )
 
 

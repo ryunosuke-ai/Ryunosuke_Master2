@@ -11,12 +11,13 @@ from pathlib import Path
 import pytest
 
 from core.dpo_prompting import (
-    CONTEXT_ONLY_DPO_PROMPT_TEMPLATE_VERSION,
     DPO_PROMPT_TEMPLATE_VERSION,
+    NEUTRAL_CONVERSATION_DPO_PROMPT_TEMPLATE_VERSION,
+    NEUTRAL_CONVERSATION_INSTRUCTION,
     build_context_only_dpo_prompt,
     build_dpo_prompt,
     build_mathdial_dpo_prompt,
-    convert_mathdial_instruction_prompt_to_context_only,
+    build_neutral_conversation_dpo_prompt,
 )
 from tools.mathdial_evaluation import (
     blind_oracle_rows,
@@ -119,6 +120,27 @@ def test_context_only_prompt_has_no_style_instruction_and_legacy_is_unchanged():
         build_context_only_dpo_prompt()
 
 
+def test_neutral_conversation_prompt_adds_only_minimum_task_instruction():
+    history = [
+        {"speaker": "User", "text": "2 + 3は何ですか。"},
+        {"speaker": "AI", "text": "どう考えましたか。"},
+        {"speaker": "User", "text": "6だと思います。"},
+    ]
+    prompt = build_neutral_conversation_dpo_prompt(history_turns=history)
+    assert prompt == (
+        f"{NEUTRAL_CONVERSATION_INSTRUCTION}\n\n"
+        "User: 2 + 3は何ですか。\n"
+        "AI: どう考えましたか。\n"
+        "User: 6だと思います。\n"
+        "AI:"
+    )
+    assert not any(token in prompt for token in FORBIDDEN_GENERATION_TEXT)
+    assert "質問" not in prompt
+    assert "ヒント" not in prompt
+    assert "教師" not in prompt
+    assert "数学" not in prompt
+
+
 def test_rewrite_changes_only_prompt_fields_and_keeps_ordered_preferences(
     tmp_path: Path,
 ):
@@ -132,6 +154,7 @@ def test_rewrite_changes_only_prompt_fields_and_keeps_ordered_preferences(
         output,
         expected_records=6,
         expected_gold=2,
+        prompt_mode="neutral_conversation",
     )
     rewritten = read_jsonl(output)
     assert [row["chosen"] for row in rewritten] == [
@@ -145,7 +168,13 @@ def test_rewrite_changes_only_prompt_fields_and_keeps_ordered_preferences(
     ] == [immutable_record_payload(row) for row in source_rows]
     assert all(
         row["dpo_prompt_template_version"]
-        == CONTEXT_ONLY_DPO_PROMPT_TEMPLATE_VERSION
+        == NEUTRAL_CONVERSATION_DPO_PROMPT_TEMPLATE_VERSION
+        for row in rewritten
+    )
+    assert all(
+        str(row["prompt"]).startswith(
+            NEUTRAL_CONVERSATION_INSTRUCTION + "\n\n"
+        )
         for row in rewritten
     )
     for source_row, output_row in zip(source_rows, rewritten):
@@ -162,6 +191,7 @@ def test_rewrite_changes_only_prompt_fields_and_keeps_ordered_preferences(
     )
     assert summary["records"] == 6
     assert summary["gold_records"] == 2
+    assert summary["local_prompt_mode"] == "neutral_conversation"
     assert summary["scores_acceptance_and_source_fields_unchanged"] is True
 
 
@@ -172,7 +202,7 @@ def test_rewrite_rejects_unknown_source_template():
         rewrite_record(record, line_number=1)
 
 
-def test_context_only_evaluation_prompt_keeps_problem_and_hides_references(
+def test_neutral_evaluation_prompt_keeps_problem_and_hides_references(
     tmp_path: Path,
 ):
     row = {
@@ -187,16 +217,19 @@ def test_context_only_evaluation_prompt_keeps_problem_and_hides_references(
     }
     prompt, version = build_mathdial_model_prompt(
         row,
-        local_prompt_mode="context_only",
+        local_prompt_mode="neutral_conversation",
     )
-    assert prompt.startswith("User: 2 + 2を計算してください。")
+    assert prompt.startswith(
+        f"{NEUTRAL_CONVERSATION_INSTRUCTION}\n\n"
+        "User: 2 + 2を計算してください。"
+    )
     assert prompt.endswith("AI:")
     assert "5だと思います。" in prompt
     assert "ground_truth" not in prompt
     assert "Teacher" not in prompt
     assert "4" not in prompt
     assert not any(token in prompt for token in FORBIDDEN_GENERATION_TEXT)
-    assert version == CONTEXT_ONLY_DPO_PROMPT_TEMPLATE_VERSION
+    assert version == NEUTRAL_CONVERSATION_DPO_PROMPT_TEMPLATE_VERSION
 
     output = tmp_path / "responses.jsonl"
     generated = generate_three_model_responses(
@@ -207,13 +240,13 @@ def test_context_only_evaluation_prompt_keeps_problem_and_hides_references(
         output_path=output,
         mock=True,
         seed=42,
-        local_prompt_mode="context_only",
+        local_prompt_mode="neutral_conversation",
     )
     assert generated[0]["model_prompt"] == prompt
     oracle = blind_oracle_rows(generated)
     assert len(oracle) == 3
     assert all(
-        item["metadata"]["local_prompt_mode"] == "context_only"
+        item["metadata"]["local_prompt_mode"] == "neutral_conversation"
         for item in oracle
     )
     assert all("basis" not in item["prompt"].lower() for item in oracle)
@@ -233,7 +266,7 @@ def test_resume_rejects_mixed_prompt_modes(tmp_path: Path):
             model="mock",
             mock=True,
             existing=existing,
-            local_prompt_mode="context_only",
+            local_prompt_mode="neutral_conversation",
         )
 
     output = tmp_path / "responses.jsonl"
@@ -247,7 +280,7 @@ def test_resume_rejects_mixed_prompt_modes(tmp_path: Path):
             output_path=output,
             mock=True,
             seed=42,
-            local_prompt_mode="context_only",
+            local_prompt_mode="neutral_conversation",
         )
 
 
@@ -304,14 +337,14 @@ def create_pipeline_fixture(root: Path) -> None:
     )
 
 
-def test_context_only_pipeline_fixture_runs_without_api_or_gpu(tmp_path: Path):
+def test_neutral_prompt_pipeline_fixture_runs_without_api_or_gpu(tmp_path: Path):
     source = tmp_path / "source"
     output = tmp_path / "output"
     create_pipeline_fixture(source)
     env = {
         **os.environ,
         "SOURCE_RUN": str(source),
-        "RUN_TAG": "context_only_fixture",
+        "RUN_TAG": "neutral_prompt_fixture",
         "OUTPUT_ROOT": str(output),
         "DRY_RUN": "1",
         "DRY_RUN_RECORDS_PER_ARM": "6",
@@ -336,7 +369,7 @@ def test_context_only_pipeline_fixture_runs_without_api_or_gpu(tmp_path: Path):
     manifest = json.loads(
         (output / "manifest.json").read_text(encoding="utf-8")
     )
-    assert manifest["local_prompt_mode"] == "context_only"
+    assert manifest["local_prompt_mode"] == "neutral_conversation"
     assert manifest["training_data_policy"] == {
         "chosen_rejected": "unchanged_from_source_run",
         "basis_records": 6,

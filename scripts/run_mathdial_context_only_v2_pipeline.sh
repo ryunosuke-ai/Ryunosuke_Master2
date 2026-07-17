@@ -12,7 +12,7 @@ if [[ -f "$PROJECT_ROOT/.env" ]]; then
 fi
 
 SOURCE_RUN="${SOURCE_RUN:-artifacts/mathdial_wildchat/runs/mathdial_wildchat_gpt56_v6_candidates4_mixed}"
-RUN_TAG="${RUN_TAG:-mathdial_wildchat_gpt56_v7_context_only_v2_confirm}"
+RUN_TAG="${RUN_TAG:-mathdial_wildchat_gpt56_v8_neutral_prompt_v2_confirm}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-artifacts/mathdial_wildchat/runs/${RUN_TAG}}"
 DRY_RUN="${DRY_RUN:-0}"
 START_STAGE="${START_STAGE:-rewrite_dpo}"
@@ -48,11 +48,11 @@ STATE_DIR="$OUTPUT_ROOT/stage_state"
 LOG_DIR="$OUTPUT_ROOT/logs"
 STATUS_FILE="$OUTPUT_ROOT/pipeline_status.json"
 HEARTBEAT_FILE="$OUTPUT_ROOT/pipeline_heartbeat.json"
-DPO_DIR="$OUTPUT_ROOT/dpo_context_only"
+DPO_DIR="$OUTPUT_ROOT/dpo_neutral_conversation"
 TRAIN_DIR="$OUTPUT_ROOT/training"
 EVAL_DIR="$OUTPUT_ROOT/evaluation"
 mkdir -p "$STATE_DIR" "$LOG_DIR"
-LOG_FILE="$LOG_DIR/context_only_v2_$(date +%Y%m%d_%H%M%S).log"
+LOG_FILE="$LOG_DIR/neutral_prompt_v2_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 SOURCE_BASIS="$SOURCE_RUN/dpo/mathdial_basis_train.jsonl"
@@ -134,8 +134,8 @@ for path in (
 payload = {
     "files": files,
     "values": sys.argv[6:],
-    "local_prompt_mode": "context_only",
-    "template_version": "dpo_user_ai_context_only.v1",
+    "local_prompt_mode": "neutral_conversation",
+    "template_version": "dpo_user_ai_neutral_instruction.v1",
 }
 print(hashlib.sha256(
     json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -168,8 +168,8 @@ payload = {
     "dpo": {
         "records_per_arm": int(sys.argv[11]),
         "basis_gold_records": int(sys.argv[12]),
-        "prompt_mode": "context_only",
-        "prompt_template_version": "dpo_user_ai_context_only.v1",
+        "prompt_mode": "neutral_conversation",
+        "prompt_template_version": "dpo_user_ai_neutral_instruction.v1",
         "chosen_rejected_policy": "unchanged_from_source_run",
     },
     "evaluation": {
@@ -343,7 +343,8 @@ rewrite_dpo_stage() {
     --output-dir "$DPO_DIR" \
     --manifest "$DPO_DIR/rewrite_manifest.json" \
     --records-per-arm "$RECORDS_PER_ARM" \
-    --basis-gold-records "$BASIS_GOLD_RECORDS"
+    --basis-gold-records "$BASIS_GOLD_RECORDS" \
+    --prompt-mode neutral_conversation
 }
 
 train_stage() {
@@ -415,8 +416,8 @@ prepare_eval_stage() {
     --exclude-prompts "$PREVIOUS_PROMPTS" \
     --stratify-teacher-moves \
     --candidate-reserve "$EVAL_CANDIDATE_RESERVE" \
-    --prompt-id-prefix "mathdial_context_only_v2" \
-    --local-prompt-mode context_only \
+    --prompt-id-prefix "mathdial_neutral_v2" \
+    --local-prompt-mode neutral_conversation \
     --resume \
     "${mock[@]}"
   python3 - "$PROMPTS" "$PREVIOUS_PROMPTS" "$EVAL_COUNT" <<'PY'
@@ -438,23 +439,27 @@ required = int(sys.argv[3])
 if len(current) != required:
     raise SystemExit(f"確認評価promptが不足しています: {len(current)}/{required}")
 if {str(row["qid"]) for row in current} & {str(row["qid"]) for row in previous}:
-    raise SystemExit("v1とcontext-only v2の評価qidが重複しています。")
+    raise SystemExit("v1とneutral-prompt v2の評価qidが重複しています。")
 if len({str(row["qid"]) for row in current}) != required:
-    raise SystemExit("context-only v2評価内でqidが重複しています。")
+    raise SystemExit("neutral-prompt v2評価内でqidが重複しています。")
 for row in current:
     prompt = str(row.get("model_prompt", ""))
-    if row.get("local_prompt_mode") != "context_only":
-        raise SystemExit("評価promptがcontext_onlyではありません。")
+    if row.get("local_prompt_mode") != "neutral_conversation":
+        raise SystemExit("評価promptがneutral_conversationではありません。")
     if not prompt.endswith("AI:"):
         raise SystemExit("評価promptが末尾のAI:で終わっていません。")
+    instruction = "以下の会話に続くAIの応答を日本語で生成してください。"
+    if not prompt.startswith(instruction + "\n\nUser:"):
+        raise SystemExit("評価promptの中立的な会話指示が不正です。")
     if str(row["problem_ja"]).strip() not in prompt:
         raise SystemExit("評価promptから問題文が失われています。")
     forbidden = (
         "個別指導", "教師返答", "段階的ヒント", "理解確認",
         "equitable_tutoring", "BASiS", "ground_truth",
     )
-    if any(token in prompt for token in forbidden):
-        raise SystemExit(f"評価生成promptに禁止された指示が含まれます: {prompt[:120]}")
+    header = prompt.split("\n\n", 1)[0]
+    if any(token in header for token in forbidden):
+        raise SystemExit(f"評価生成promptに禁止された指示が含まれます: {header}")
 PY
 }
 
@@ -463,7 +468,7 @@ generate_responses_stage() {
   [[ "$DRY_RUN" == "1" ]] && mock+=(--mock)
   if [[ "$DRY_RUN" != "1" ]]; then
     gpu_preflight "$EVAL_CUDA_DEVICES" \
-      "context-only evaluation generation" || return 20
+      "neutral-prompt evaluation generation" || return 20
   fi
   env CUDA_VISIBLE_DEVICES="$EVAL_CUDA_DEVICES" \
     DPO_COMPARE_MAX_MEMORY="$EVAL_MAX_MEMORY" \
@@ -478,7 +483,7 @@ generate_responses_stage() {
       --basis-lora "$TRAIN_DIR/basis_lora" \
       --random-lora "$TRAIN_DIR/random_lora" \
       --seed "$EVAL_SEED" \
-      --local-prompt-mode context_only \
+      --local-prompt-mode neutral_conversation \
       "${mock[@]}"
   python3 - "$RESPONSES" "$ORACLE_INPUT" "$EVAL_COUNT" <<'PY'
 import json
@@ -501,7 +506,7 @@ if len(responses) != required or len(oracle) != required * 3:
         f"oracle={len(oracle)}/{required * 3}"
     )
 for row in responses:
-    if row.get("local_prompt_mode") != "context_only":
+    if row.get("local_prompt_mode") != "neutral_conversation":
         raise SystemExit("異なるlocal_prompt_modeの応答が混入しています。")
     if not all(str(row.get(key, "")).strip() for key in (
         "base_response", "basis_response", "random_dpo_response"
@@ -581,8 +586,8 @@ manifest = {
     "evaluation_seed": int(sys.argv[6]),
     "translation_model": sys.argv[7],
     "judge_model": sys.argv[8],
-    "local_prompt_mode": "context_only",
-    "prompt_template_version": "dpo_user_ai_context_only.v1",
+    "local_prompt_mode": "neutral_conversation",
+    "prompt_template_version": "dpo_user_ai_neutral_instruction.v1",
     "prompt_overlap_with_v1": 0,
     "training_data_policy": {
         "chosen_rejected": "unchanged_from_source_run",
@@ -593,7 +598,7 @@ manifest = {
         "random_gold_records": 0,
     },
     "rewrite_manifest": json.loads(
-        (root / "dpo_context_only/rewrite_manifest.json").read_text(encoding="utf-8")
+        (root / "dpo_neutral_conversation/rewrite_manifest.json").read_text(encoding="utf-8")
     ),
 }
 (root / "manifest.json").write_text(
@@ -601,7 +606,7 @@ manifest = {
     encoding="utf-8",
 )
 sections = [
-    "# MathDial context-only DPO / Oracle v2 confirmation",
+    "# MathDial neutral-prompt DPO / Oracle v2 confirmation",
     "",
     "v1で未使用のtest qidを使い、生成モデルへスタイル指示を与えずに比較した主評価。",
     "",
@@ -647,6 +652,6 @@ run_stage report report_stage
 write_status "success" "completed" "pipeline completed"
 trap - EXIT
 
-echo "MathDial context-only v2 pipeline completed: $OUTPUT_ROOT"
+echo "MathDial neutral-prompt v2 pipeline completed: $OUTPUT_ROOT"
 echo "Report: $OUTPUT_ROOT/report.md"
 echo "Log: $LOG_FILE"
