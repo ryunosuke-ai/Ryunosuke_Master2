@@ -48,6 +48,8 @@ ESConv全体の無条件な結果へ一般化しない。
 
 ## Google Form
 
+20件すべてを1人へ提示する版は次で生成できる。
+
 ```bash
 python3 scripts/prepare_esconv_google_form_likert_eval.py
 ```
@@ -68,6 +70,36 @@ artifacts/user_eval/google_forms/esconv_oracle_enriched_likert_v2/
 `createEsconvLikertForm`を実行する。参加者はA/B/Cのいずれか1版だけへ
 割り付ける。3版を通して各モデルの表示位置が均衡する。
 
+## 推奨する2実験構成
+
+参加者の負担を下げるため、実施時は20件を10件ずつの評価実験A/Bへ分ける。
+各実験は10カテゴリから1件ずつ含み、2実験の和が元の20件になる。
+
+```bash
+python3 scripts/prepare_esconv_google_form_likert_blocks.py
+```
+
+出力:
+
+```text
+artifacts/user_eval/google_forms/esconv_oracle_enriched_likert_blocked_v3/
+  block_manifest.json
+  participant_assignment_template.csv
+  experiment_a/
+    counterbalance_version_1/
+    counterbalance_version_2/
+    counterbalance_version_3/
+  experiment_b/
+    counterbalance_version_1/
+    counterbalance_version_2/
+    counterbalance_version_3/
+```
+
+参加者を`A1/A2/A3/B1/B2/B3`へできるだけ同数に割り当てる。各参加者は
+1グループだけを評価する。1人あたりは10件、210個のLikert評定と10個の
+総合選択になる。実験A/Bの結果は、共通する軸とモデル条件を使って統合解析
+できるが、参加者が異なるため参加者IDとitem IDを含む混合効果モデルを使う。
+
 ## 解析
 
 - 代表5軸を主評価とし、内容保持・自然さを品質制約として分けて報告する。
@@ -77,5 +109,5 @@ artifacts/user_eval/google_forms/esconv_oracle_enriched_likert_v2/
   Holm補正、効果量、bootstrap 95%信頼区間を出す。
 - 最後の総合選択はモデル別選択率を出し、参加者・itemを考慮した比較を行う。
 - `ほぼ同じ`は同率、`判断できない`は当該比較の欠測として回答収集前に固定する。
-- 20件すべてを1人が評価すると420個の尺度回答になる。少人数で所要時間を
-  測り、疲労が大きい場合は20件を2ブロックへ分け、参加者間で均衡割当する。
+- 推奨する2実験構成でも1人220判断になるため、少人数で所要時間と疲労を
+  確認してから本実施する。
