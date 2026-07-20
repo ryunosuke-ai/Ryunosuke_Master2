@@ -7,6 +7,7 @@ import argparse
 import csv
 import itertools
 import json
+import random
 import sys
 from collections import Counter
 from datetime import datetime, timezone
@@ -25,7 +26,6 @@ from scripts.prepare_esconv_google_form_eval import (  # noqa: E402
     load_axis_scores,
     select_oracle_enriched,
     sha256_file,
-    version_orders,
     write_json,
     write_jsonl,
 )
@@ -43,10 +43,9 @@ from scripts.prepare_esconv_google_form_likert_eval import (  # noqa: E402
 
 
 DEFAULT_OUTPUT_DIR = Path(
-    "artifacts/user_eval/google_forms/esconv_oracle_enriched_likert_blocked_v3"
+    "artifacts/user_eval/google_forms/esconv_oracle_enriched_likert_two_forms_v4"
 )
 EXPERIMENTS = ("A", "B")
-COUNTERBALANCE_VERSIONS = ("1", "2", "3")
 
 
 def parse_args() -> argparse.Namespace:
@@ -125,76 +124,85 @@ def split_category_pairs(
     }
 
 
-def write_experiment_versions(
+def balanced_single_form_orders(
+    count: int,
+    *,
+    seed: int,
+) -> list[tuple[str, str, str]]:
+    """1フォーム内で各モデルのA/B/C位置を3〜4回に均衡する。"""
+    base = list(MODEL_KEYS)
+    rotation = seed % len(base)
+    base = base[rotation:] + base[:rotation]
+    latin_orders = [
+        tuple(base[index:] + base[:index])
+        for index in range(len(base))
+    ]
+    orders = [
+        latin_orders[index % len(latin_orders)]
+        for index in range(count)
+    ]
+    # item順との規則的な対応を避けつつ、位置ごとの件数は維持する。
+    random.Random(seed).shuffle(orders)
+    return orders
+
+
+def write_experiment(
     *,
     output_dir: Path,
     experiment: str,
     selected: list[dict[str, Any]],
     seed: int,
 ) -> dict[str, Any]:
-    """1実験について、表示位置を循環した3版を書く。"""
-    version_orders_by_name = version_orders(len(selected), seed=seed)
-    source_versions = ("A", "B", "C")
-    manifest: dict[str, Any] = {}
-    for counterbalance_version, source_version in zip(
-        COUNTERBALANCE_VERSIONS,
-        source_versions,
-    ):
-        version_dir = output_dir / f"counterbalance_version_{counterbalance_version}"
-        version_dir.mkdir(parents=True, exist_ok=True)
-        orders = version_orders_by_name[source_version]
-        public_rows = [
-            public_record(row, item_number=index, order=orders[index - 1])
-            for index, row in enumerate(selected, start=1)
-        ]
-        private_rows = [
-            {
-                **private_record(
-                    row,
-                    item_number=index,
-                    order=orders[index - 1],
-                ),
-                "experiment": experiment,
-                "counterbalance_version": counterbalance_version,
-            }
-            for index, row in enumerate(selected, start=1)
-        ]
-        title = (
-            f"相談支援応答の7段階評価・実験{experiment}"
-            f"（表示順{counterbalance_version}）"
-        )
-        write_jsonl(version_dir / "form_items_public.jsonl", public_rows)
-        write_jsonl(version_dir / "private_model_mapping.jsonl", private_rows)
-        write_csv(version_dir / "google_form_items.csv", public_rows)
-        write_markdown(
-            version_dir / "google_form_sections.md",
-            public_rows,
-            title,
-        )
-        write_apps_script(
-            version_dir / "create_google_form.gs",
-            public_rows,
-            title,
-        )
-        position_counts = Counter(
-            (position, model)
-            for row in private_rows
-            for position, model in row["position_to_model"].items()
-        )
-        manifest[counterbalance_version] = {
-            "count": len(public_rows),
-            "position_counts": {
-                f"{position}:{model}": count
-                for (position, model), count in sorted(position_counts.items())
-            },
-            "public_jsonl_sha256": sha256_file(
-                version_dir / "form_items_public.jsonl"
+    """1実験につき、位置を均衡した1つのフォームを書く。"""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    orders = balanced_single_form_orders(len(selected), seed=seed)
+    public_rows = [
+        public_record(row, item_number=index, order=orders[index - 1])
+        for index, row in enumerate(selected, start=1)
+    ]
+    private_rows = [
+        {
+            **private_record(
+                row,
+                item_number=index,
+                order=orders[index - 1],
             ),
-            "private_mapping_sha256": sha256_file(
-                version_dir / "private_model_mapping.jsonl"
-            ),
+            "experiment": experiment,
         }
-    return manifest
+        for index, row in enumerate(selected, start=1)
+    ]
+    title = f"相談支援応答の7段階評価・実験{experiment}"
+    write_jsonl(output_dir / "form_items_public.jsonl", public_rows)
+    write_jsonl(output_dir / "private_model_mapping.jsonl", private_rows)
+    write_csv(output_dir / "google_form_items.csv", public_rows)
+    write_markdown(
+        output_dir / "google_form_sections.md",
+        public_rows,
+        title,
+    )
+    write_apps_script(
+        output_dir / "create_google_form.gs",
+        public_rows,
+        title,
+    )
+    position_counts = Counter(
+        (position, model)
+        for row in private_rows
+        for position, model in row["position_to_model"].items()
+    )
+    return {
+        "count": len(public_rows),
+        "position_counts": {
+            f"{position}:{model}": count
+            for (position, model), count in sorted(position_counts.items())
+        },
+        "public_jsonl_sha256": sha256_file(
+            output_dir / "form_items_public.jsonl"
+        ),
+        "private_mapping_sha256": sha256_file(
+            output_dir / "private_model_mapping.jsonl"
+        ),
+    }
 
 
 def write_assignment_template(path: Path) -> None:
@@ -207,24 +215,21 @@ def write_assignment_template(path: Path) -> None:
                 "participant_id",
                 "assignment_group",
                 "experiment",
-                "counterbalance_version",
                 "completed",
                 "notes",
             ),
         )
         writer.writeheader()
         for experiment in EXPERIMENTS:
-            for version in COUNTERBALANCE_VERSIONS:
-                writer.writerow(
-                    {
-                        "participant_id": "",
-                        "assignment_group": f"{experiment}{version}",
-                        "experiment": experiment,
-                        "counterbalance_version": version,
-                        "completed": "",
-                        "notes": "",
-                    }
-                )
+            writer.writerow(
+                {
+                    "participant_id": "",
+                    "assignment_group": experiment,
+                    "experiment": experiment,
+                    "completed": "",
+                    "notes": "",
+                }
+            )
 
 
 def validate_split(
@@ -251,7 +256,7 @@ def validate_split(
 
 
 def main() -> int:
-    """2実験×3表示順のGoogle Form成果物を生成する。"""
+    """実験A/Bの2つのGoogle Form成果物を生成する。"""
     args = parse_args()
     response_path = args.v2_run / "three_model_responses.jsonl"
     axis_scores = load_axis_scores(
@@ -278,8 +283,9 @@ def main() -> int:
     write_json(
         args.output_dir / "questionnaire_spec.json",
         {
-            "version": "esconv_google_form_likert_blocked.v3",
+            "version": "esconv_google_form_likert_two_forms.v4",
             "experiments": 2,
+            "forms": 2,
             "items_per_participant": 10,
             "likert_ratings_per_participant": (
                 10 * 3 * len(LIKERT_STATEMENTS)
@@ -287,11 +293,11 @@ def main() -> int:
             "final_choices_per_participant": 10,
             "likert_anchors": LIKERT_ANCHORS,
             "statements": list(LIKERT_STATEMENTS),
-            "assignment_groups": [
-                f"{experiment}{version}"
-                for experiment in EXPERIMENTS
-                for version in COUNTERBALANCE_VERSIONS
-            ],
+            "assignment_groups": list(EXPERIMENTS),
+            "position_control": (
+                "各フォーム内で各モデルが応答A/B/Cの各位置へ"
+                "3回または4回現れるよう固定配置する。"
+            ),
         },
     )
 
@@ -299,7 +305,7 @@ def main() -> int:
     for experiment_index, experiment in enumerate(EXPERIMENTS):
         rows = experiments[experiment]
         experiment_dir = args.output_dir / f"experiment_{experiment.lower()}"
-        versions = write_experiment_versions(
+        form_manifest = write_experiment(
             output_dir=experiment_dir,
             experiment=experiment,
             selected=rows,
@@ -314,14 +320,14 @@ def main() -> int:
             "mean_basis_advantage": mean(
                 row["basis_advantage_over_best_control"] for row in rows
             ),
-            "counterbalance_versions": versions,
+            "form": form_manifest,
         }
 
     write_assignment_template(args.output_dir / "participant_assignment_template.csv")
     write_json(
         args.output_dir / "block_manifest.json",
         {
-            "version": "esconv_oracle_enriched_likert_blocks.v3",
+            "version": "esconv_oracle_enriched_likert_two_forms.v4",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "seed": args.seed,
             "source_selected_count": len(selected),
@@ -335,8 +341,8 @@ def main() -> int:
             ),
             "experiments": experiment_manifests,
             "participant_assignment": (
-                "参加者をA1/A2/A3/B1/B2/B3へできるだけ同数に割り当て、"
-                "各参加者は1グループだけを評価する。"
+                "参加者を実験A/Bへできるだけ同数に割り当て、"
+                "各参加者は一方だけを評価する。"
             ),
             "source": {
                 "responses": response_path.as_posix(),

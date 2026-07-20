@@ -70,7 +70,7 @@ artifacts/user_eval/google_forms/esconv_oracle_enriched_likert_v2/
 `createEsconvLikertForm`を実行する。参加者はA/B/Cのいずれか1版だけへ
 割り付ける。3版を通して各モデルの表示位置が均衡する。
 
-## 推奨する2実験構成
+## 推奨する2フォーム構成
 
 参加者の負担を下げるため、実施時は20件を10件ずつの評価実験A/Bへ分ける。
 各実験は10カテゴリから1件ずつ含み、2実験の和が元の20件になる。
@@ -82,23 +82,25 @@ python3 scripts/prepare_esconv_google_form_likert_blocks.py
 出力:
 
 ```text
-artifacts/user_eval/google_forms/esconv_oracle_enriched_likert_blocked_v3/
+artifacts/user_eval/google_forms/esconv_oracle_enriched_likert_two_forms_v4/
   block_manifest.json
   participant_assignment_template.csv
   experiment_a/
-    counterbalance_version_1/
-    counterbalance_version_2/
-    counterbalance_version_3/
+    create_google_form.gs
+    form_items_public.jsonl
+    private_model_mapping.jsonl
   experiment_b/
-    counterbalance_version_1/
-    counterbalance_version_2/
-    counterbalance_version_3/
+    create_google_form.gs
+    form_items_public.jsonl
+    private_model_mapping.jsonl
 ```
 
-参加者を`A1/A2/A3/B1/B2/B3`へできるだけ同数に割り当てる。各参加者は
-1グループだけを評価する。1人あたりは10件、210個のLikert評定と10個の
-総合選択になる。実験A/Bの結果は、共通する軸とモデル条件を使って統合解析
-できるが、参加者が異なるため参加者IDとitem IDを含む混合効果モデルを使う。
+参加者を実験A/Bへできるだけ同数に割り当て、各参加者は一方だけを評価する。
+各フォーム内では、各モデルが応答A/B/Cの各位置へ3回または4回現れるよう
+固定し、表示位置の偏りを抑える。1人あたりは10件、210個のLikert評定と
+10個の総合選択になる。実験A/Bの結果は、共通する軸とモデル条件を使って
+統合解析できるが、参加者が異なるため参加者IDとitem IDを含む混合効果
+モデルを使う。
 
 ## 解析
 

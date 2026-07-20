@@ -5,6 +5,7 @@ from collections import Counter
 import pytest
 
 from scripts.prepare_esconv_google_form_likert_blocks import (
+    balanced_single_form_orders,
     split_category_pairs,
     validate_split,
 )
@@ -62,3 +63,19 @@ def test_split_rejects_category_without_exactly_two_items():
     rows = candidates()[:-1]
     with pytest.raises(ValueError, match="各カテゴリ2件"):
         split_category_pairs(rows)
+
+
+def test_single_form_orders_balance_every_model_across_positions():
+    orders = balanced_single_form_orders(10, seed=42)
+    counts = Counter(
+        (position, model)
+        for order in orders
+        for position, model in zip(("A", "B", "C"), order)
+    )
+    assert len(orders) == 10
+    for model in ("base", "basis", "random"):
+        assert sorted(counts[(position, model)] for position in ("A", "B", "C")) == [
+            3,
+            3,
+            4,
+        ]
