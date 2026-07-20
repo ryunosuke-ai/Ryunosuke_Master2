@@ -112,6 +112,111 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
             writer.writerows(rows)
 
 
+def load_prompt_strata(
+    path: Path,
+) -> dict[str, dict[str, str]]:
+    """評価promptから、モデル非依存の選定層を読む。"""
+    result = {}
+    for line in path.open(encoding="utf-8"):
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        sample_id = str(row["sample_id"])
+        move = str(row.get("selection_teacher_move", "")).strip()
+        stage = str(row.get("selection_stage", "")).strip()
+        if not move or not stage:
+            raise ValueError(
+                f"評価promptに選定層がありません: {sample_id}"
+            )
+        result[sample_id] = {
+            "teacher_move": move,
+            "conversation_stage": stage,
+        }
+    return result
+
+
+def analyze_strata(
+    data: dict[str, dict[str, dict[str, float]]],
+    strata: dict[str, dict[str, str]],
+    *,
+    bootstrap: int,
+    seed: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Teacher move・段階別の記述統計と対応差を出す。"""
+    rng = random.Random(seed)
+    summaries: list[dict[str, Any]] = []
+    pairwise: list[dict[str, Any]] = []
+    for axis in sorted(data):
+        complete = {
+            sample: scores
+            for sample, scores in data[axis].items()
+            if sample in strata and all(model in scores for model in MODELS)
+        }
+        for stratum_type in ("teacher_move", "conversation_stage"):
+            values_in_stratum = sorted(
+                {strata[sample][stratum_type] for sample in complete}
+            )
+            for stratum in values_in_stratum:
+                sample_ids = sorted(
+                    sample
+                    for sample in complete
+                    if strata[sample][stratum_type] == stratum
+                )
+                if not sample_ids:
+                    continue
+                values = {
+                    model: [
+                        complete[sample][model] for sample in sample_ids
+                    ]
+                    for model in MODELS
+                }
+                for model in MODELS:
+                    low, high = bootstrap_mean_ci(
+                        values[model],
+                        rng=rng,
+                        draws=bootstrap,
+                    )
+                    summaries.append(
+                        {
+                            "axis": axis,
+                            "stratum_type": stratum_type,
+                            "stratum": stratum,
+                            "model_name": model,
+                            "n": len(sample_ids),
+                            "mean": mean(values[model]),
+                            "ci95_low": low,
+                            "ci95_high": high,
+                        }
+                    )
+                for comparison, left, right in PAIRS:
+                    diffs = [
+                        complete[sample][left] - complete[sample][right]
+                        for sample in sample_ids
+                    ]
+                    low, high = bootstrap_mean_ci(
+                        diffs,
+                        rng=rng,
+                        draws=bootstrap,
+                    )
+                    pairwise.append(
+                        {
+                            "axis": axis,
+                            "stratum_type": stratum_type,
+                            "stratum": stratum,
+                            "comparison": comparison,
+                            "n": len(diffs),
+                            "mean_diff": mean(diffs),
+                            "ci95_low": low,
+                            "ci95_high": high,
+                            "wins": sum(value > 0 for value in diffs),
+                            "ties": sum(value == 0 for value in diffs),
+                            "losses": sum(value < 0 for value in diffs),
+                            "inference_status": "exploratory_descriptive_only",
+                        }
+                    )
+    return summaries, pairwise
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="MathDial軸別有意差検定")
     parser.add_argument("--raw", action="append", type=Path, required=True)
@@ -119,12 +224,29 @@ def main() -> int:
     parser.add_argument("--permutations", type=int, default=10000)
     parser.add_argument("--bootstrap", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--prompt-metadata", type=Path)
     args = parser.parse_args()
-    summary, omnibus, posthoc = analyze(load_axis_scores(args.raw), permutations=args.permutations, bootstrap=args.bootstrap, seed=args.seed)
+    axis_scores = load_axis_scores(args.raw)
+    summary, omnibus, posthoc = analyze(axis_scores, permutations=args.permutations, bootstrap=args.bootstrap, seed=args.seed)
     write_csv(args.output_dir / "model_summary.csv", summary)
     write_csv(args.output_dir / "omnibus_friedman.csv", omnibus)
     write_csv(args.output_dir / "posthoc_pairwise.csv", posthoc)
-    (args.output_dir / "metadata.json").write_text(json.dumps({"raw": [str(path) for path in args.raw], "permutations": args.permutations, "bootstrap": args.bootstrap, "seed": args.seed}, indent=2) + "\n", encoding="utf-8")
+    if args.prompt_metadata:
+        stratum_summary, stratum_pairwise = analyze_strata(
+            axis_scores,
+            load_prompt_strata(args.prompt_metadata),
+            bootstrap=args.bootstrap,
+            seed=args.seed,
+        )
+        write_csv(
+            args.output_dir / "stratum_model_summary.csv",
+            stratum_summary,
+        )
+        write_csv(
+            args.output_dir / "stratum_pairwise_summary.csv",
+            stratum_pairwise,
+        )
+    (args.output_dir / "metadata.json").write_text(json.dumps({"raw": [str(path) for path in args.raw], "permutations": args.permutations, "bootstrap": args.bootstrap, "seed": args.seed, "prompt_metadata": str(args.prompt_metadata) if args.prompt_metadata else None}, indent=2) + "\n", encoding="utf-8")
     return 0
 
 

@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
+import re
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from core.dpo_prompting import (
     CONTEXT_ONLY_DPO_PROMPT_TEMPLATE_VERSION,
@@ -28,11 +33,15 @@ from tools.run_oracle_evaluation_lora_pair import (
 
 
 TRANSLATION_VERSION = "mathdial_eval_translation_v1"
+DISCRIMINATIVE_SAMPLING_VERSION = "mathdial_discriminative_followup.v1"
 LOCAL_PROMPT_MODES = (
     "mathdial_instruction",
     "context_only",
     "neutral_conversation",
 )
+SAMPLING_PRESETS = ("standard", "discriminative_followup")
+DISCRIMINATIVE_MOVES = ("probing", "telling", "focus")
+DISCRIMINATIVE_STAGES = ("initial", "guided", "advanced")
 
 
 def read_jsonl(path: Path | str) -> list[dict[str, Any]]:
@@ -157,6 +166,348 @@ def exclusion_ids_from_prompts(paths: list[Path | str]) -> tuple[set[str], set[s
     return sample_ids, qids
 
 
+def discriminative_stage(history: list[dict[str, Any]]) -> str:
+    """履歴長から、事前固定したMathDial評価段階を返す。"""
+    count = len(history)
+    if count == 2:
+        return "initial"
+    if 4 <= count <= 8:
+        return "guided"
+    if count >= 10:
+        return "advanced"
+    raise ValueError(f"識別力評価の段階へ割り当てられない履歴長です: {count}")
+
+
+def has_substantive_last_user_turn(history: list[dict[str, Any]]) -> bool:
+    """短い相づちを除き、推論または数式を含むuser発話か判定する。"""
+    if not history or history[-1].get("role") != "user":
+        return False
+    text = str(history[-1].get("text", "")).strip()
+    return len(text) >= 20 or (
+        len(text) >= 8 and re.search(r"\d|[=+*/-]", text) is not None
+    )
+
+
+def load_discriminative_quota_config(
+    path: Path | str,
+) -> tuple[dict[tuple[str, str], int], int, dict[str, Any]]:
+    """識別力評価の9層quotaを読み、固定schemaを検証する。"""
+    config = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        raise ValueError("識別力評価quota configはmappingである必要があります。")
+    if config.get("version") != DISCRIMINATIVE_SAMPLING_VERSION:
+        raise ValueError(
+            "識別力評価quota configのversionが一致しません: "
+            f"{config.get('version')}"
+        )
+    raw_quotas = config.get("quotas")
+    if not isinstance(raw_quotas, dict):
+        raise ValueError("識別力評価quota configにquotasがありません。")
+    quotas: dict[tuple[str, str], int] = {}
+    for move in DISCRIMINATIVE_MOVES:
+        move_quotas = raw_quotas.get(move)
+        if not isinstance(move_quotas, dict):
+            raise ValueError(f"Teacher move quotaがありません: {move}")
+        for stage in DISCRIMINATIVE_STAGES:
+            value = move_quotas.get(stage)
+            if not isinstance(value, int) or value <= 0:
+                raise ValueError(f"quotaは正数で指定してください: {move}/{stage}")
+            quotas[(move, stage)] = value
+    target_count = sum(quotas.values())
+    if int(config.get("target_count", -1)) != target_count:
+        raise ValueError(
+            "target_countと9層quota合計が一致しません: "
+            f"{config.get('target_count')} != {target_count}"
+        )
+    reserve = config.get("reserve_per_stratum")
+    if not isinstance(reserve, int) or reserve < 0:
+        raise ValueError("reserve_per_stratumは0以上の整数で指定してください。")
+    return quotas, reserve, config
+
+
+def _stable_key(seed: int, *values: Any) -> str:
+    text = ":".join([str(seed), *(str(value) for value in values)])
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _assign_qids_to_strata(
+    options: dict[str, dict[tuple[str, str], list[tuple[dict[str, Any], dict[str, Any]]]]],
+    *,
+    quotas: dict[tuple[str, str], int],
+    seed: int,
+) -> dict[str, tuple[str, str]]:
+    """qidを一度だけ使い、最大流で全stratum quotaを満たす。"""
+    source = ("source",)
+    sink = ("sink",)
+    adjacency: dict[tuple[Any, ...], list[tuple[Any, ...]]] = defaultdict(list)
+    capacity: dict[tuple[tuple[Any, ...], tuple[Any, ...]], int] = {}
+
+    def add_edge(left: tuple[Any, ...], right: tuple[Any, ...], value: int) -> None:
+        adjacency[left].append(right)
+        adjacency[right].append(left)
+        capacity[(left, right)] = value
+        capacity[(right, left)] = 0
+
+    qids = sorted(options, key=lambda qid: _stable_key(seed, "qid", qid))
+    for qid in qids:
+        qid_node = ("qid", qid)
+        add_edge(source, qid_node, 1)
+        cells = sorted(
+            options[qid],
+            key=lambda cell: _stable_key(seed, "cell", qid, *cell),
+        )
+        for move, stage in cells:
+            add_edge(qid_node, ("cell", move, stage), 1)
+    for (move, stage), value in sorted(quotas.items()):
+        add_edge(("cell", move, stage), sink, value)
+
+    flow = 0
+    while True:
+        previous: dict[tuple[Any, ...], tuple[Any, ...] | None] = {source: None}
+        queue = deque([source])
+        while queue and sink not in previous:
+            node = queue.popleft()
+            for next_node in adjacency[node]:
+                if next_node in previous or capacity[(node, next_node)] <= 0:
+                    continue
+                previous[next_node] = node
+                queue.append(next_node)
+        if sink not in previous:
+            break
+        node = sink
+        while previous[node] is not None:
+            parent = previous[node]
+            assert parent is not None
+            capacity[(parent, node)] -= 1
+            capacity[(node, parent)] += 1
+            node = parent
+        flow += 1
+
+    required = sum(quotas.values())
+    if flow != required:
+        availability = {
+            f"{move}/{stage}": sum(
+                (move, stage) in cells for cells in options.values()
+            )
+            for move, stage in quotas
+        }
+        raise ValueError(
+            "qid一意条件の下で識別力評価quotaを満たせません: "
+            f"{flow}/{required}, availability={availability}"
+        )
+
+    assigned: dict[str, tuple[str, str]] = {}
+    for qid in qids:
+        qid_node = ("qid", qid)
+        for move, stage in options[qid]:
+            cell_node = ("cell", move, stage)
+            if capacity.get((cell_node, qid_node), 0) > 0:
+                assigned[qid] = (move, stage)
+                break
+    if len(assigned) != required:
+        raise RuntimeError("最大流の識別力評価割当を復元できません。")
+    return assigned
+
+
+def select_discriminative_followup_prompts(
+    samples: list[dict[str, Any]],
+    conversations: list[dict[str, Any]],
+    *,
+    quotas: dict[tuple[str, str], int],
+    reserve_per_stratum: int,
+    seed: int,
+    excluded_sample_ids: set[str] | None = None,
+    excluded_qids: set[str] | None = None,
+    prompt_id_prefix: str = "mathdial_discriminative",
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """未使用test qidから、事前固定した9層と補欠を選ぶ。"""
+    conversation_by_id = {
+        row["conversation_id"]: row
+        for row in conversations
+        if row.get("split") == "test"
+    }
+    excluded_sample_ids = excluded_sample_ids or set()
+    excluded_qids = excluded_qids or set()
+    options: dict[
+        str,
+        dict[
+            tuple[str, str],
+            list[tuple[dict[str, Any], dict[str, Any]]],
+        ],
+    ] = defaultdict(lambda: defaultdict(list))
+    eligible_sample_count = 0
+    for sample in samples:
+        metadata = sample.get("metadata", {})
+        if metadata.get("split") != "test" or not metadata.get("history_ends_with_user"):
+            continue
+        if str(sample.get("sample_id", "")) in excluded_sample_ids:
+            continue
+        if sample.get("next_user_turn") is None:
+            continue
+        history = sample.get("history")
+        if not isinstance(history, list) or not has_substantive_last_user_turn(history):
+            continue
+        try:
+            stage = discriminative_stage(history)
+        except ValueError:
+            continue
+        conversation = conversation_by_id.get(str(sample.get("conversation_id", "")))
+        if conversation is None:
+            continue
+        qid = str(conversation.get("metadata", {}).get("qid", "")).strip()
+        if not qid or qid in excluded_qids:
+            continue
+        moves = {
+            str(move).strip().lower()
+            for move in metadata.get("teacher_moves", [])
+        }
+        valid_moves = moves & set(DISCRIMINATIVE_MOVES)
+        if not valid_moves:
+            continue
+        eligible_sample_count += 1
+        for move in valid_moves:
+            options[qid][(move, stage)].append((sample, conversation))
+
+    combined_quotas = {
+        cell: value + reserve_per_stratum for cell, value in quotas.items()
+    }
+    assigned = _assign_qids_to_strata(
+        options,
+        quotas=combined_quotas,
+        seed=seed,
+    )
+    selected: list[dict[str, Any]] = []
+    stratum_counts: dict[str, dict[str, int]] = {}
+    for cell in quotas:
+        move, stage = cell
+        qids = sorted(
+            [qid for qid, assigned_cell in assigned.items() if assigned_cell == cell],
+            key=lambda qid: _stable_key(seed, "assigned", move, stage, qid),
+        )
+        target = quotas[cell]
+        stratum_counts[f"{move}/{stage}"] = {
+            "primary": target,
+            "reserve": reserve_per_stratum,
+            "total": len(qids),
+        }
+        for cell_index, qid in enumerate(qids):
+            candidates = sorted(
+                options[qid][cell],
+                key=lambda pair: _stable_key(
+                    seed,
+                    "sample",
+                    qid,
+                    pair[0].get("sample_id"),
+                ),
+            )
+            sample, conversation = candidates[0]
+            selected.append(
+                {
+                    "sample_id": sample["sample_id"],
+                    "conversation_id": sample["conversation_id"],
+                    "qid": qid,
+                    "problem_en": conversation.get("metadata", {}).get(
+                        "question", ""
+                    ),
+                    "ground_truth_en": conversation.get("metadata", {}).get(
+                        "ground_truth", ""
+                    ),
+                    "history_en": sample["history"],
+                    "source_teacher_moves": sample["metadata"].get(
+                        "teacher_moves", []
+                    ),
+                    "split": "test",
+                    "selection_teacher_move": move,
+                    "selection_stage": stage,
+                    "selection_role": (
+                        "primary" if cell_index < target else "reserve"
+                    ),
+                    "selection_rank_in_stratum": cell_index,
+                }
+            )
+    selected.sort(
+        key=lambda row: (
+            row["selection_role"] != "primary",
+            _stable_key(seed, "output", row["sample_id"]),
+        )
+    )
+    for index, row in enumerate(selected):
+        row["prompt_id"] = f"{prompt_id_prefix}_{index:03d}"
+
+    excluded_qid_hash = hashlib.sha256(
+        "\n".join(sorted(excluded_qids)).encode("utf-8")
+    ).hexdigest()
+    manifest = {
+        "version": DISCRIMINATIVE_SAMPLING_VERSION,
+        "status": "prospective_targeted_followup_after_subgroup_analysis",
+        "seed": seed,
+        "target_count": sum(quotas.values()),
+        "reserve_per_stratum": reserve_per_stratum,
+        "candidate_count": len(selected),
+        "eligible_sample_count": eligible_sample_count,
+        "eligible_qid_count": len(options),
+        "excluded_sample_count": len(excluded_sample_ids),
+        "excluded_qid_count": len(excluded_qids),
+        "excluded_qids_sha256": excluded_qid_hash,
+        "filters": {
+            "split": "test",
+            "history_ends_with_user": True,
+            "next_user_turn_observed": True,
+            "teacher_moves": list(DISCRIMINATIVE_MOVES),
+            "generic_only_excluded": True,
+            "substantive_last_user_turn": (
+                "20+ characters, or 8+ characters with number/formula"
+            ),
+            "qid_unique": True,
+            "conversation_unique": True,
+            "model_outputs_used_for_selection": False,
+        },
+        "strata": stratum_counts,
+    }
+    return selected, manifest
+
+
+def finalize_discriminative_translations(
+    translated: list[dict[str, Any]],
+    *,
+    quotas: dict[tuple[str, str], int],
+) -> list[dict[str, Any]]:
+    """翻訳成功済み候補から、各層のprimary不足を補欠で補う。"""
+    selected: list[dict[str, Any]] = []
+    seen_qids: set[str] = set()
+    for move, stage in quotas:
+        candidates = [
+            row
+            for row in translated
+            if row.get("selection_teacher_move") == move
+            and row.get("selection_stage") == stage
+        ]
+        candidates.sort(
+            key=lambda row: (
+                row.get("selection_role") != "primary",
+                int(row.get("selection_rank_in_stratum", 10**9)),
+                str(row.get("sample_id", "")),
+            )
+        )
+        accepted = []
+        for row in candidates:
+            qid = str(row.get("qid", ""))
+            if not qid or qid in seen_qids:
+                continue
+            accepted.append(row)
+            seen_qids.add(qid)
+            if len(accepted) == quotas[(move, stage)]:
+                break
+        if len(accepted) != quotas[(move, stage)]:
+            raise ValueError(
+                "翻訳成功候補が識別力評価quotaに不足しています: "
+                f"{move}/{stage}={len(accepted)}/{quotas[(move, stage)]}"
+            )
+        selected.extend(accepted)
+    selected.sort(key=lambda row: str(row.get("prompt_id", "")))
+    return selected
+
+
 def translation_instructions() -> str:
     return (
         "Translate the structured math tutoring context into natural Japanese for a Japanese learner. "
@@ -208,10 +559,11 @@ def build_mathdial_model_prompt(
     if local_prompt_mode == "mathdial_instruction":
         model_history = [
             {"speaker": "User", "text": f"数学問題: {problem}"},
-            *history_turns,
+            *history_turns[-DEFAULT_MAX_HISTORY_TURNS:],
         ]
         return build_mathdial_dpo_prompt(
-            history_turns=model_history
+            history_turns=model_history,
+            max_history_turns=len(model_history),
         ), DPO_PROMPT_TEMPLATE_VERSION
 
     # 問題文は必ず保持し、instructionを加えず直近履歴だけを続ける。
@@ -394,6 +746,17 @@ def main() -> int:
         help="翻訳失敗時の補欠として追加選定する未使用test qid数。",
     )
     prepare.add_argument(
+        "--sampling-preset",
+        choices=SAMPLING_PRESETS,
+        default="standard",
+    )
+    prepare.add_argument("--sampling-quota-config")
+    prepare.add_argument("--selection-manifest")
+    prepare.add_argument(
+        "--candidate-output",
+        help="識別力評価でprimaryと補欠の翻訳結果を保存するJSONL。",
+    )
+    prepare.add_argument(
         "--local-prompt-mode",
         choices=LOCAL_PROMPT_MODES,
         default="mathdial_instruction",
@@ -421,6 +784,109 @@ def main() -> int:
         excluded_sample_ids, excluded_qids = exclusion_ids_from_prompts(
             [Path(path) for path in args.exclude_prompts]
         )
+        if args.sampling_preset == "discriminative_followup":
+            if not args.sampling_quota_config:
+                parser.error(
+                    "discriminative_followupには"
+                    "--sampling-quota-configが必要です。"
+                )
+            if not args.selection_manifest:
+                parser.error(
+                    "discriminative_followupには"
+                    "--selection-manifestが必要です。"
+                )
+            quotas, reserve_per_stratum, quota_config = (
+                load_discriminative_quota_config(args.sampling_quota_config)
+            )
+            if sum(quotas.values()) != args.count:
+                parser.error(
+                    "--countと識別力評価quota合計が一致しません: "
+                    f"{args.count} != {sum(quotas.values())}"
+                )
+            candidates, manifest = select_discriminative_followup_prompts(
+                read_jsonl(args.samples),
+                read_jsonl(args.conversations),
+                quotas=quotas,
+                reserve_per_stratum=reserve_per_stratum,
+                seed=args.seed,
+                excluded_sample_ids=excluded_sample_ids,
+                excluded_qids=excluded_qids,
+                prompt_id_prefix=args.prompt_id_prefix,
+            )
+            candidate_output = Path(
+                args.candidate_output
+                or str(
+                    Path(args.output).with_name(
+                        "prompt_candidates_ja.jsonl"
+                    )
+                )
+            )
+            existing_candidates = (
+                read_jsonl(candidate_output)
+                if args.resume and candidate_output.exists()
+                else []
+            )
+            translated_candidates = translate_prompts(
+                candidates,
+                generator=(
+                    None if args.mock else OpenAIResponsesGenerator()
+                ),
+                model=args.model,
+                mock=args.mock,
+                existing=existing_candidates,
+                output_path=candidate_output,
+                errors_path=args.errors_output,
+                skip_sample_errors=args.skip_sample_errors,
+                local_prompt_mode=args.local_prompt_mode,
+                target_count=None,
+            )
+            translated = finalize_discriminative_translations(
+                translated_candidates,
+                quotas=quotas,
+            )
+            write_jsonl(translated, args.output)
+            selected_counts: dict[str, int] = defaultdict(int)
+            reserve_used: dict[str, int] = defaultdict(int)
+            for row in translated:
+                key = (
+                    f"{row['selection_teacher_move']}/"
+                    f"{row['selection_stage']}"
+                )
+                selected_counts[key] += 1
+                if row.get("selection_role") == "reserve":
+                    reserve_used[key] += 1
+            template_version = DPO_PROMPT_TEMPLATE_VERSION
+            if args.local_prompt_mode == "context_only":
+                template_version = CONTEXT_ONLY_DPO_PROMPT_TEMPLATE_VERSION
+            elif args.local_prompt_mode == "neutral_conversation":
+                template_version = (
+                    NEUTRAL_CONVERSATION_DPO_PROMPT_TEMPLATE_VERSION
+                )
+            manifest.update(
+                {
+                    "quota_config": quota_config,
+                    "quota_config_path": str(args.sampling_quota_config),
+                    "translated_candidate_count": len(
+                        translated_candidates
+                    ),
+                    "final_count": len(translated),
+                    "selected_strata": dict(
+                        sorted(selected_counts.items())
+                    ),
+                    "reserve_used": dict(sorted(reserve_used.items())),
+                    "candidate_output": str(candidate_output),
+                    "output": str(args.output),
+                    "local_prompt_mode": args.local_prompt_mode,
+                    "model_prompt_template_version": template_version,
+                }
+            )
+            selection_manifest = Path(args.selection_manifest)
+            selection_manifest.parent.mkdir(parents=True, exist_ok=True)
+            selection_manifest.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            return 0
         selected = select_test_prompts(
             read_jsonl(args.samples),
             read_jsonl(args.conversations),

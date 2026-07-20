@@ -1,0 +1,26 @@
+name: mathdial_discriminative_followup
+version: mathdial_discriminative_followup.v1
+status: prospective_targeted_followup_after_subgroup_analysis
+target_count: 150
+reserve_per_stratum: 2
+quotas:
+  probing:
+    initial: 15
+    guided: 25
+    advanced: 20
+  telling:
+    initial: 15
+    guided: 20
+    advanced: 15
+  focus:
+    initial: 10
+    guided: 15
+    advanced: 15
+filters:
+  split: test
+  history_ends_with_user: true
+  next_user_turn_observed: true
+  generic_only_excluded: true
+  substantive_last_user_turn: true
+  unique_qid: true
+  unique_conversation: true
