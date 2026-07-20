@@ -1,0 +1,117 @@
+{
+  "version": "esconv_user_eval_human_review.v1",
+  "selection_type": "oracle_shortlisted_then_qualitatively_human_readability_reviewed",
+  "review_criteria": [
+    "相談者の感情を具体的に受け止めているか",
+    "会話初期に助言や解決策を急いでいないか",
+    "比較応答との支援スタイル差を人が説明できるか",
+    "BASiS応答自体が自然で文脈に合っているか",
+    "単なる長さや比較応答の破損だけで差が生じていないか"
+  ],
+  "limitations": [
+    "LLMによる定性的な事後レビューであり、人間参加者によるpilotの代替ではない",
+    "Oracle結果を確認した後の対象化選定であり、ESConv全体へ無条件に一般化しない"
+  ],
+  "items": [
+    {
+      "prompt_id": "esconv_v3_055",
+      "contrast": "clear",
+      "reason": "BASiSは失敗感と完璧主義の苦しさを受け止め、比較応答は早い認知的助言へ進む。"
+    },
+    {
+      "prompt_id": "esconv_v3_063",
+      "contrast": "clear",
+      "reason": "BASiSは返済不安を自然に正当化し、比較応答は対策や制度確認へ先に進む。"
+    },
+    {
+      "prompt_id": "esconv_v3_099",
+      "contrast": "clear",
+      "reason": "BASiSは助けを求めたい気持ちを肯定し、比較応答はすぐ他者へ相談する提案を出す。"
+    },
+    {
+      "prompt_id": "esconv_v3_058",
+      "contrast": "clear",
+      "reason": "BASiSは謝罪できない重さと相手への思いを受け止め、比較応答は謝り方の提案へ進む。"
+    },
+    {
+      "prompt_id": "esconv_v3_096",
+      "contrast": "clear",
+      "reason": "BASiSは気まずさと回避の循環を丁寧に反映し、比較応答は送信行動を小さくする提案へ進む。"
+    },
+    {
+      "prompt_id": "esconv_v3_077",
+      "contrast": "clear",
+      "reason": "BASiSは親への電話の怖さを支え、比較応答は具体的内容の聴取へ早く移る。"
+    },
+    {
+      "prompt_id": "esconv_v3_095",
+      "contrast": "clear",
+      "reason": "BASiSは期待の重圧をそのまま受容し、比較応答は自己労いの提案や分析的質問へ進む。"
+    },
+    {
+      "prompt_id": "esconv_v3_056",
+      "contrast": "moderate",
+      "reason": "BASiSは頼る怖さを保ったまま本人の希望を尋ね、比較応答は具体例を先に提示する。"
+    },
+    {
+      "prompt_id": "esconv_v3_016",
+      "contrast": "moderate",
+      "reason": "BASiSは対人配慮を肯定的に受け止め、比較応答は会話へ入る方法を先に提案する。"
+    },
+    {
+      "prompt_id": "esconv_v3_020",
+      "contrast": "clear",
+      "reason": "BASiSは返事を待つ不安に留まり、比較応答は待ち時間の過ごし方や再解釈へ進む。"
+    },
+    {
+      "prompt_id": "esconv_v3_083",
+      "contrast": "clear",
+      "reason": "BASiSは非断定的に体験を尋ね、比較応答は過敏反応や警戒状態という分析を加える。"
+    },
+    {
+      "prompt_id": "esconv_v3_013",
+      "contrast": "clear",
+      "reason": "BASiSは期待が見えない苦しさを支え、比較応答は業務詳細や解決方向へ移る。"
+    },
+    {
+      "prompt_id": "esconv_v3_062",
+      "contrast": "clear",
+      "reason": "BASiSは相談窓口を使う罪悪感とつらさを受容し、比較応答は自己判断や行動へ促す。"
+    },
+    {
+      "prompt_id": "esconv_v3_076",
+      "contrast": "clear",
+      "reason": "BASiSは反芻の苦しさを受け止め、比較応答は具体内容の追及や過度な自己批判という解釈を加える。"
+    },
+    {
+      "prompt_id": "esconv_v3_081",
+      "contrast": "clear",
+      "reason": "BASiSは休む罪悪感と自己圧迫を反映し、比較応答は原因分析や休み方の提案へ進む。"
+    },
+    {
+      "prompt_id": "esconv_v3_053",
+      "contrast": "moderate",
+      "reason": "BASiSは締切前の苦しさに留まり、比較応答は小さな依頼の助言や具体的質問へ進む。"
+    },
+    {
+      "prompt_id": "esconv_v3_030",
+      "contrast": "clear",
+      "reason": "BASiSは終わりのないタスクへの圧迫感を反映し、比較応答は詳細質問や対処提案へ進む。"
+    },
+    {
+      "prompt_id": "esconv_v3_031",
+      "contrast": "clear",
+      "reason": "BASiSは自責のつらさをまず受容し、比較応答は怒られた内容の聴取へ移る。"
+    },
+    {
+      "prompt_id": "esconv_v3_051",
+      "contrast": "moderate",
+      "reason": "BASiSは慎重さと相手への配慮を肯定し、比較応答は送信の提案や二択の分析へ進む。"
+    },
+    {
+      "prompt_id": "esconv_v3_074",
+      "contrast": "clear",
+      "reason": "BASiSは資料を開く身体的緊張を正当化し、比較応答は段階的行動や失敗場面の聴取へ進む。"
+    }
+  ]
+}

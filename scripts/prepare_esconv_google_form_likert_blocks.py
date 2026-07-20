@@ -42,7 +42,10 @@ from scripts.prepare_esconv_google_form_likert_eval import (  # noqa: E402
 
 
 DEFAULT_OUTPUT_DIR = Path(
-    "artifacts/user_eval/google_forms/esconv_discriminative_likert_two_forms_v5"
+    "artifacts/user_eval/google_forms/esconv_human_reviewed_likert_two_forms_v6"
+)
+DEFAULT_SELECTION_CONFIG = Path(
+    "configs/evaluations/esconv_user_eval_human_review_v1.json"
 )
 EXPERIMENTS = ("A", "B")
 
@@ -55,6 +58,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--v2-run", type=Path, default=DEFAULT_V2_RUN)
     parser.add_argument("--topconf-run", type=Path, default=DEFAULT_TOPCONF_RUN)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--selection-config",
+        type=Path,
+        default=DEFAULT_SELECTION_CONFIG,
+    )
     parser.add_argument("--count", type=int, default=20)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--diagnostic-permutations", type=int, default=100_000)
@@ -152,6 +160,33 @@ def select_discriminative_items(
             row["prompt_id"],
         ),
     )
+
+
+def select_human_reviewed_items(
+    candidates: list[dict[str, Any]],
+    *,
+    config_path: Path,
+    total: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """定性的監査で固定したprompt IDを再現する。"""
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    items = config.get("items")
+    if not isinstance(items, list):
+        raise ValueError("人手可読性監査configにitemsがありません。")
+    prompt_ids = [str(item.get("prompt_id") or "") for item in items]
+    if len(prompt_ids) != total or len(set(prompt_ids)) != total:
+        raise ValueError(
+            f"人手可読性監査itemが不足または重複しています: "
+            f"{len(prompt_ids)}/{total}"
+        )
+    by_id = {row["prompt_id"]: row for row in candidates}
+    missing = [prompt_id for prompt_id in prompt_ids if prompt_id not in by_id]
+    if missing:
+        raise ValueError(f"人手可読性監査itemが候補にありません: {missing}")
+    selected = [by_id[prompt_id] for prompt_id in prompt_ids]
+    if any(row["representative_means"]["basis"] < 8.0 for row in selected):
+        raise ValueError("人手可読性監査itemにBASiS平均8.0未満が含まれます。")
+    return selected, config
 
 
 def split_discriminative_items(
@@ -347,7 +382,11 @@ def main() -> int:
         response_path=response_path,
         axis_scores=axis_scores,
     )
-    selected = select_discriminative_items(candidates, total=args.count)
+    selected, review_config = select_human_reviewed_items(
+        candidates,
+        config_path=args.selection_config,
+        total=args.count,
+    )
     if len(selected) != 20:
         raise ValueError("実験A/Bは20件を10件ずつ分ける設計です。")
     experiments = split_discriminative_items(selected)
@@ -367,7 +406,7 @@ def main() -> int:
     write_json(
         args.output_dir / "questionnaire_spec.json",
         {
-            "version": "esconv_google_form_discriminative_two_forms.v5",
+            "version": "esconv_google_form_human_reviewed_two_forms.v6",
             "experiments": 2,
             "forms": 2,
             "items_per_participant": 10,
@@ -413,18 +452,28 @@ def main() -> int:
     write_json(
         args.output_dir / "block_manifest.json",
         {
-            "version": "esconv_discriminative_likert_two_forms.v5",
+            "version": "esconv_human_reviewed_likert_two_forms.v6",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "seed": args.seed,
             "source_selected_count": len(selected),
             "split_rule": (
-                "代表5軸でBASiS平均と最良control平均の差が大きい上位20件を"
-                "選び、カテゴリ構成差を最小化した上で、Oracle優位度の"
-                "合計差が最小となる10件ずつへ分割する。"
+                "Oracle候補をLLMが人間の可読性・支援スタイル対比の明瞭さで"
+                "全件監査して固定した20件を使い、カテゴリ構成差を最小化した"
+                "上で、Oracle優位度の合計差が最小となる10件ずつへ分割する。"
             ),
             "selection_rule": (
-                "BASiS代表5軸平均8.5以上を確認し、"
-                "BASiS平均－max(Base平均, Random平均)の降順で20件を選ぶ。"
+                "感情受容、非指示性、助言タイミング、比較応答との差、"
+                "BASiS応答自体の自然さを定性的に確認した固定configを使う。"
+            ),
+            "selection_config": args.selection_config.as_posix(),
+            "selection_config_sha256": sha256_file(args.selection_config),
+            "qualitative_contrast_counts": dict(
+                sorted(
+                    Counter(
+                        str(item.get("contrast") or "unknown")
+                        for item in review_config["items"]
+                    ).items()
+                )
             ),
             "selected_category_counts": dict(
                 sorted(Counter(row["category"] for row in selected).items())

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections import Counter
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from scripts.prepare_esconv_google_form_likert_blocks import (
     balanced_single_form_orders,
     select_discriminative_items,
+    select_human_reviewed_items,
     split_discriminative_items,
     split_category_pairs,
     validate_split,
@@ -109,3 +111,31 @@ def test_discriminative_split_is_disjoint_complete_and_balanced():
     assert len(ids_a) == len(ids_b) == 10
     assert not ids_a & ids_b
     assert ids_a | ids_b == {row["prompt_id"] for row in rows}
+
+
+def test_human_reviewed_selection_follows_fixed_config(tmp_path):
+    rows = [
+        candidate(index, f"category_{index % 5}", 0.2 + index / 10)
+        for index in range(20)
+    ]
+    config = {
+        "items": [
+            {
+                "prompt_id": row["prompt_id"],
+                "contrast": "clear",
+                "reason": "test",
+            }
+            for row in reversed(rows)
+        ]
+    }
+    path = tmp_path / "selection.json"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    selected, loaded = select_human_reviewed_items(
+        rows,
+        config_path=path,
+        total=20,
+    )
+    assert [row["prompt_id"] for row in selected] == [
+        row["prompt_id"] for row in reversed(rows)
+    ]
+    assert loaded == config

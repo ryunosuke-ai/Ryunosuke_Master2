@@ -37,10 +37,11 @@
 
 ## 選定した20件
 
-100件のOracle評価結果から、代表5軸におけるBASiS平均とBase・Random-DPOの
-良い方の平均との差を算出する。ユーザ評価でモデル差を確認するため、この差が
-大きい上位20件を選ぶ。選定20件はBASiS代表5軸平均8.5以上、最良controlとの
-差が0.6点以上である。
+100件のOracle評価結果を候補とし、代表5軸スコアに加えて、感情受容、
+非指示性、助言タイミング、比較応答との差、BASiS応答自体の自然さを
+LLMが全件定性的に監査する。人間が支援スタイル差を説明しやすい20件を
+固定configとして保存する。20件中16件を明瞭、4件を中程度の対比と判定した。
+詳細は`docs/ESCONV_USER_EVAL_QUALITATIVE_AUDIT.md`に記録する。
 
 これはOracle結果を見た後の対象化選定である。この20件で計算したOracleの
 有意差は選定条件付きの事後診断であり、人手評価の有意差ではない。
@@ -85,7 +86,7 @@ python3 scripts/prepare_esconv_google_form_likert_blocks.py
 出力:
 
 ```text
-artifacts/user_eval/google_forms/esconv_discriminative_likert_two_forms_v5/
+artifacts/user_eval/google_forms/esconv_human_reviewed_likert_two_forms_v6/
   block_manifest.json
   participant_assignment_template.csv
   experiment_a/
