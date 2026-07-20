@@ -24,7 +24,6 @@ from scripts.prepare_esconv_google_form_eval import (  # noqa: E402
     MODEL_KEYS,
     build_candidates,
     load_axis_scores,
-    select_oracle_enriched,
     sha256_file,
     write_json,
     write_jsonl,
@@ -43,7 +42,7 @@ from scripts.prepare_esconv_google_form_likert_eval import (  # noqa: E402
 
 
 DEFAULT_OUTPUT_DIR = Path(
-    "artifacts/user_eval/google_forms/esconv_oracle_enriched_likert_two_forms_v4"
+    "artifacts/user_eval/google_forms/esconv_discriminative_likert_two_forms_v5"
 )
 EXPERIMENTS = ("A", "B")
 
@@ -119,6 +118,87 @@ def split_category_pairs(
         ),
         "B": sorted(
             experiment_b,
+            key=lambda row: (row["category"], row["prompt_id"]),
+        ),
+    }
+
+
+def select_discriminative_items(
+    candidates: list[dict[str, Any]],
+    *,
+    total: int,
+) -> list[dict[str, Any]]:
+    """BASiSが高く、最良controlとの差が大きいitemを選ぶ。"""
+    ranked = sorted(
+        candidates,
+        key=lambda row: (
+            row["basis_advantage_over_best_control"],
+            row["representative_means"]["basis"],
+            row["prompt_id"],
+        ),
+        reverse=True,
+    )
+    selected = ranked[:total]
+    if len(selected) != total:
+        raise ValueError(f"識別力重視itemが不足しています: {len(selected)}/{total}")
+    if any(row["representative_means"]["basis"] < 8.5 for row in selected):
+        raise ValueError("選定itemにBASiS代表5軸平均8.5未満が含まれます。")
+    if any(row["basis_advantage_over_best_control"] < 0.5 for row in selected):
+        raise ValueError("選定itemに最良controlとの差0.5未満が含まれます。")
+    return sorted(
+        selected,
+        key=lambda row: (
+            -row["basis_advantage_over_best_control"],
+            row["prompt_id"],
+        ),
+    )
+
+
+def split_discriminative_items(
+    selected: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """20件をカテゴリ構成とOracle優位度が近い10件ずつへ分ける。"""
+    if len(selected) != 20:
+        raise ValueError("識別力重視分割は20件を前提とします。")
+    categories = sorted({row["category"] for row in selected})
+    best: tuple[float, float, tuple[int, ...]] | None = None
+    for indices in itertools.combinations(range(len(selected)), 10):
+        index_set = set(indices)
+        rows_a = [selected[index] for index in indices]
+        rows_b = [
+            row for index, row in enumerate(selected) if index not in index_set
+        ]
+        counts_a = Counter(row["category"] for row in rows_a)
+        counts_b = Counter(row["category"] for row in rows_b)
+        category_imbalance = sum(
+            abs(counts_a[category] - counts_b[category])
+            for category in categories
+        )
+        advantage_imbalance = abs(
+            sum(row["basis_advantage_over_best_control"] for row in rows_a)
+            - sum(row["basis_advantage_over_best_control"] for row in rows_b)
+        )
+        candidate = (category_imbalance, advantage_imbalance, indices)
+        if best is None or candidate < best:
+            best = candidate
+    if best is None:
+        raise ValueError("識別力重視itemを分割できませんでした。")
+    indices_a = set(best[2])
+    return {
+        "A": sorted(
+            [
+                row
+                for index, row in enumerate(selected)
+                if index in indices_a
+            ],
+            key=lambda row: (row["category"], row["prompt_id"]),
+        ),
+        "B": sorted(
+            [
+                row
+                for index, row in enumerate(selected)
+                if index not in indices_a
+            ],
             key=lambda row: (row["category"], row["prompt_id"]),
         ),
     }
@@ -212,7 +292,7 @@ def write_assignment_template(path: Path) -> None:
         writer = csv.DictWriter(
             file,
             fieldnames=(
-                "participant_id",
+                "participant_name",
                 "assignment_group",
                 "experiment",
                 "completed",
@@ -223,7 +303,7 @@ def write_assignment_template(path: Path) -> None:
         for experiment in EXPERIMENTS:
             writer.writerow(
                 {
-                    "participant_id": "",
+                    "participant_name": "",
                     "assignment_group": experiment,
                     "experiment": experiment,
                     "completed": "",
@@ -267,11 +347,15 @@ def main() -> int:
         response_path=response_path,
         axis_scores=axis_scores,
     )
-    selected = select_oracle_enriched(candidates, total=args.count)
+    selected = select_discriminative_items(candidates, total=args.count)
     if len(selected) != 20:
         raise ValueError("実験A/Bは20件を10件ずつ分ける設計です。")
-    experiments = split_category_pairs(selected)
-    validate_split(selected=selected, experiments=experiments)
+    experiments = split_discriminative_items(selected)
+    source_ids = {row["prompt_id"] for row in selected}
+    ids_a = {row["prompt_id"] for row in experiments["A"]}
+    ids_b = {row["prompt_id"] for row in experiments["B"]}
+    if ids_a & ids_b or ids_a | ids_b != source_ids:
+        raise ValueError("実験A/Bの重複または欠落を検出しました。")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     diagnostics = selection_diagnostics(
@@ -283,10 +367,12 @@ def main() -> int:
     write_json(
         args.output_dir / "questionnaire_spec.json",
         {
-            "version": "esconv_google_form_likert_two_forms.v4",
+            "version": "esconv_google_form_discriminative_two_forms.v5",
             "experiments": 2,
             "forms": 2,
             "items_per_participant": 10,
+            "participant_field": "full_name",
+            "contains_personal_data": True,
             "likert_ratings_per_participant": (
                 10 * 3 * len(LIKERT_STATEMENTS)
             ),
@@ -327,13 +413,30 @@ def main() -> int:
     write_json(
         args.output_dir / "block_manifest.json",
         {
-            "version": "esconv_oracle_enriched_likert_two_forms.v4",
+            "version": "esconv_discriminative_likert_two_forms.v5",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "seed": args.seed,
             "source_selected_count": len(selected),
             "split_rule": (
-                "各10カテゴリの2件を実験A/Bへ1件ずつ割り当て、"
-                "BASiS Oracle優位度の合計差が最小となる組合せを選ぶ。"
+                "代表5軸でBASiS平均と最良control平均の差が大きい上位20件を"
+                "選び、カテゴリ構成差を最小化した上で、Oracle優位度の"
+                "合計差が最小となる10件ずつへ分割する。"
+            ),
+            "selection_rule": (
+                "BASiS代表5軸平均8.5以上を確認し、"
+                "BASiS平均－max(Base平均, Random平均)の降順で20件を選ぶ。"
+            ),
+            "selected_category_counts": dict(
+                sorted(Counter(row["category"] for row in selected).items())
+            ),
+            "minimum_basis_representative_mean": min(
+                row["representative_means"]["basis"] for row in selected
+            ),
+            "minimum_basis_advantage": min(
+                row["basis_advantage_over_best_control"] for row in selected
+            ),
+            "mean_basis_advantage": mean(
+                row["basis_advantage_over_best_control"] for row in selected
             ),
             "posthoc_selection": True,
             "inference_scope": (
@@ -342,7 +445,8 @@ def main() -> int:
             "experiments": experiment_manifests,
             "participant_assignment": (
                 "参加者を実験A/Bへできるだけ同数に割り当て、"
-                "各参加者は一方だけを評価する。"
+                "各参加者は一方だけを評価する。氏名は個人情報として"
+                "研究担当者だけが取り扱う。"
             ),
             "source": {
                 "responses": response_path.as_posix(),

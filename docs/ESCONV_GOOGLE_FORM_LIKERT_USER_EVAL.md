@@ -38,17 +38,19 @@
 ## 選定した20件
 
 100件のOracle評価結果から、代表5軸におけるBASiS平均とBase・Random-DPOの
-良い方の平均との差を算出する。場面の偏りを抑えるため、10カテゴリから上位
-2件ずつ、合計20件を選ぶ。
+良い方の平均との差を算出する。ユーザ評価でモデル差を確認するため、この差が
+大きい上位20件を選ぶ。選定20件はBASiS代表5軸平均8.5以上、最良controlとの
+差が0.6点以上である。
 
 これはOracle結果を見た後の対象化選定である。この20件で計算したOracleの
 有意差は選定条件付きの事後診断であり、人手評価の有意差ではない。
 論文では「OracleでBASiS優位が確認された場面に限定したユーザ評価」と明記し、
 ESConv全体の無条件な結果へ一般化しない。
 
-## Google Form
+## 旧20件一括版
 
-20件すべてを1人へ提示する版は次で生成できる。
+以下はカテゴリ均等で選んだ旧20件を、1人へすべて提示する監査用の旧版である。
+現在のユーザ評価には使用しない。
 
 ```bash
 python3 scripts/prepare_esconv_google_form_likert_eval.py
@@ -73,7 +75,8 @@ artifacts/user_eval/google_forms/esconv_oracle_enriched_likert_v2/
 ## 推奨する2フォーム構成
 
 参加者の負担を下げるため、実施時は20件を10件ずつの評価実験A/Bへ分ける。
-各実験は10カテゴリから1件ずつ含み、2実験の和が元の20件になる。
+識別力を優先した20件のカテゴリ構成がA/Bでできるだけ近くなり、Oracle優位度
+の平均が一致するよう分割する。2実験の和が選定した20件になる。
 
 ```bash
 python3 scripts/prepare_esconv_google_form_likert_blocks.py
@@ -82,7 +85,7 @@ python3 scripts/prepare_esconv_google_form_likert_blocks.py
 出力:
 
 ```text
-artifacts/user_eval/google_forms/esconv_oracle_enriched_likert_two_forms_v4/
+artifacts/user_eval/google_forms/esconv_discriminative_likert_two_forms_v5/
   block_manifest.json
   participant_assignment_template.csv
   experiment_a/
@@ -96,10 +99,12 @@ artifacts/user_eval/google_forms/esconv_oracle_enriched_likert_two_forms_v4/
 ```
 
 参加者を実験A/Bへできるだけ同数に割り当て、各参加者は一方だけを評価する。
+氏名と回答を保存することを同意文に明記し、回答スプレッドシートは研究担当者
+だけがアクセスできるようにする。
 各フォーム内では、各モデルが応答A/B/Cの各位置へ3回または4回現れるよう
 固定し、表示位置の偏りを抑える。1人あたりは10件、210個のLikert評定と
 10個の総合選択になる。実験A/Bの結果は、共通する軸とモデル条件を使って
-統合解析できるが、参加者が異なるため参加者IDとitem IDを含む混合効果
+統合解析できるが、参加者が異なるため参加者とitem IDを含む混合効果
 モデルを使う。
 
 ## 解析

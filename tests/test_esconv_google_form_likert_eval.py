@@ -75,7 +75,7 @@ def test_selection_diagnostics_marks_result_as_posthoc():
     )
 
 
-def test_apps_script_uses_required_grid_and_consent_branch(tmp_path: Path):
+def test_apps_script_uses_readable_scales_name_and_consent_branch(tmp_path: Path):
     row = candidate(1, "category", 0.5)
     public = public_record(
         row,
@@ -85,9 +85,11 @@ def test_apps_script_uses_required_grid_and_consent_branch(tmp_path: Path):
     output = tmp_path / "form.gs"
     write_apps_script(output, [public], "テスト")
     script = output.read_text(encoding="utf-8")
-    assert "addGridItem()" in script
-    assert ".setRows(statements)" in script
-    assert ".setColumns(columns)" in script
+    assert "addScaleItem()" in script
+    assert ".setBounds(1, 7)" in script
+    assert "氏名を入力してください。" in script
+    assert "参加者ID" not in script
+    assert "addGridItem()" not in script
     assert "PageNavigationType.SUBMIT" in script
     assert "createEsconvLikertForm" in script
     assert len(LIKERT_STATEMENTS) == 7

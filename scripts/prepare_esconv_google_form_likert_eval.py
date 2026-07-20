@@ -383,13 +383,12 @@ def write_markdown(path: Path, rows: list[dict[str, Any]], title: str) -> None:
 
 
 def write_apps_script(path: Path, rows: list[dict[str, Any]], title: str) -> None:
-    """7段階グリッドを含むGoogle Form生成コードを書く。"""
+    """読みやすい7段階尺度を含むGoogle Form生成コードを書く。"""
     payload = json.dumps(rows, ensure_ascii=False)
     statements = json.dumps(
         [statement["statement"] for statement in LIKERT_STATEMENTS],
         ensure_ascii=False,
     )
-    columns = json.dumps(list(LIKERT_COLUMNS), ensure_ascii=False)
     final_options = json.dumps(list(FINAL_CHOICE_OPTIONS), ensure_ascii=False)
     script = f"""// Google Apps Scriptへ貼り付け、createEsconvLikertFormを実行する。
 function createEsconvLikertForm() {{
@@ -397,10 +396,15 @@ function createEsconvLikertForm() {{
   form.setDescription(
     'このアンケートでは、相談場面に対する3つの匿名応答を評価します。' +
     '各応答を1から7で評価した後、最もふさわしい応答を選んでください。' +
-    'モデル名は表示されません。'
+    'モデル名は表示されません。氏名と回答は研究目的で保存し、' +
+    '研究担当者だけが取り扱います。'
   );
+  form.setCollectEmail(false);
+  form.setProgressBar(true);
   const consent = form.addMultipleChoiceItem()
-    .setTitle('説明を読み、研究目的で回答を利用することに同意しますか。')
+    .setTitle(
+      '説明を読み、氏名と回答を研究目的で保存・利用することに同意しますか。'
+    )
     .setRequired(true);
   const firstPage = form.addPageBreakItem().setTitle('参加者情報と評価 1');
   consent.setChoices([
@@ -408,17 +412,12 @@ function createEsconvLikertForm() {{
     consent.createChoice('同意しない', FormApp.PageNavigationType.SUBMIT)
   ]);
   form.addTextItem()
-    .setTitle('参加者IDを入力してください。氏名は入力しないでください。')
+    .setTitle('氏名を入力してください。')
     .setRequired(true);
 
   const items = {payload};
   const statements = {statements};
-  const columns = {columns};
   const finalOptions = {final_options};
-  const scaleHelp =
-    '1=全く当てはまらない、2=当てはまらない、' +
-    '3=あまり当てはまらない、4=どちらともいえない、' +
-    '5=やや当てはまる、6=当てはまる、7=非常によく当てはまる';
 
   items.forEach((item, index) => {{
     if (index > 0) {{
@@ -432,12 +431,19 @@ function createEsconvLikertForm() {{
       form.addSectionHeaderItem()
         .setTitle('応答' + position)
         .setHelpText(response);
-      form.addGridItem()
+      form.addSectionHeaderItem()
         .setTitle('応答' + position + 'を評価してください。')
-        .setHelpText(scaleHelp)
-        .setRows(statements)
-        .setColumns(columns)
-        .setRequired(true);
+        .setHelpText(
+          '1=全く当てはまらない、4=どちらともいえない、' +
+          '7=非常によく当てはまる'
+        );
+      statements.forEach((statement) => {{
+        form.addScaleItem()
+          .setTitle(statement)
+          .setBounds(1, 7)
+          .setLabels('全く当てはまらない', '非常によく当てはまる')
+          .setRequired(true);
+      }});
     }});
     form.addMultipleChoiceItem()
       .setTitle(item.final_choice_question)

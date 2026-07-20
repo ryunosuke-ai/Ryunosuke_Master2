@@ -6,6 +6,8 @@ import pytest
 
 from scripts.prepare_esconv_google_form_likert_blocks import (
     balanced_single_form_orders,
+    select_discriminative_items,
+    split_discriminative_items,
     split_category_pairs,
     validate_split,
 )
@@ -16,6 +18,11 @@ def candidate(index: int, category: str, advantage: float) -> dict:
         "prompt_id": f"p{index:03d}",
         "category": category,
         "basis_advantage_over_best_control": advantage,
+        "representative_means": {
+            "base": 6.0,
+            "basis": 9.0,
+            "random": 6.5,
+        },
     }
 
 
@@ -79,3 +86,26 @@ def test_single_form_orders_balance_every_model_across_positions():
             3,
             4,
         ]
+
+
+def test_discriminative_selection_uses_top_advantages():
+    rows = [
+        candidate(index, f"category_{index % 5}", index / 10)
+        for index in range(30)
+    ]
+    selected = select_discriminative_items(rows, total=20)
+    assert len(selected) == 20
+    assert min(row["basis_advantage_over_best_control"] for row in selected) == 1.0
+
+
+def test_discriminative_split_is_disjoint_complete_and_balanced():
+    rows = [
+        candidate(index, f"category_{index % 5}", 0.6 + index / 10)
+        for index in range(20)
+    ]
+    experiments = split_discriminative_items(rows)
+    ids_a = {row["prompt_id"] for row in experiments["A"]}
+    ids_b = {row["prompt_id"] for row in experiments["B"]}
+    assert len(ids_a) == len(ids_b) == 10
+    assert not ids_a & ids_b
+    assert ids_a | ids_b == {row["prompt_id"] for row in rows}
