@@ -122,49 +122,44 @@ def apply_page_style() -> None:
         div[data-testid="stColumn"]:has(.reference-panel) {
             align-self: flex-start;
         }
-        div[data-testid="stMainBlockContainer"]:has(.evaluation-page-marker) {
-            height: calc(100dvh - 3.75rem);
-            overflow: hidden;
-            padding-bottom: 1rem;
-        }
         .st-key-rating_scroll_container {
             overscroll-behavior: contain;
             scrollbar-gutter: stable;
         }
         .reference-panel {
-            height: 500px;
-            max-height: 500px;
-            overflow-y: auto;
-            padding: 20px 22px;
-            scrollbar-gutter: stable;
+            height: auto;
+            max-height: none;
+            overflow: visible;
+            padding: 14px 16px;
+            font-size: 0.9rem;
         }
         .reference-heading {
-            font-size: 0.9rem;
+            font-size: 0.86rem;
             color: #52606d;
             font-weight: 700;
-            margin: 0 0 8px;
+            margin: 0 0 5px;
         }
         .conversation-text {
             white-space: pre-wrap;
-            line-height: 1.72;
+            line-height: 1.48;
             line-break: strict;
             text-wrap: pretty;
             background: #f7f8fa;
             border-left: 4px solid #6d7782;
-            padding: 13px 14px;
-            margin-bottom: 16px;
+            padding: 8px 10px;
+            margin-bottom: 7px;
         }
         .response-card {
             border-top: 1px solid #dfe3e7;
-            padding: 14px 2px 10px;
+            padding: 7px 2px 4px;
         }
         .response-label {
             font-weight: 750;
-            margin-bottom: 6px;
+            margin-bottom: 2px;
         }
         .response-text {
             white-space: pre-wrap;
-            line-height: 1.85;
+            line-height: 1.52;
             line-break: strict;
             text-wrap: pretty;
             overflow-wrap: anywhere;
@@ -195,11 +190,6 @@ def apply_page_style() -> None:
                 padding-left: 1rem;
                 padding-right: 1rem;
             }
-            div[data-testid="stMainBlockContainer"]:has(.evaluation-page-marker) {
-                height: auto;
-                overflow: visible;
-                padding-bottom: 4rem;
-            }
             div[data-testid="stColumn"]:has(.reference-panel) {
                 position: relative;
                 top: 0;
@@ -209,6 +199,7 @@ def apply_page_style() -> None:
                 max-height: none;
                 overflow: visible;
                 margin-bottom: 20px;
+                font-size: 0.95rem;
             }
             .survey-intro {
                 padding: 17px;

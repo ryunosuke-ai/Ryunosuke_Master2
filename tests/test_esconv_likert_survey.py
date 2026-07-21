@@ -203,6 +203,8 @@ def test_streamlit_start_and_evaluation_screens_render(tmp_path: Path, monkeypat
     assert any(
         ".st-key-rating_scroll_container" in block.value
         and "overscroll-behavior: contain" in block.value
+        and ".reference-panel" in block.value
+        and "overflow: visible" in block.value
         for block in app.markdown
     )
     scroll_containers = [
