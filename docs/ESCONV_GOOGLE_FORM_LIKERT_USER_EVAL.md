@@ -1,5 +1,9 @@
 # ESConv 7段階ユーザ評価
 
+専用Web画面を使う場合は、
+`docs/ESCONV_LIKERT_WEB_USER_EVAL.md`を参照する。Google Form版とWeb版は
+同じ公開itemと質問文を使い、実験開始後に混在させない。
+
 ## 評価形式
 
 同一の日本語会話履歴に対するBase、BASiS、Random-DPOの応答を匿名化する。
