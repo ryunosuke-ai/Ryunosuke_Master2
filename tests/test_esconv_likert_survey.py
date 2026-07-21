@@ -200,6 +200,12 @@ def test_streamlit_start_and_evaluation_screens_render(tmp_path: Path, monkeypat
         'stColumn"]:has(.reference-panel)' in block.value
         for block in app.markdown
     )
+    assert any(
+        'stMainBlockContainer"]:has(.evaluation-page-marker)' in block.value
+        and 'stColumn"]:last-child' in block.value
+        and "overflow-y: auto" in block.value
+        for block in app.markdown
+    )
 
 
 def test_streamlit_experiment_b_url_fixes_assignment(tmp_path: Path, monkeypatch):

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -120,12 +121,35 @@ def apply_page_style() -> None:
             margin: 10px 0;
         }
         div[data-testid="stColumn"]:has(.reference-panel) {
-            position: sticky;
-            top: 12px;
             align-self: flex-start;
         }
+        div[data-testid="stMainBlockContainer"]:has(.evaluation-page-marker) {
+            height: calc(100dvh - 3.75rem);
+            overflow: hidden;
+            padding-bottom: 1rem;
+        }
+        div[data-testid="stHorizontalBlock"]:has(.reference-panel) {
+            height: calc(100dvh - 250px);
+            min-height: 360px;
+            overflow: hidden;
+            align-items: stretch;
+        }
+        div[data-testid="stHorizontalBlock"]:has(.reference-panel)
+        > div[data-testid="stColumn"] {
+            height: 100%;
+            min-height: 0;
+            overflow: hidden;
+        }
+        div[data-testid="stHorizontalBlock"]:has(.reference-panel)
+        > div[data-testid="stColumn"]:last-child {
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            scrollbar-gutter: stable;
+            padding-right: 12px;
+        }
         .reference-panel {
-            max-height: calc(100vh - 24px);
+            height: calc(100dvh - 250px);
+            max-height: calc(100dvh - 250px);
             overflow-y: auto;
             padding: 20px 22px;
             scrollbar-gutter: stable;
@@ -187,11 +211,30 @@ def apply_page_style() -> None:
                 padding-left: 1rem;
                 padding-right: 1rem;
             }
+            div[data-testid="stMainBlockContainer"]:has(.evaluation-page-marker) {
+                height: auto;
+                overflow: visible;
+                padding-bottom: 4rem;
+            }
+            div[data-testid="stHorizontalBlock"]:has(.reference-panel) {
+                height: auto;
+                min-height: 0;
+                overflow: visible;
+            }
+            div[data-testid="stHorizontalBlock"]:has(.reference-panel)
+            > div[data-testid="stColumn"],
+            div[data-testid="stHorizontalBlock"]:has(.reference-panel)
+            > div[data-testid="stColumn"]:last-child {
+                height: auto;
+                overflow: visible;
+                padding-right: 0;
+            }
             div[data-testid="stColumn"]:has(.reference-panel) {
                 position: relative;
                 top: 0;
             }
             .reference-panel {
+                height: auto;
                 max-height: none;
                 overflow: visible;
                 margin-bottom: 20px;
@@ -408,6 +451,37 @@ def render_completion(participant: Participant, total: int) -> None:
             st.rerun()
 
 
+def reset_evaluation_scroll() -> None:
+    """評価画面への遷移時にページと質問列を先頭へ戻す。"""
+    components.html(
+        """
+        <script>
+        const resetScroll = () => {
+          window.parent.scrollTo({top: 0, left: 0, behavior: "auto"});
+          const documentRoot = window.parent.document;
+          documentRoot.querySelector('[data-testid="stAppViewContainer"]')
+            ?.scrollTo({top: 0, left: 0, behavior: "auto"});
+          documentRoot.querySelector('[data-testid="stMain"]')
+            ?.scrollTo({top: 0, left: 0, behavior: "auto"});
+          const evaluationBlock = Array.from(
+            documentRoot.querySelectorAll('div[data-testid="stHorizontalBlock"]')
+          ).find((block) => block.querySelector('.reference-panel'));
+          const columns = evaluationBlock?.querySelectorAll(
+            ':scope > div[data-testid="stColumn"]'
+          );
+          if (columns && columns.length > 1) {
+            columns[columns.length - 1].scrollTo({top: 0, behavior: "auto"});
+          }
+        };
+        resetScroll();
+        window.setTimeout(resetScroll, 100);
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+
+
 def render_evaluation(
     *,
     participant: Participant,
@@ -433,6 +507,11 @@ def render_evaluation(
     valid_item_ids = {str(candidate["item_id"]) for candidate in items}
     answered_count = len(valid_item_ids.intersection(saved_responses))
 
+    st.markdown(
+        '<span class="evaluation-page-marker" aria-hidden="true"></span>',
+        unsafe_allow_html=True,
+    )
+    reset_evaluation_scroll()
     st.title("相談支援応答の評価")
     st.progress(answered_count / total)
     st.caption(
