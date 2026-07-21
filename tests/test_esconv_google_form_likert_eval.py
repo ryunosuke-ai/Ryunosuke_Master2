@@ -108,4 +108,5 @@ def test_apps_script_uses_comparison_grids_name_and_consent_branch(tmp_path: Pat
     assert "今は、どのような気持ちが一番強く" not in script
     assert "質問や助言を急がず" in script
     assert "ESConv" not in FORM_DESCRIPTION
+    assert FORM_DESCRIPTION.count("\n・") == 3
     assert len(LIKERT_STATEMENTS) == 7
