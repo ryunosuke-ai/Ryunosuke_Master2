@@ -197,11 +197,18 @@ def initialize_database(path: Path) -> None:
         )
 
 
-def assign_participant(path: Path, full_name: str) -> tuple[Participant, bool]:
-    """氏名を既存割当に戻すか、人数の少ない実験へ新規割当する。"""
+def assign_participant(
+    path: Path,
+    full_name: str,
+    *,
+    requested_experiment: str | None = None,
+) -> tuple[Participant, bool]:
+    """氏名を既存割当に戻すか、指定または人数の少ない実験へ割り当てる。"""
     normalized_name = normalize_full_name(full_name)
     if not normalized_name:
         raise ValueError("氏名を入力してください。")
+    if requested_experiment is not None and requested_experiment not in EXPERIMENTS:
+        raise ValueError(f"実験指定が不正です: {requested_experiment}")
     initialize_database(path)
     current_time = utc_now()
     with connect_database(path) as connection:
@@ -212,6 +219,14 @@ def assign_participant(path: Path, full_name: str) -> tuple[Participant, bool]:
             (name_key(normalized_name),),
         ).fetchone()
         if existing:
+            if (
+                requested_experiment is not None
+                and existing["experiment"] != requested_experiment
+            ):
+                raise ValueError(
+                    f"この氏名は実験{existing['experiment']}へ割当済みです。"
+                    f"実験{existing['experiment']}用URLを開いてください。"
+                )
             connection.execute(
                 "UPDATE participants SET last_seen_at = ? WHERE participant_id = ?",
                 (current_time, existing["participant_id"]),
@@ -228,7 +243,9 @@ def assign_participant(path: Path, full_name: str) -> tuple[Participant, bool]:
             )
             for experiment in EXPERIMENTS
         }
-        experiment = "A" if counts["A"] <= counts["B"] else "B"
+        experiment = requested_experiment or (
+            "A" if counts["A"] <= counts["B"] else "B"
+        )
         participant = Participant(
             participant_id=f"p_{uuid.uuid4().hex}",
             full_name=normalized_name,

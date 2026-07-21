@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import html
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -118,12 +119,15 @@ def apply_page_style() -> None:
             line-height: 1.75;
             margin: 10px 0;
         }
-        .reference-panel {
+        div[data-testid="stColumn"]:has(.reference-panel) {
             position: sticky;
             top: 12px;
+            align-self: flex-start;
+        }
+        .reference-panel {
             max-height: calc(100vh - 24px);
             overflow-y: auto;
-            padding: 18px;
+            padding: 20px 22px;
             scrollbar-gutter: stable;
         }
         .reference-heading {
@@ -135,6 +139,8 @@ def apply_page_style() -> None:
         .conversation-text {
             white-space: pre-wrap;
             line-height: 1.72;
+            line-break: strict;
+            text-wrap: pretty;
             background: #f7f8fa;
             border-left: 4px solid #6d7782;
             padding: 13px 14px;
@@ -150,7 +156,10 @@ def apply_page_style() -> None:
         }
         .response-text {
             white-space: pre-wrap;
-            line-height: 1.72;
+            line-height: 1.85;
+            line-break: strict;
+            text-wrap: pretty;
+            overflow-wrap: anywhere;
         }
         .rating-guide {
             background: #eef3f7;
@@ -178,9 +187,11 @@ def apply_page_style() -> None:
                 padding-left: 1rem;
                 padding-right: 1rem;
             }
-            .reference-panel {
+            div[data-testid="stColumn"]:has(.reference-panel) {
                 position: relative;
                 top: 0;
+            }
+            .reference-panel {
                 max-height: none;
                 overflow: visible;
                 margin-bottom: 20px;
@@ -206,10 +217,18 @@ def render_html_panel(css_class: str, content: str) -> None:
 def render_start_screen(
     database: Path,
     experiments: dict[str, list[dict[str, Any]]],
+    requested_experiment: str | None,
 ) -> None:
     """実験指示、例示、同意、氏名入力を表示する。"""
     st.title("相談支援応答の7段階評価")
-    st.caption("研究室内で実施する、3つの匿名応答の比較評価です。")
+    experiment_label = (
+        f"実験{requested_experiment}"
+        if requested_experiment is not None
+        else "実験A/B自動割当"
+    )
+    st.caption(
+        f"{experiment_label}・研究室内で実施する3つの匿名応答の比較評価です。"
+    )
     features = "".join(f"<li>{html.escape(feature)}</li>" for feature in STYLE_FEATURES)
     render_html_panel(
         "survey-intro",
@@ -276,7 +295,11 @@ def render_start_screen(
         st.error("同意確認にチェックしてください。")
         return
     try:
-        participant, _ = assign_participant(database, full_name)
+        participant, _ = assign_participant(
+            database,
+            full_name,
+            requested_experiment=requested_experiment,
+        )
     except (OSError, ValueError) as exc:
         st.error(f"参加者情報を保存できませんでした: {exc}")
         return
@@ -295,18 +318,38 @@ def participant_from_session() -> Participant:
     return Participant(**payload)
 
 
+def requested_experiment_from_query() -> str | None:
+    """URL queryから実験A/Bの固定指定を読む。"""
+    raw_value = st.query_params.get("experiment")
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, list):
+        raw_value = raw_value[-1] if raw_value else ""
+    experiment = str(raw_value).strip().upper()
+    if experiment not in {"A", "B"}:
+        raise ValueError("URLのexperimentにはAまたはBを指定してください。")
+    return experiment
+
+
+def readable_text_html(value: Any) -> str:
+    """既存改行を保ち、日本語の文末ごとに表示上の改行を加える。"""
+    escaped = html.escape(str(value)).replace("\r\n", "\n").replace("\r", "\n")
+    escaped = escaped.replace("\n", "<br>")
+    escaped = re.sub(r"([。！？!?][」』】）)]*)", r"\1<br>", escaped)
+    escaped = re.sub(r"(?:<br>\s*){2,}", "<br>", escaped)
+    return re.sub(r"(?:<br>\s*)+$", "", escaped)
+
+
 def build_reference_html(item: dict[str, Any]) -> str:
     """固定表示する会話と3応答を、モデル情報なしでHTML化する。"""
-    conversation = html.escape(str(item["conversation"])).replace("\n", "<br>")
+    conversation = readable_text_html(item["conversation"])
     parts = [
         '<div class="reference-panel">',
         '<div class="reference-heading">これまでの会話</div>',
         f'<div class="conversation-text">{conversation}</div>',
     ]
     for position in RESPONSE_POSITIONS:
-        response = html.escape(str(item[f"response_{position.lower()}"])).replace(
-            "\n", "<br>"
-        )
+        response = readable_text_html(item[f"response_{position.lower()}"])
         parts.extend(
             [
                 '<div class="response-card">',
@@ -395,7 +438,7 @@ def render_evaluation(
     st.caption(
         f"評価 {current_index + 1} / {total}　保存済み {answered_count} / {total}"
     )
-    reference_column, rating_column = st.columns([0.92, 1.08], gap="large")
+    reference_column, rating_column = st.columns([1.08, 0.92], gap="large")
     with reference_column:
         st.markdown(build_reference_html(item), unsafe_allow_html=True)
     with rating_column:
@@ -519,10 +562,24 @@ def main() -> None:
     except (FileNotFoundError, OSError, ValueError) as exc:
         st.error(f"評価データを読み込めませんでした: {exc}")
         st.stop()
+    try:
+        requested_experiment = requested_experiment_from_query()
+    except ValueError as exc:
+        st.error(str(exc))
+        st.stop()
     if "esconv_survey_participant" not in st.session_state:
-        render_start_screen(args.database, experiments)
+        render_start_screen(args.database, experiments, requested_experiment)
         return
     participant = participant_from_session()
+    if (
+        requested_experiment is not None
+        and participant.experiment != requested_experiment
+    ):
+        st.error(
+            f"このブラウザでは実験{participant.experiment}を回答中です。"
+            f"実験{participant.experiment}用URLへ戻ってください。"
+        )
+        st.stop()
     render_evaluation(
         participant=participant,
         items=experiments[participant.experiment],

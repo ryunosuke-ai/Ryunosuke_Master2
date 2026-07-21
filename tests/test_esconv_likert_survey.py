@@ -10,6 +10,7 @@ from streamlit.testing.v1 import AppTest
 from apps.esconv_likert_user_eval import (
     build_reference_html,
     first_unanswered_index,
+    readable_text_html,
 )
 from core.esconv_likert_survey import (
     EXPECTED_AXIS_KEYS,
@@ -97,6 +98,28 @@ def test_participant_assignment_is_balanced_stable_and_resumable(tmp_path: Path)
     assert resumed.participant_id == first.participant_id
 
 
+def test_participant_assignment_can_be_fixed_by_experiment_url(tmp_path: Path):
+    database = tmp_path / "responses.sqlite3"
+    participant_b, _ = assign_participant(
+        database,
+        "実験 B参加者",
+        requested_experiment="B",
+    )
+    participant_a, _ = assign_participant(
+        database,
+        "実験 A参加者",
+        requested_experiment="A",
+    )
+    assert participant_b.experiment == "B"
+    assert participant_a.experiment == "A"
+    with pytest.raises(ValueError, match="実験Bへ割当済み"):
+        assign_participant(
+            database,
+            "実験 B参加者",
+            requested_experiment="A",
+        )
+
+
 def test_response_upsert_resume_and_csv_export(tmp_path: Path):
     database = tmp_path / "responses.sqlite3"
     participant, _ = assign_participant(database, "研究 太郎")
@@ -139,6 +162,12 @@ def test_reference_html_escapes_input_and_contains_all_responses():
     assert all(f"応答{position}" in rendered for position in RESPONSE_POSITIONS)
 
 
+def test_readable_text_html_adds_sentence_breaks_without_changing_text():
+    rendered = readable_text_html("つらかったのですね。よく話してくれました。")
+    assert rendered == "つらかったのですね。<br>よく話してくれました。"
+    assert readable_text_html("<script>危険</script>").startswith("&lt;script&gt;")
+
+
 def test_first_unanswered_and_style_instruction_contract():
     items = [public_item(1), public_item(2)]
     assert first_unanswered_index(items, {}) == 0
@@ -167,6 +196,34 @@ def test_streamlit_start_and_evaluation_screens_render(tmp_path: Path, monkeypat
     assert len(app.radio) == 22
     assert [radio.label for radio in app.radio[:3]] == ["応答A", "応答B", "応答C"]
     assert any("reference-panel" in block.value for block in app.markdown)
+    assert any(
+        'stColumn"]:has(.reference-panel)' in block.value
+        for block in app.markdown
+    )
+
+
+def test_streamlit_experiment_b_url_fixes_assignment(tmp_path: Path, monkeypatch):
+    database = tmp_path / "experiment_b.sqlite3"
+    monkeypatch.setenv("ESCONV_SURVEY_DATABASE", database.as_posix())
+    app = AppTest.from_file(
+        "apps/esconv_likert_user_eval.py",
+        default_timeout=30,
+    )
+    app.query_params["experiment"] = "B"
+    app.run()
+    assert any("実験B" in caption.value for caption in app.caption)
+    app.text_input[0].input("B 専用参加者")
+    app.checkbox[0].check()
+    app.button[0].click()
+    app.run()
+    assert not app.exception
+    participant, created = assign_participant(
+        database,
+        "B 専用参加者",
+        requested_experiment="B",
+    )
+    assert created is False
+    assert participant.experiment == "B"
 
 
 def test_streamlit_same_name_resumes_first_unanswered_item(tmp_path: Path, monkeypatch):
