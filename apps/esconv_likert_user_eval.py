@@ -129,20 +129,20 @@ def apply_page_style() -> None:
         .st-key-evaluation_validation {
             position: fixed;
             top: 72px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: min(760px, calc(100vw - 32px));
+            right: 20px;
+            left: auto;
+            width: min(440px, calc(100vw - 40px));
             z-index: 1100;
             animation: survey-alert-in 180ms ease-out;
         }
         @keyframes survey-alert-in {
             from {
                 opacity: 0;
-                transform: translate(-50%, -10px);
+                transform: translateY(-10px);
             }
             to {
                 opacity: 1;
-                transform: translate(-50%, 0);
+                transform: translateY(0);
             }
         }
         .st-key-evaluation_navigation {
@@ -240,6 +240,11 @@ def apply_page_style() -> None:
             }
             .st-key-evaluation_navigation {
                 padding: 8px 14px;
+            }
+            .st-key-evaluation_validation {
+                top: 64px;
+                right: 12px;
+                width: min(400px, calc(100vw - 24px));
             }
         }
         </style>

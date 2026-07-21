@@ -245,6 +245,8 @@ def test_streamlit_start_and_evaluation_screens_render(tmp_path: Path, monkeypat
         and "bottom: 0" in block.value
         and ".st-key-evaluation_validation" in block.value
         and "top: 72px" in block.value
+        and "right: 20px" in block.value
+        and "width: min(440px" in block.value
         for block in app.markdown
     )
 
