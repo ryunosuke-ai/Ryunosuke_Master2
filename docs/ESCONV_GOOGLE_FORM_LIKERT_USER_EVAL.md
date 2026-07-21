@@ -2,9 +2,14 @@
 
 ## 評価形式
 
-同一の日本語会話履歴に対するBase、BASiS、Random-DPOの応答を匿名化し、
-各応答を7軸で独立に評価する。その後、3応答のうち相談支援スタイルとして
+同一の日本語会話履歴に対するBase、BASiS、Random-DPOの応答を匿名化する。
+会話履歴と3応答を先にまとめて提示し、評価軸ごとに応答A/B/Cを同じ
+7段階グリッド上で比較する。その後、3応答のうち相談支援スタイルとして
 最もふさわしい応答を1つ選ぶ。
+
+実験指示では、本番itemと重ならない架空例を用いて、感情を具体的に
+受け止める応答と、受容前に励まし・解決策へ進む応答の違いを説明する。
+このため結果は、説明したESConv型相談支援スタイルへの適合度として解釈する。
 
 各応答の尺度:
 
@@ -40,7 +45,8 @@
 100件のOracle評価結果を候補とし、代表5軸スコアに加えて、感情受容、
 非指示性、助言タイミング、比較応答との差、BASiS応答自体の自然さを
 LLMが全件定性的に監査する。人間が支援スタイル差を説明しやすい20件を
-固定configとして保存する。20件中16件を明瞭、4件を中程度の対比と判定した。
+固定configとして保存する。v7では20件すべてを、人が応答方針の違いを
+本文から説明できる明瞭な対比と判定した。
 詳細は`docs/ESCONV_USER_EVAL_QUALITATIVE_AUDIT.md`に記録する。
 
 これはOracle結果を見た後の対象化選定である。この20件で計算したOracleの
@@ -86,17 +92,19 @@ python3 scripts/prepare_esconv_google_form_likert_blocks.py
 出力:
 
 ```text
-artifacts/user_eval/google_forms/esconv_human_reviewed_likert_two_forms_v6/
+artifacts/user_eval/google_forms/esconv_human_reviewed_likert_two_forms_v7/
   block_manifest.json
   participant_assignment_template.csv
   experiment_a/
     create_google_form.gs
     form_items_public.jsonl
     private_model_mapping.jsonl
+    answer_key_private.csv
   experiment_b/
     create_google_form.gs
     form_items_public.jsonl
     private_model_mapping.jsonl
+    answer_key_private.csv
 ```
 
 参加者を実験A/Bへできるだけ同数に割り当て、各参加者は一方だけを評価する。
@@ -107,6 +115,9 @@ artifacts/user_eval/google_forms/esconv_human_reviewed_likert_two_forms_v6/
 10個の総合選択になる。実験A/Bの結果は、共通する軸とモデル条件を使って
 統合解析できるが、参加者が異なるため参加者とitem IDを含む混合効果
 モデルを使う。
+
+`answer_key_private.csv`には、各itemでBASiSが応答A/B/Cのどこに表示されるか
+が記録される。これは研究者だけが保持し、参加者やフォーム本体へ共有しない。
 
 ## 解析
 

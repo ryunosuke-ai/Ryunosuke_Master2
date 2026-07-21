@@ -76,7 +76,7 @@ def test_selection_diagnostics_marks_result_as_posthoc():
     )
 
 
-def test_apps_script_uses_readable_scales_name_and_consent_branch(tmp_path: Path):
+def test_apps_script_uses_comparison_grids_name_and_consent_branch(tmp_path: Path):
     row = candidate(1, "category", 0.5)
     public = public_record(
         row,
@@ -86,11 +86,12 @@ def test_apps_script_uses_readable_scales_name_and_consent_branch(tmp_path: Path
     output = tmp_path / "form.gs"
     write_apps_script(output, [public], "テスト")
     script = output.read_text(encoding="utf-8")
-    assert "addScaleItem()" in script
-    assert ".setBounds(1, 7)" in script
+    assert "addScaleItem()" not in script
+    assert "addGridItem()" in script
+    assert ".setRows(['応答A', '応答B', '応答C'])" in script
+    assert ".setColumns(gridColumns)" in script
     assert "氏名を入力してください。" in script
     assert "参加者ID" not in script
-    assert "addGridItem()" not in script
     assert "PageNavigationType.SUBMIT" in script
     assert "createEsconvLikertForm" in script
     assert "実験指示" in script
@@ -102,7 +103,9 @@ def test_apps_script_uses_readable_scales_name_and_consent_branch(tmp_path: Path
     assert "参加者情報" in script
     assert "参加者情報と評価 1" not in script
     assert script.index("参加者情報") < script.index("評価 1 /")
-    assert "当てはまる程度を選んでください。" in script
-    assert "質問 ${statementIndex + 1}" in script
+    assert "応答A〜Cを比較して評価してください。" in script
+    assert "質問 ${statementIndex + 1}: ${statement}" in script
+    assert "今は、どのような気持ちが一番強く" not in script
+    assert "質問や助言を急がず" in script
     assert "ESConv" not in FORM_DESCRIPTION
     assert len(LIKERT_STATEMENTS) == 7

@@ -123,8 +123,8 @@ FORM_DESCRIPTION = """実験指示
 相談者: 仕事で失敗してしまい、自分には価値がないように感じます。
 
 良い応答例:
-「失敗したことが頭から離れず、自分自身まで否定したくなるほどつらいのですね。今は、どのような気持ちが一番強く残っていますか。」
-説明: 相談者のつらさを受け止め、気持ちを決めつけずに話を続けられるよう促しています。
+「失敗したことが頭から離れず、自分自身まで否定したくなるほど、つらく苦しいのですね。そんな状態で一人で抱え続けるのは、とても大変なことだと思います。」
+説明: 相談者が表したつらさを具体的に受け止め、質問や助言を急がず、安心して話を続けられるようにしています。
 
 良くない応答例1:
 「失敗は誰にでもあります。あまり気にせず、次から頑張りましょう。」
@@ -393,9 +393,19 @@ def write_markdown(path: Path, rows: list[dict[str, Any]], title: str) -> None:
                     "",
                 ]
             )
-            for index, statement in enumerate(LIKERT_STATEMENTS, start=1):
-                lines.append(f"{index}. {statement['statement']} [1–7]")
-            lines.append("")
+        for index, statement in enumerate(LIKERT_STATEMENTS, start=1):
+            lines.extend(
+                [
+                    f"### 質問 {index}",
+                    "",
+                    statement["statement"],
+                    "",
+                    "- 応答A [1–7]",
+                    "- 応答B [1–7]",
+                    "- 応答C [1–7]",
+                    "",
+                ]
+            )
         lines.extend(
             [
                 "### 最後の質問",
@@ -421,6 +431,7 @@ def write_apps_script(path: Path, rows: list[dict[str, Any]], title: str) -> Non
         ensure_ascii=False,
     )
     final_options = json.dumps(list(FINAL_CHOICE_OPTIONS), ensure_ascii=False)
+    grid_columns = json.dumps(list(LIKERT_COLUMNS), ensure_ascii=False)
     form_description = json.dumps(FORM_DESCRIPTION, ensure_ascii=False)
     script = f"""// Google Apps Scriptへ貼り付け、createEsconvLikertFormを実行する。
 function createEsconvLikertForm() {{
@@ -447,6 +458,7 @@ function createEsconvLikertForm() {{
   const items = {payload};
   const statements = {statements};
   const finalOptions = {final_options};
+  const gridColumns = {grid_columns};
 
   form.addPageBreakItem().setTitle(`評価 1 / ${{items.length}}`);
   items.forEach((item, index) => {{
@@ -461,22 +473,23 @@ function createEsconvLikertForm() {{
       form.addSectionHeaderItem()
         .setTitle('応答' + position)
         .setHelpText(response);
-      form.addSectionHeaderItem()
-        .setTitle('応答' + position + 'を評価してください。')
+    }});
+    form.addSectionHeaderItem()
+      .setTitle('応答A〜Cを比較して評価してください。')
+      .setHelpText(
+        '以下の各質問について、3つの応答をそれぞれ1〜7で評価します。' +
+        '必要に応じて上に戻り、応答本文を読み直してください。'
+      );
+    statements.forEach((statement, statementIndex) => {{
+      form.addGridItem()
+        .setTitle(`質問 ${{statementIndex + 1}}: ${{statement}}`)
         .setHelpText(
           '1=全く当てはまらない、4=どちらともいえない、' +
           '7=非常によく当てはまる'
-        );
-      statements.forEach((statement, statementIndex) => {{
-        form.addSectionHeaderItem()
-          .setTitle(`質問 ${{statementIndex + 1}}`)
-          .setHelpText(statement);
-        form.addScaleItem()
-          .setTitle('当てはまる程度を選んでください。')
-          .setBounds(1, 7)
-          .setLabels('全く当てはまらない', '非常によく当てはまる')
-          .setRequired(true);
-      }});
+        )
+        .setRows(['応答A', '応答B', '応答C'])
+        .setColumns(gridColumns)
+        .setRequired(true);
     }});
     form.addMultipleChoiceItem()
       .setTitle(item.final_choice_question)
