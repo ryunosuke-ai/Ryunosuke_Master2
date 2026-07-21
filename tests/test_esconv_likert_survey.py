@@ -201,11 +201,17 @@ def test_streamlit_start_and_evaluation_screens_render(tmp_path: Path, monkeypat
         for block in app.markdown
     )
     assert any(
-        'stMainBlockContainer"]:has(.evaluation-page-marker)' in block.value
-        and 'stColumn"]:last-child' in block.value
-        and "overflow-y: auto" in block.value
+        ".st-key-rating_scroll_container" in block.value
+        and "overscroll-behavior: contain" in block.value
         for block in app.markdown
     )
+    scroll_containers = [
+        node
+        for node in app.get("flex_container")
+        if node.proto.id.endswith("-rating_scroll_container")
+    ]
+    assert len(scroll_containers) == 1
+    assert scroll_containers[0].proto.height_config.pixel_height == 500
 
 
 def test_streamlit_experiment_b_url_fixes_assignment(tmp_path: Path, monkeypatch):

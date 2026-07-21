@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -128,28 +127,13 @@ def apply_page_style() -> None:
             overflow: hidden;
             padding-bottom: 1rem;
         }
-        div[data-testid="stHorizontalBlock"]:has(.reference-panel) {
-            height: calc(100dvh - 250px);
-            min-height: 360px;
-            overflow: hidden;
-            align-items: stretch;
-        }
-        div[data-testid="stHorizontalBlock"]:has(.reference-panel)
-        > div[data-testid="stColumn"] {
-            height: 100%;
-            min-height: 0;
-            overflow: hidden;
-        }
-        div[data-testid="stHorizontalBlock"]:has(.reference-panel)
-        > div[data-testid="stColumn"]:last-child {
-            overflow-y: auto;
+        .st-key-rating_scroll_container {
             overscroll-behavior: contain;
             scrollbar-gutter: stable;
-            padding-right: 12px;
         }
         .reference-panel {
-            height: calc(100dvh - 250px);
-            max-height: calc(100dvh - 250px);
+            height: 500px;
+            max-height: 500px;
             overflow-y: auto;
             padding: 20px 22px;
             scrollbar-gutter: stable;
@@ -215,19 +199,6 @@ def apply_page_style() -> None:
                 height: auto;
                 overflow: visible;
                 padding-bottom: 4rem;
-            }
-            div[data-testid="stHorizontalBlock"]:has(.reference-panel) {
-                height: auto;
-                min-height: 0;
-                overflow: visible;
-            }
-            div[data-testid="stHorizontalBlock"]:has(.reference-panel)
-            > div[data-testid="stColumn"],
-            div[data-testid="stHorizontalBlock"]:has(.reference-panel)
-            > div[data-testid="stColumn"]:last-child {
-                height: auto;
-                overflow: visible;
-                padding-right: 0;
             }
             div[data-testid="stColumn"]:has(.reference-panel) {
                 position: relative;
@@ -453,7 +424,7 @@ def render_completion(participant: Participant, total: int) -> None:
 
 def reset_evaluation_scroll() -> None:
     """評価画面への遷移時にページと質問列を先頭へ戻す。"""
-    components.html(
+    st.iframe(
         """
         <script>
         const resetScroll = () => {
@@ -463,6 +434,15 @@ def reset_evaluation_scroll() -> None:
             ?.scrollTo({top: 0, left: 0, behavior: "auto"});
           documentRoot.querySelector('[data-testid="stMain"]')
             ?.scrollTo({top: 0, left: 0, behavior: "auto"});
+          const ratingScroll = documentRoot.querySelector(
+            '.st-key-rating_scroll_container'
+          );
+          ratingScroll?.scrollTo({top: 0, left: 0, behavior: "auto"});
+          ratingScroll?.querySelectorAll('*').forEach((element) => {
+            if (element.scrollHeight > element.clientHeight) {
+              element.scrollTo({top: 0, left: 0, behavior: "auto"});
+            }
+          });
           const evaluationBlock = Array.from(
             documentRoot.querySelectorAll('div[data-testid="stHorizontalBlock"]')
           ).find((block) => block.querySelector('.reference-panel'));
@@ -475,10 +455,12 @@ def reset_evaluation_scroll() -> None:
         };
         resetScroll();
         window.setTimeout(resetScroll, 100);
+        window.setTimeout(resetScroll, 300);
+        window.setTimeout(resetScroll, 700);
         </script>
         """,
-        height=0,
-        width=0,
+        height=1,
+        width=1,
     )
 
 
@@ -520,7 +502,13 @@ def render_evaluation(
     reference_column, rating_column = st.columns([1.08, 0.92], gap="large")
     with reference_column:
         st.markdown(build_reference_html(item), unsafe_allow_html=True)
-    with rating_column:
+    rating_scroll = rating_column.container(
+        height=500,
+        border=False,
+        key="rating_scroll_container",
+        autoscroll=False,
+    )
+    with rating_scroll:
         render_html_panel(
             "rating-guide",
             (
