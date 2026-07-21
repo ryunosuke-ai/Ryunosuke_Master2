@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from collections import Counter
 from pathlib import Path
@@ -13,6 +14,7 @@ from scripts.prepare_esconv_google_form_likert_blocks import (
     split_discriminative_items,
     split_category_pairs,
     validate_split,
+    write_private_answer_key,
 )
 
 
@@ -148,3 +150,36 @@ def test_repository_human_review_v2_has_twenty_clear_unique_items():
     prompt_ids = [item["prompt_id"] for item in config["items"]]
     assert len(prompt_ids) == len(set(prompt_ids)) == 20
     assert {item["contrast"] for item in config["items"]} == {"clear"}
+
+
+def test_private_answer_key_identifies_basis_position(tmp_path):
+    public_rows = [
+        {
+            "item_id": "item_01",
+            "response_a": "base response",
+            "response_b": "basis response",
+            "response_c": "random response",
+        }
+    ]
+    private_rows = [
+        {
+            "item_id": "item_01",
+            "prompt_id": "p001",
+            "position_to_model": {
+                "A": "base",
+                "B": "basis",
+                "C": "random",
+            },
+        }
+    ]
+    output = tmp_path / "answer_key.csv"
+    write_private_answer_key(
+        output,
+        public_rows=public_rows,
+        private_rows=private_rows,
+        experiment="A",
+    )
+    with output.open(encoding="utf-8-sig", newline="") as file:
+        rows = list(csv.DictReader(file))
+    assert rows[0]["basis_response_position"] == "応答B"
+    assert rows[0]["basis_response"] == "basis response"

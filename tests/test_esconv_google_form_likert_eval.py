@@ -95,6 +95,10 @@ def test_apps_script_uses_readable_scales_name_and_consent_branch(tmp_path: Path
     assert "createEsconvLikertForm" in script
     assert "実験指示" in script
     assert "助言や解決策を急がず" in script
+    assert "【評価例】" in script
+    assert "良い応答例" in script
+    assert "良くない応答例1" in script
+    assert "良くない応答例2" in script
     assert "参加者情報" in script
     assert "参加者情報と評価 1" not in script
     assert script.index("参加者情報") < script.index("評価 1 /")

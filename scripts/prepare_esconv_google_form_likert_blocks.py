@@ -290,6 +290,12 @@ def write_experiment(
     title = f"相談支援応答の7段階評価・実験{experiment}"
     write_jsonl(output_dir / "form_items_public.jsonl", public_rows)
     write_jsonl(output_dir / "private_model_mapping.jsonl", private_rows)
+    write_private_answer_key(
+        output_dir / "answer_key_private.csv",
+        public_rows=public_rows,
+        private_rows=private_rows,
+        experiment=experiment,
+    )
     write_csv(output_dir / "google_form_items.csv", public_rows)
     write_markdown(
         output_dir / "google_form_sections.md",
@@ -318,6 +324,9 @@ def write_experiment(
         "private_mapping_sha256": sha256_file(
             output_dir / "private_model_mapping.jsonl"
         ),
+        "private_answer_key_sha256": sha256_file(
+            output_dir / "answer_key_private.csv"
+        ),
     }
 
 
@@ -344,6 +353,52 @@ def write_assignment_template(path: Path) -> None:
                     "experiment": experiment,
                     "completed": "",
                     "notes": "",
+                }
+            )
+
+
+def write_private_answer_key(
+    path: Path,
+    *,
+    public_rows: list[dict[str, Any]],
+    private_rows: list[dict[str, Any]],
+    experiment: str,
+) -> None:
+    """BASiSの匿名表示位置を研究者用CSVへ書く。"""
+    if len(public_rows) != len(private_rows):
+        raise ValueError("公開itemと非公開mappingの件数が一致しません。")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8-sig", newline="") as file:
+        fieldnames = (
+            "experiment",
+            "item_id",
+            "prompt_id",
+            "basis_response_position",
+            "basis_response",
+            "base_response_position",
+            "random_response_position",
+        )
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        for public, private in zip(public_rows, private_rows):
+            model_to_position = {
+                model: position
+                for position, model in private["position_to_model"].items()
+            }
+            basis_position = model_to_position["basis"]
+            writer.writerow(
+                {
+                    "experiment": experiment,
+                    "item_id": private["item_id"],
+                    "prompt_id": private["prompt_id"],
+                    "basis_response_position": f"応答{basis_position}",
+                    "basis_response": public[
+                        f"response_{basis_position.lower()}"
+                    ],
+                    "base_response_position": f"応答{model_to_position['base']}",
+                    "random_response_position": (
+                        f"応答{model_to_position['random']}"
+                    ),
                 }
             )
 
