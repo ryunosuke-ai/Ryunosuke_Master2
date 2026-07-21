@@ -5,6 +5,7 @@ from pathlib import Path
 from scripts.prepare_esconv_google_form_eval import MODEL_KEYS
 from scripts.prepare_esconv_google_form_likert_eval import (
     FINAL_CHOICE_OPTIONS,
+    FORM_DESCRIPTION,
     LIKERT_COLUMNS,
     LIKERT_STATEMENTS,
     public_record,
@@ -92,4 +93,12 @@ def test_apps_script_uses_readable_scales_name_and_consent_branch(tmp_path: Path
     assert "addGridItem()" not in script
     assert "PageNavigationType.SUBMIT" in script
     assert "createEsconvLikertForm" in script
+    assert "実験指示" in script
+    assert "助言や解決策を急がず" in script
+    assert "参加者情報" in script
+    assert "参加者情報と評価 1" not in script
+    assert script.index("参加者情報") < script.index("評価 1 /")
+    assert "当てはまる程度を選んでください。" in script
+    assert "質問 ${statementIndex + 1}" in script
+    assert "ESConv" not in FORM_DESCRIPTION
     assert len(LIKERT_STATEMENTS) == 7

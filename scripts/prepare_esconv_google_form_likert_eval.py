@@ -107,6 +107,22 @@ FINAL_CHOICE_OPTIONS = (
     "判断できない",
 )
 
+FORM_DESCRIPTION = """実験指示
+
+本実験では、カウンセリングの場面を想定した会話を評価してもらいます。
+ここでいう理想的な会話には、次のような特徴があります。
+
+・相談者の気持ちや困りごとを、否定せずに受け止めている
+・これまでの話を踏まえ、相談者が実際に話した内容に沿っている
+・相談者の気持ちや考えを決めつけず、理解しようとしている
+・助言や解決策を急がず、会話の流れに合ったタイミングで支えている
+・指示や結論を押しつけず、相談者が考えたり選んだりできる余地を残している
+・やさしく自然で、安心して話を続けられる表現になっている
+
+評価は全部で10件です。各評価では「これまでの会話」と、最後の相談者の発話に対する「応答A〜C」を示します。それぞれの応答について同じ7項目を1〜7で評価し、最後に最もふさわしい応答を1つ選んでください。
+
+モデル名は表示されません。氏名と回答は研究目的で保存し、研究担当者だけが取り扱います。"""
+
 
 def parse_args() -> argparse.Namespace:
     """CLI引数を解析する。"""
@@ -390,15 +406,11 @@ def write_apps_script(path: Path, rows: list[dict[str, Any]], title: str) -> Non
         ensure_ascii=False,
     )
     final_options = json.dumps(list(FINAL_CHOICE_OPTIONS), ensure_ascii=False)
+    form_description = json.dumps(FORM_DESCRIPTION, ensure_ascii=False)
     script = f"""// Google Apps Scriptへ貼り付け、createEsconvLikertFormを実行する。
 function createEsconvLikertForm() {{
   const form = FormApp.create({json.dumps(title, ensure_ascii=False)});
-  form.setDescription(
-    'このアンケートでは、相談場面に対する3つの匿名応答を評価します。' +
-    '各応答を1から7で評価した後、最もふさわしい応答を選んでください。' +
-    'モデル名は表示されません。氏名と回答は研究目的で保存し、' +
-    '研究担当者だけが取り扱います。'
-  );
+  form.setDescription({form_description});
   form.setCollectEmail(false);
   form.setProgressBar(true);
   const consent = form.addMultipleChoiceItem()
@@ -406,9 +418,11 @@ function createEsconvLikertForm() {{
       '説明を読み、氏名と回答を研究目的で保存・利用することに同意しますか。'
     )
     .setRequired(true);
-  const firstPage = form.addPageBreakItem().setTitle('参加者情報と評価 1');
+  const participantPage = form.addPageBreakItem()
+    .setTitle('参加者情報')
+    .setHelpText('評価を始める前に氏名を入力してください。');
   consent.setChoices([
-    consent.createChoice('同意する', firstPage),
+    consent.createChoice('同意する', participantPage),
     consent.createChoice('同意しない', FormApp.PageNavigationType.SUBMIT)
   ]);
   form.addTextItem()
@@ -419,6 +433,7 @@ function createEsconvLikertForm() {{
   const statements = {statements};
   const finalOptions = {final_options};
 
+  form.addPageBreakItem().setTitle(`評価 1 / ${{items.length}}`);
   items.forEach((item, index) => {{
     if (index > 0) {{
       form.addPageBreakItem().setTitle(`評価 ${{index + 1}} / ${{items.length}}`);
@@ -437,9 +452,12 @@ function createEsconvLikertForm() {{
           '1=全く当てはまらない、4=どちらともいえない、' +
           '7=非常によく当てはまる'
         );
-      statements.forEach((statement) => {{
+      statements.forEach((statement, statementIndex) => {{
+        form.addSectionHeaderItem()
+          .setTitle(`質問 ${{statementIndex + 1}}`)
+          .setHelpText(statement);
         form.addScaleItem()
-          .setTitle(statement)
+          .setTitle('当てはまる程度を選んでください。')
           .setBounds(1, 7)
           .setLabels('全く当てはまらない', '非常によく当てはまる')
           .setRequired(true);

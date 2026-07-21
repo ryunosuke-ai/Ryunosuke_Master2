@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from pathlib import Path
 
 import pytest
 
@@ -139,3 +140,11 @@ def test_human_reviewed_selection_follows_fixed_config(tmp_path):
         row["prompt_id"] for row in reversed(rows)
     ]
     assert loaded == config
+
+
+def test_repository_human_review_v2_has_twenty_clear_unique_items():
+    path = Path("configs/evaluations/esconv_user_eval_human_review_v2.json")
+    config = json.loads(path.read_text(encoding="utf-8"))
+    prompt_ids = [item["prompt_id"] for item in config["items"]]
+    assert len(prompt_ids) == len(set(prompt_ids)) == 20
+    assert {item["contrast"] for item in config["items"]} == {"clear"}

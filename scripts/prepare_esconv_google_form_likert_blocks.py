@@ -23,6 +23,7 @@ from scripts.prepare_esconv_google_form_eval import (  # noqa: E402
     DEFAULT_V2_RUN,
     MODEL_KEYS,
     build_candidates,
+    format_history,
     load_axis_scores,
     sha256_file,
     write_json,
@@ -42,10 +43,10 @@ from scripts.prepare_esconv_google_form_likert_eval import (  # noqa: E402
 
 
 DEFAULT_OUTPUT_DIR = Path(
-    "artifacts/user_eval/google_forms/esconv_human_reviewed_likert_two_forms_v6"
+    "artifacts/user_eval/google_forms/esconv_human_reviewed_likert_two_forms_v7"
 )
 DEFAULT_SELECTION_CONFIG = Path(
-    "configs/evaluations/esconv_user_eval_human_review_v1.json"
+    "configs/evaluations/esconv_user_eval_human_review_v2.json"
 )
 EXPERIMENTS = ("A", "B")
 
@@ -347,6 +348,64 @@ def write_assignment_template(path: Path) -> None:
             )
 
 
+def write_private_selection_audit(
+    path: Path,
+    *,
+    selected: list[dict[str, Any]],
+    review_config: dict[str, Any],
+) -> None:
+    """選定根拠とモデル名付き応答を研究者向けMarkdownへ書く。"""
+    review_by_id = {
+        str(item["prompt_id"]): item
+        for item in review_config["items"]
+    }
+    lines = [
+        "# ESConvユーザ評価20件の非公開選定監査",
+        "",
+        "> モデル名とOracle結果を含むため、実験参加者には共有しない。",
+        "> この20件はOracle結果を見た後に選んだ対象化ユーザ評価であり、",
+        "> ESConv全体に対する無条件の有意差検定ではない。",
+        "",
+    ]
+    for index, row in enumerate(selected, start=1):
+        review = review_by_id[row["prompt_id"]]
+        means = row["representative_means"]
+        lines.extend(
+            [
+                f"## {index}. {row['prompt_id']}",
+                "",
+                f"- カテゴリ: `{row['category']}`",
+                f"- 定性判定: `{review['contrast']}`",
+                f"- 選定理由: {review['reason']}",
+                (
+                    "- Oracle代表5軸平均: "
+                    f"BASiS={means['basis']:.2f}, Base={means['base']:.2f}, "
+                    f"Random={means['random']:.2f}, "
+                    "最良比較モデルとの差="
+                    f"{row['basis_advantage_over_best_control']:.2f}"
+                ),
+                "",
+                "### これまでの会話",
+                "",
+                format_history(row["history"], row["prompt"]),
+                "",
+                "### BASiS",
+                "",
+                row["responses"]["basis"],
+                "",
+                "### Base",
+                "",
+                row["responses"]["base"],
+                "",
+                "### Random-DPO",
+                "",
+                row["responses"]["random"],
+                "",
+            ]
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def validate_split(
     *,
     selected: list[dict[str, Any]],
@@ -403,10 +462,15 @@ def main() -> int:
         seed=args.seed,
     )
     write_json(args.output_dir / "selection_conditioned_diagnostics.json", diagnostics)
+    write_private_selection_audit(
+        args.output_dir / "selection_audit_private.md",
+        selected=selected,
+        review_config=review_config,
+    )
     write_json(
         args.output_dir / "questionnaire_spec.json",
         {
-            "version": "esconv_google_form_human_reviewed_two_forms.v6",
+            "version": "esconv_google_form_human_reviewed_two_forms.v7",
             "experiments": 2,
             "forms": 2,
             "items_per_participant": 10,
@@ -452,7 +516,7 @@ def main() -> int:
     write_json(
         args.output_dir / "block_manifest.json",
         {
-            "version": "esconv_human_reviewed_likert_two_forms.v6",
+            "version": "esconv_human_reviewed_likert_two_forms.v7",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "seed": args.seed,
             "source_selected_count": len(selected),
