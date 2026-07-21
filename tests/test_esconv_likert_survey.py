@@ -214,6 +214,22 @@ def test_streamlit_start_and_evaluation_screens_render(tmp_path: Path, monkeypat
     ]
     assert len(scroll_containers) == 1
     assert scroll_containers[0].proto.height_config.pixel_height == 500
+    assert all(
+        child.type != "button"
+        for child in scroll_containers[0].children.values()
+    )
+    navigation_containers = [
+        node
+        for node in app.get("flex_container")
+        if node.proto.id.endswith("-evaluation_navigation")
+    ]
+    assert len(navigation_containers) == 1
+    assert any(
+        ".st-key-evaluation_navigation" in block.value
+        and "position: fixed" in block.value
+        and "bottom: 0" in block.value
+        for block in app.markdown
+    )
 
 
 def test_streamlit_experiment_b_url_fixes_assignment(tmp_path: Path, monkeypatch):

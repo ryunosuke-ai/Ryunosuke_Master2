@@ -126,6 +126,21 @@ def apply_page_style() -> None:
             overscroll-behavior: contain;
             scrollbar-gutter: stable;
         }
+        .st-key-evaluation_navigation {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 1000;
+            background: rgba(255, 255, 255, 0.98);
+            border-top: 1px solid #d7dde3;
+            box-shadow: 0 -4px 14px rgba(24, 33, 43, 0.08);
+            padding: 10px max(18px, calc((100vw - 980px) / 2));
+        }
+        .st-key-evaluation_navigation
+        div[data-testid="stHorizontalBlock"] {
+            align-items: center;
+        }
         .reference-panel {
             height: auto;
             max-height: none;
@@ -203,6 +218,9 @@ def apply_page_style() -> None:
             }
             .survey-intro {
                 padding: 17px;
+            }
+            .st-key-evaluation_navigation {
+                padding: 8px 14px;
             }
         }
         </style>
@@ -490,26 +508,26 @@ def render_evaluation(
     st.caption(
         f"評価 {current_index + 1} / {total}　保存済み {answered_count} / {total}"
     )
-    reference_column, rating_column = st.columns([1.08, 0.92], gap="large")
-    with reference_column:
-        st.markdown(build_reference_html(item), unsafe_allow_html=True)
-    rating_scroll = rating_column.container(
-        height=500,
-        border=False,
-        key="rating_scroll_container",
-        autoscroll=False,
-    )
-    with rating_scroll:
-        render_html_panel(
-            "rating-guide",
-            (
-                "各質問について、応答A〜Cをそれぞれ1〜7で評価してください。"
-                "1は「全く当てはまらない」、4は「どちらともいえない」、"
-                "7は「非常によく当てはまる」です。"
-            ),
+    with st.form(f"evaluation_form_{participant.participant_id}_{item_id}"):
+        reference_column, rating_column = st.columns([1.08, 0.92], gap="large")
+        with reference_column:
+            st.markdown(build_reference_html(item), unsafe_allow_html=True)
+        rating_scroll = rating_column.container(
+            height=500,
+            border=False,
+            key="rating_scroll_container",
+            autoscroll=False,
         )
-        statements = item["likert_statements"]
-        with st.form(f"evaluation_form_{participant.participant_id}_{item_id}"):
+        with rating_scroll:
+            render_html_panel(
+                "rating-guide",
+                (
+                    "各質問について、応答A〜Cをそれぞれ1〜7で評価してください。"
+                    "1は「全く当てはまらない」、4は「どちらともいえない」、"
+                    "7は「非常によく当てはまる」です。"
+                ),
+            )
+            statements = item["likert_statements"]
             ratings: dict[str, dict[str, int | None]] = {}
             for question_number, statement in enumerate(statements, start=1):
                 axis_key = str(statement["key"])
@@ -553,11 +571,17 @@ def render_evaluation(
                 value=str(saved.get("comment") or "") if saved else "",
                 key=f"comment_{participant.participant_id}_{item_id}",
             )
+        navigation = st.container(
+            key="evaluation_navigation",
+            border=False,
+        )
+        with navigation:
             previous_column, next_column = st.columns([1, 2])
             with previous_column:
                 previous = st.form_submit_button(
                     "前の評価へ",
                     disabled=current_index == 0,
+                    use_container_width=True,
                 )
             with next_column:
                 submitted = st.form_submit_button(
