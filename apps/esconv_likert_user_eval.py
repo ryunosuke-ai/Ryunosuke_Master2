@@ -122,9 +122,28 @@ def apply_page_style() -> None:
         div[data-testid="stColumn"]:has(.reference-panel) {
             align-self: flex-start;
         }
-        .st-key-rating_scroll_container {
+        [class*="st-key-rating_scroll_container_"] {
             overscroll-behavior: contain;
             scrollbar-gutter: stable;
+        }
+        .st-key-evaluation_validation {
+            position: fixed;
+            top: 72px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: min(760px, calc(100vw - 32px));
+            z-index: 1100;
+            animation: survey-alert-in 180ms ease-out;
+        }
+        @keyframes survey-alert-in {
+            from {
+                opacity: 0;
+                transform: translate(-50%, -10px);
+            }
+            to {
+                opacity: 1;
+                transform: translate(-50%, 0);
+            }
         }
         .st-key-evaluation_navigation {
             position: fixed;
@@ -400,6 +419,22 @@ def rating_default(
     return value if 1 <= value <= 7 else None
 
 
+def find_missing_evaluation_fields(
+    ratings: dict[str, dict[str, int | None]],
+    final_choice: str | None,
+) -> list[str]:
+    """未回答の評価項目を表示順に返す。"""
+    missing = [
+        f"質問{axis_index + 1}・応答{position}"
+        for axis_index, axis_key in enumerate(EXPECTED_AXIS_KEYS)
+        for position in RESPONSE_POSITIONS
+        if ratings[axis_key][position] is None
+    ]
+    if final_choice is None:
+        missing.append("最後の質問")
+    return missing
+
+
 def first_unanswered_index(
     items: list[dict[str, Any]],
     saved: dict[str, dict[str, Any]],
@@ -432,7 +467,7 @@ def render_completion(participant: Participant, total: int) -> None:
 
 
 def reset_evaluation_scroll() -> None:
-    """評価画面への遷移時にページと質問列を先頭へ戻す。"""
+    """評価画面への遷移時にページ本体を先頭へ戻す。"""
     st.iframe(
         """
         <script>
@@ -443,24 +478,6 @@ def reset_evaluation_scroll() -> None:
             ?.scrollTo({top: 0, left: 0, behavior: "auto"});
           documentRoot.querySelector('[data-testid="stMain"]')
             ?.scrollTo({top: 0, left: 0, behavior: "auto"});
-          const ratingScroll = documentRoot.querySelector(
-            '.st-key-rating_scroll_container'
-          );
-          ratingScroll?.scrollTo({top: 0, left: 0, behavior: "auto"});
-          ratingScroll?.querySelectorAll('*').forEach((element) => {
-            if (element.scrollHeight > element.clientHeight) {
-              element.scrollTo({top: 0, left: 0, behavior: "auto"});
-            }
-          });
-          const evaluationBlock = Array.from(
-            documentRoot.querySelectorAll('div[data-testid="stHorizontalBlock"]')
-          ).find((block) => block.querySelector('.reference-panel'));
-          const columns = evaluationBlock?.querySelectorAll(
-            ':scope > div[data-testid="stColumn"]'
-          );
-          if (columns && columns.length > 1) {
-            columns[columns.length - 1].scrollTo({top: 0, behavior: "auto"});
-          }
         };
         resetScroll();
         window.setTimeout(resetScroll, 100);
@@ -508,6 +525,10 @@ def render_evaluation(
     st.caption(
         f"評価 {current_index + 1} / {total}　保存済み {answered_count} / {total}"
     )
+    validation_notice = st.container(
+        key="evaluation_validation",
+        border=False,
+    )
     with st.form(f"evaluation_form_{participant.participant_id}_{item_id}"):
         reference_column, rating_column = st.columns([1.08, 0.92], gap="large")
         with reference_column:
@@ -515,7 +536,7 @@ def render_evaluation(
         rating_scroll = rating_column.container(
             height=500,
             border=False,
-            key="rating_scroll_container",
+            key=f"rating_scroll_container_{item_id}",
             autoscroll=False,
         )
         with rating_scroll:
@@ -595,16 +616,12 @@ def render_evaluation(
         st.rerun()
     if not submitted:
         return
-    missing = [
-        f"質問{axis_index + 1}・応答{position}"
-        for axis_index, axis_key in enumerate(EXPECTED_AXIS_KEYS)
-        for position in RESPONSE_POSITIONS
-        if ratings[axis_key][position] is None
-    ]
-    if final_choice is None:
-        missing.append("最後の質問")
+    missing = find_missing_evaluation_fields(ratings, final_choice)
     if missing:
-        st.error("未回答があります: " + "、".join(missing[:8]))
+        validation_notice.warning(
+            "未回答があります。右側の質問を確認してください: "
+            + "、".join(missing[:8])
+        )
         return
     completed_ratings = {
         axis_key: {
@@ -623,7 +640,7 @@ def render_evaluation(
             comment=comment,
         )
     except (OSError, ValueError) as exc:
-        st.error(f"回答を保存できませんでした: {exc}")
+        validation_notice.error(f"回答を保存できませんでした: {exc}")
         return
     st.session_state.esconv_survey_index = current_index + 1
     st.rerun()

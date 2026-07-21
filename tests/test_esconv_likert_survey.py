@@ -9,6 +9,7 @@ from streamlit.testing.v1 import AppTest
 
 from apps.esconv_likert_user_eval import (
     build_reference_html,
+    find_missing_evaluation_fields,
     first_unanswered_index,
     readable_text_html,
 )
@@ -178,6 +179,20 @@ def test_first_unanswered_and_style_instruction_contract():
     assert "？" not in GOOD_RESPONSE_EXAMPLE
 
 
+def test_missing_evaluation_fields_prevent_incomplete_submission():
+    ratings = {
+        axis_key: {position: 6 for position in RESPONSE_POSITIONS}
+        for axis_key in EXPECTED_AXIS_KEYS
+    }
+    ratings["style_strength"]["B"] = None
+    assert find_missing_evaluation_fields(ratings, None) == [
+        "質問1・応答B",
+        "最後の質問",
+    ]
+    ratings["style_strength"]["B"] = 6
+    assert find_missing_evaluation_fields(ratings, "応答A") == []
+
+
 def test_streamlit_start_and_evaluation_screens_render(tmp_path: Path, monkeypatch):
     database = tmp_path / "ui_responses.sqlite3"
     monkeypatch.setenv("ESCONV_SURVEY_DATABASE", database.as_posix())
@@ -201,7 +216,7 @@ def test_streamlit_start_and_evaluation_screens_render(tmp_path: Path, monkeypat
         for block in app.markdown
     )
     assert any(
-        ".st-key-rating_scroll_container" in block.value
+        'class*="st-key-rating_scroll_container_"' in block.value
         and "overscroll-behavior: contain" in block.value
         and ".reference-panel" in block.value
         and "overflow: visible" in block.value
@@ -210,7 +225,7 @@ def test_streamlit_start_and_evaluation_screens_render(tmp_path: Path, monkeypat
     scroll_containers = [
         node
         for node in app.get("flex_container")
-        if node.proto.id.endswith("-rating_scroll_container")
+        if node.proto.id.endswith("-rating_scroll_container_item_01")
     ]
     assert len(scroll_containers) == 1
     assert scroll_containers[0].proto.height_config.pixel_height == 500
@@ -228,6 +243,8 @@ def test_streamlit_start_and_evaluation_screens_render(tmp_path: Path, monkeypat
         ".st-key-evaluation_navigation" in block.value
         and "position: fixed" in block.value
         and "bottom: 0" in block.value
+        and ".st-key-evaluation_validation" in block.value
+        and "top: 72px" in block.value
         for block in app.markdown
     )
 
