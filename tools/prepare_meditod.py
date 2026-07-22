@@ -24,9 +24,18 @@ def main() -> int:
     parser.add_argument("--annotations")
     parser.add_argument("--source-mode", choices=("public_raw", "canonical_full"))
     parser.add_argument("--canonical-data-dir")
+    parser.add_argument(
+        "--data-terms-confirmed",
+        action="store_true",
+        help="公式リポジトリと、該当時はUMLSの利用条件を実行者が確認済みであることを記録します。",
+    )
     parser.add_argument("--seed", type=int)
     args = parser.parse_args()
     config = load_yaml(args.config)
+    if not args.data_terms_confirmed:
+        raise ValueError(
+            "MediTODの利用条件を確認後、--data-terms-confirmedを指定してください。"
+        )
     mode = args.source_mode or str(config.get("source_mode", "public_raw"))
     seed = args.seed if args.seed is not None else int(config.get("split_seed", 42))
     output = Path(args.output_root)
@@ -45,6 +54,7 @@ def main() -> int:
             "canonical_data_dir": str(Path(args.canonical_data_dir)),
             "provided_by_user": True,
             "umls_licensed_data": True,
+            "data_terms_confirmed_by_runner": True,
             "license": config.get("license", {}),
         }
         write_jsonl(conversations, data_dir / "meditod_conversations.jsonl")
@@ -80,10 +90,12 @@ def main() -> int:
                 annotations.name: {"path": str(annotations), "sha256": file_sha256(annotations)},
             },
             "provided_by_user": True,
+            "data_terms_confirmed_by_runner": True,
             "license": config.get("license", {}),
         }
     else:
         dialogs, annotations, source_metadata = download_public_raw(config, source_dir)
+        source_metadata["data_terms_confirmed_by_runner"] = True
     conversations, samples, report = prepare_public_raw(
         dialogs,
         annotations,

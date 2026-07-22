@@ -25,6 +25,7 @@ MEDITOD_CONFIG="${MEDITOD_CONFIG:-configs/datasets/meditod.yaml}"
 MEDITOD_DIALOGS="${MEDITOD_DIALOGS:-}"
 MEDITOD_ANNOTATIONS="${MEDITOD_ANNOTATIONS:-}"
 MEDITOD_CANONICAL_DATA_DIR="${MEDITOD_CANONICAL_DATA_DIR:-}"
+MEDITOD_DATA_TERMS_CONFIRMED="${MEDITOD_DATA_TERMS_CONFIRMED:-0}"
 ANALYSIS_CONVERSATIONS="${MEDITOD_ANALYSIS_CONVERSATIONS:-24}"
 ANALYSIS_MAX_INPUT_CHARS="${MEDITOD_ANALYSIS_MAX_INPUT_CHARS:-400000}"
 ANALYSIS_MAX_OUTPUT_TOKENS="${MEDITOD_ANALYSIS_MAX_OUTPUT_TOKENS:-24000}"
@@ -81,7 +82,7 @@ mkdir -p "$LOG_DIR" "$STATE_DIR"
 LOG_FILE="$LOG_DIR/pipeline_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-FINGERPRINT="$(python3 - "$RUN_TAG" "$SEED" "$DRY_RUN" "$MEDITOD_SOURCE_MODE" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$ANALYSIS_CONVERSATIONS" "$ANALYSIS_MAX_INPUT_CHARS" "$ANALYSIS_MAX_OUTPUT_TOKENS" "$SCORING_PILOT_RECORDS" "$SELECTION_POOL_COUNT" "$SCORING_BATCH_RECORDS" "$DPO_INITIAL_SELECTION_POOL_COUNT" "$DPO_MAX_SOURCE_CHARACTERS" "$DPO_MAX_OUTPUT_TOKENS" "$WILDCHAT_FULL_SCAN" "$WILDCHAT_CANDIDATE_TARGET_RECORDS" "$EVAL_COUNT" "$OOD_EVAL_COUNT" <<'PY'
+FINGERPRINT="$(python3 - "$RUN_TAG" "$SEED" "$DRY_RUN" "$MEDITOD_SOURCE_MODE" "$MEDITOD_DATA_TERMS_CONFIRMED" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$ANALYSIS_CONVERSATIONS" "$ANALYSIS_MAX_INPUT_CHARS" "$ANALYSIS_MAX_OUTPUT_TOKENS" "$SCORING_PILOT_RECORDS" "$SELECTION_POOL_COUNT" "$SCORING_BATCH_RECORDS" "$DPO_INITIAL_SELECTION_POOL_COUNT" "$DPO_MAX_SOURCE_CHARACTERS" "$DPO_MAX_OUTPUT_TOKENS" "$WILDCHAT_FULL_SCAN" "$WILDCHAT_CANDIDATE_TARGET_RECORDS" "$EVAL_COUNT" "$OOD_EVAL_COUNT" <<'PY'
 import hashlib,json,pathlib,sys
 paths=[
  "configs/datasets/meditod.yaml","configs/datasets/wildchat_health.yaml",
@@ -242,8 +243,14 @@ EVAL_DIR="$OUTPUT_ROOT/evaluation"
 
 preprocess_stage() {
   local args=(--config "$MEDITOD_CONFIG" --output-root "$MED_ROOT" --source-mode "$MEDITOD_SOURCE_MODE" --seed "$SEED")
+  if [[ "$DRY_RUN" == "1" || "$MEDITOD_DATA_TERMS_CONFIRMED" == "1" ]]; then
+    args+=(--data-terms-confirmed)
+  else
+    echo "MediTODの公式利用条件を確認し、MEDITOD_DATA_TERMS_CONFIRMED=1を指定してください。" >&2
+    return 20
+  fi
   if [[ "$DRY_RUN" == "1" ]]; then
-    args=(--config tests/fixtures/meditod_public_raw_config.yaml --output-root "$MED_ROOT" --source-mode public_raw --seed "$SEED" --dialogs tests/fixtures/meditod_dialogs.json --annotations tests/fixtures/meditod_annotations.json)
+    args=(--config tests/fixtures/meditod_public_raw_config.yaml --output-root "$MED_ROOT" --source-mode public_raw --seed "$SEED" --dialogs tests/fixtures/meditod_dialogs.json --annotations tests/fixtures/meditod_annotations.json --data-terms-confirmed)
   elif [[ "$MEDITOD_SOURCE_MODE" == canonical_full ]]; then
     args+=(--canonical-data-dir "$MEDITOD_CANONICAL_DATA_DIR")
   elif [[ -n "$MEDITOD_DIALOGS" || -n "$MEDITOD_ANNOTATIONS" ]]; then

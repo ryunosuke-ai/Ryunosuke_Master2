@@ -62,9 +62,12 @@ RUN_TAG=meditod_wildchat_dry_run \
 ```
 
 本実験は、十分なディスクとGPU空きを確認してwatchdogから実行する。
+公式リポジトリ（canonical完全版ではUMLSを含む）の利用条件を確認したうえで、
+確認記録用の`MEDITOD_DATA_TERMS_CONFIRMED=1`を指定する。
 
 ```bash
 RUN_TAG=meditod_wildchat_gpt56_v1 \
+MEDITOD_DATA_TERMS_CONFIRMED=1 \
 START_STAGE=preprocess \
 END_STAGE=prepare_user_eval \
 WORKERS=4 \
