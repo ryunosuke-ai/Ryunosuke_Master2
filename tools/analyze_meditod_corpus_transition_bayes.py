@@ -23,7 +23,9 @@ from tools.analyze_small_corpus_transition_bayes import build_json_repair_instru
 
 
 DEFAULT_MAX_OUTPUT_TOKENS = 24_000
-DEFAULT_MAX_INPUT_CHARS = 400_000
+# 公開raw版の層化24診療は、公式annotationを含めると約68万文字になる。
+# 診療境界を壊さず全標本を渡せるよう、実測値に十分な余裕を持たせる。
+DEFAULT_MAX_INPUT_CHARS = 800_000
 REQUIRED_FUNCTIONS = {
     "complaint_elicitation": ("complaint", "open_elicitation"),
     "symptom_attributes": ("symptom_attribute", "onset", "severity", "progression"),

@@ -5,11 +5,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from core.dpo_prompting import (
     MEDITOD_DPO_PROMPT_TEMPLATE_VERSION,
     build_meditod_dpo_prompt,
 )
 from tools.analyze_meditod_corpus_transition_bayes import (
+    DEFAULT_MAX_INPUT_CHARS,
+    build_meditod_corpus_text,
     evaluate_model_quality,
     mock_model,
 )
@@ -84,6 +88,33 @@ def test_meditod_bayes_quality_and_scoring_prompt_hide_states():
     assert all(state not in prompt for state in model.states)
     assert "observation" in prompt
     assert "診断や助言を急いでいないことを粗抽出条件" not in prompt
+
+
+def test_meditod_analysis_limit_keeps_complete_public_raw_sample():
+    """公開raw版24診療の実測サイズを切らずに扱える余裕を維持する。"""
+    records = [
+        {
+            "conversation_id": "meditod_train_000",
+            "source_split": "train",
+            "dialog": [
+                {
+                    "turn_index": 0,
+                    "speaker": "doctor",
+                    "text": "x" * 677_281,
+                    "annotation_variants": [],
+                }
+            ],
+        }
+    ]
+    corpus = build_meditod_corpus_text(
+        records,
+        {},
+        max_chars=DEFAULT_MAX_INPUT_CHARS,
+    )
+    assert len(corpus) > 677_281
+    assert DEFAULT_MAX_INPUT_CHARS == 800_000
+    with pytest.raises(ValueError, match="max-input-chars"):
+        build_meditod_corpus_text(records, {}, max_chars=400_000)
 
 
 def test_wildchat_health_filter_is_domain_and_multiturn_only():
