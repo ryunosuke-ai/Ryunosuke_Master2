@@ -1,0 +1,34 @@
+dataset: meditod
+survey_version: meditod_likert_web.v1
+page_title: 医療面接応答の7段階評価
+evaluation_title: 医療面接応答の評価
+intro: 症状について相談している人に対する、3つの匿名応答を比較します。医学知識の正しさではなく、必要な情報を順序よく聞く会話の進め方を評価してください。
+style_features:
+  - すでに話された症状を理解し、まだ足りない情報を具体的に聞いている
+  - 症状の詳しい様子から既往歴や薬などへ、無理なく順序立てて進めている
+  - 同じ質問や早すぎる診断を避け、患者が答えやすい聞き方をしている
+example:
+  user: 3日前から咳が続いています。
+  good_response: 咳は3日前から続いているのですね。痰は出ますか。また、息苦しさや胸の痛みはありますか。
+  good_explanation: 既に分かっている時期を繰り返さず、症状を判断するために次に必要な情報を具体的に聞いています。
+  poor_responses:
+    - response: 風邪だと思うので、市販薬を飲んで様子を見てください。
+      explanation: 情報が十分に集まる前に見立てと対応を決めています。
+    - response: いつから咳が出ていますか。
+      explanation: 既に「3日前から」と話された情報をもう一度聞いています。
+axes:
+  - key: history_taking_style_strength
+    statement: 病歴を聞き取る医療者の応答として、全体的に良い。
+  - key: known_information_understanding
+    statement: 患者がすでに話した内容を正しく理解している。
+  - key: information_gap_recognition
+    statement: この時点で、まだ確認が必要な情報を適切に見つけている。
+  - key: next_question_specificity
+    statement: 次の質問が具体的で、患者が答えやすい。
+  - key: interview_order
+    statement: 症状や背景を聞く順序が、これまでの会話に合っている。
+  - key: coverage_without_redundancy
+    statement: 同じことを不必要に聞き直さず、新しい必要情報を集めている。
+  - key: premature_assessment_avoidance
+    statement: 情報が足りない段階で、診断や対応を急いでいない。
+final_choice_question: 3つの応答のうち、必要な情報を順序よく聞き取る医療者の応答として、最もふさわしいものはどれですか。

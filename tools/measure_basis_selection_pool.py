@@ -24,6 +24,7 @@ def measure_pool(
     per_dialogue_limit: int = 3,
     exclude_fallback_conversations: bool = False,
     max_source_characters: int | None = None,
+    exclude_explicit_unsafe_medical_advice: bool = False,
 ) -> dict:
     model = load_transition_bayes_model(model_path)
     labels = derive_selection_labels_from_model(
@@ -58,6 +59,20 @@ def measure_pool(
         if max_source_characters is None
         or source_text_characters(row) <= max_source_characters
     ]
+    records_over_length_limit = len(scored) - len(length_eligible)
+    unsafe_records = 0
+    if exclude_explicit_unsafe_medical_advice:
+        from tools.wildchat_health import has_explicit_unsafe_medical_advice
+
+        unsafe_records = sum(
+            has_explicit_unsafe_medical_advice(str(row.get("response", "")))
+            for row in length_eligible
+        )
+        length_eligible = [
+            row
+            for row in length_eligible
+            if not has_explicit_unsafe_medical_advice(str(row.get("response", "")))
+        ]
     selected_before_exclusion = select(length_eligible)
     if exclude_fallback_conversations:
         eligible_input = [
@@ -87,7 +102,9 @@ def measure_pool(
         "exclude_fallback_conversations": exclude_fallback_conversations,
         "max_source_characters": max_source_characters,
         "length_filter_policy": "exclude_whole_sample_without_truncating_history",
-        "records_over_length_limit": len(scored) - len(length_eligible),
+        "records_over_length_limit": records_over_length_limit,
+        "exclude_explicit_unsafe_medical_advice": exclude_explicit_unsafe_medical_advice,
+        "explicit_unsafe_medical_advice_records": unsafe_records,
         "label_derivation": labels,
     }
 
@@ -101,6 +118,11 @@ def main() -> int:
         "--method",
         choices=("mean_difference", "state_specific_margin"),
         default="state_specific_margin",
+    )
+    parser.add_argument(
+        "--exclude-explicit-unsafe-medical-advice",
+        action="store_true",
+        help="明白な危険投薬・受診抑制をclean候補から除外します。",
     )
     parser.add_argument(
         "--max-source-characters",
@@ -129,6 +151,7 @@ def main() -> int:
         margin=args.margin,
         exclude_fallback_conversations=args.exclude_fallback_conversations,
         max_source_characters=args.max_source_characters,
+        exclude_explicit_unsafe_medical_advice=args.exclude_explicit_unsafe_medical_advice,
     )
     report["required_records"] = args.required
     report["sufficient"] = report["eligible_records"] >= args.required

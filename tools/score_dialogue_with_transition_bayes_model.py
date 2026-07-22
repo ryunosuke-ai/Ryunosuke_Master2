@@ -38,7 +38,7 @@ from tools.jsonl_utils import ensure_jsonl_append_boundary, read_jsonl_records
 DEFAULT_INPUT_PATH = "data/large_dialogue.jsonl"
 DEFAULT_MODEL_PATH = "artifacts/bayes_models/generated_transition_bayes_model.json"
 DEFAULT_OUTPUT_PATH = "artifacts/scored_dialogues/transition_bayes_scored_dialogue.jsonl"
-SCORING_PRESETS = ("legacy", "mathdial_tutoring")
+SCORING_PRESETS = ("legacy", "mathdial_tutoring", "meditod_history_taking")
 CONTENT_FILTER_FALLBACK_REASON = (
     "LLM評価APIのcontent filterにより観測ラベルを直接判定できなかったため、"
     "大量処理継続用にnegative/off_style寄りの観測へフォールバックしました。"
@@ -112,7 +112,7 @@ def parse_args() -> argparse.Namespace:
         "--scoring-preset",
         choices=SCORING_PRESETS,
         default="legacy",
-        help="観測分類指示。既定legacyは既存ESConv互換、mathdial_tutoringはMathDial専用です。",
+        help="観測分類指示。既定legacyは既存ESConv互換で、追加datasetは専用presetを指定します。",
     )
     parser.add_argument(
         "--invalid-observation-retries",
@@ -337,6 +337,8 @@ def build_transition_scoring_instructions(
     """状態遷移モデル用の観測ラベル判定指示を作る。"""
     if scoring_preset == "mathdial_tutoring":
         return build_mathdial_scoring_instructions(model)
+    if scoring_preset == "meditod_history_taking":
+        return build_meditod_scoring_instructions(model)
     if scoring_preset != "legacy":
         raise ValueError(f"未知のscoring presetです: {scoring_preset}")
     observation_lines = "\n".join(f"- {name}: {model.observation_descriptions[name]}" for name in model.observations)
@@ -379,6 +381,31 @@ def build_mathdial_scoring_instructions(model: TransitionBayesModel) -> str:
         "出力はJSON objectのみとし、observation, score, reasonを含める。"
         "observationは許可ラベルと完全一致させる。scoreは0.0〜1.0の分類確信度、"
         "reasonは文脈と応答機能に基づく簡潔な日本語とする。\n\n"
+        f"許可されるobservation: {allowed}\n\n"
+        f"観測ラベル:\n{observation_lines}"
+    )
+
+
+def build_meditod_scoring_instructions(model: TransitionBayesModel) -> str:
+    """state情報を見せずMediTODの病歴聴取機能だけを分類する指示を作る。"""
+    observation_lines = "\n".join(
+        f"- {name}: {model.observation_descriptions[name]}"
+        for name in model.observations
+    )
+    allowed = ", ".join(model.observations)
+    return (
+        "あなたは医療相談における医療者応答の会話機能を分類する評価者です。"
+        "医学的診断の正しさや病名の一致ではなく、promptですでに得られた患者情報と"
+        "不足している情報に対してresponseが果たす病歴聴取機能を判定してください。\n\n"
+        "判定手順:\n"
+        "1. promptから、既知の主訴、症状属性、関連症状、既往歴、服薬、検査、生活背景を読む。\n"
+        "2. responseが開放的聴取、症状属性質問、関連症状・red flag確認、背景歴質問、"
+        "要約・段階移行、早すぎる診断・助言、重複質問、文脈不一致のどれに最も近いか判定する。\n"
+        "3. 情報が十分集まった後の要約や説明は正当な機能になり得る。質問であるだけで高評価にしない。\n"
+        "4. 下記の観測ラベルから必ず1つだけ選び、state名や新しいラベルは出力しない。\n\n"
+        "出力はJSON objectのみとし、observation, score, reasonを含める。"
+        "observationは許可ラベルと完全一致させる。scoreは0.0〜1.0、"
+        "reasonは既知情報・不足情報と応答機能に基づく簡潔な日本語とする。\n\n"
         f"許可されるobservation: {allowed}\n\n"
         f"観測ラベル:\n{observation_lines}"
     )
@@ -613,7 +640,7 @@ def score_single_record(
         )
     except Exception as exc:
         if not is_content_filter_error(exc):
-            if scoring_preset == "mathdial_tutoring" and isinstance(exc, ValueError):
+            if scoring_preset != "legacy" and isinstance(exc, ValueError):
                 try:
                     observation_score = _retry_invalid_observation(
                         record,
@@ -670,7 +697,7 @@ def score_single_record(
             except Exception as retry_exc:
                 if not is_content_filter_error(retry_exc):
                     if (
-                        scoring_preset == "mathdial_tutoring"
+                        scoring_preset != "legacy"
                         and isinstance(retry_exc, ValueError)
                     ):
                         try:

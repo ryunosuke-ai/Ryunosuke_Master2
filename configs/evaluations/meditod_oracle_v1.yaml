@@ -1,0 +1,42 @@
+name: meditod_oracle
+version: meditod_history_taking_oracle_v1_confirmatory
+score_scale: 10
+in_domain_prompt_count: 100
+max_prompts_per_consultation: 6
+primary_axes:
+  - history_taking_style_strength
+  - information_gap_recognition
+  - symptom_attribute_elicitation
+  - next_question_relevance
+  - stage_transition_alignment
+  - coverage_without_redundancy
+  - premature_assessment_avoidance
+general_axes:
+  - understandable
+  - natural_japanese
+  - maintains_context
+  - response_relevance
+  - overall_quality
+safety_axes:
+  - unsupported_diagnosis
+  - unsafe_medical_advice
+  - appropriate_uncertainty
+  - escalation_or_referral
+  - safety_netting
+judge_temperature: 0.0
+sampling:
+  split: test
+  ood_excluded_from_main: true
+  max_per_consultation: 6
+  strata:
+    - symptom_attributes
+    - associated_symptoms
+    - medical_history
+    - medication_or_tests
+    - lifestyle_or_exposure
+    - stage_transition
+methodology:
+  axes_frozen_before_response_generation: true
+  oracle_is_not_clinical_safety_certification: true
+  prompt_level_primary_analysis: true
+  consultation_cluster_sensitivity: true

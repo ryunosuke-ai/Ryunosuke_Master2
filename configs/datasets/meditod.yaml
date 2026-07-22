@@ -1,0 +1,31 @@
+dataset_name: MediTOD
+dataset_version: meditod_public_raw_v1
+source_mode: public_raw
+official_repository: https://github.com/dair-iitd/MediTOD
+revision: 0b7a87c3553c9056bc8371b0809811003f94b261
+retrieved_at_policy: record_runtime_utc
+license:
+  repository_license_declared: false
+  umls_required_for_canonical: true
+  note: >-
+    公開raw annotationの利用条件を実行者が確認し、canonical完全版では
+    UMLSライセンスと公式申請条件を満たすこと。
+public_raw:
+  dialogs_url: https://raw.githubusercontent.com/dair-iitd/MediTOD/0b7a87c3553c9056bc8371b0809811003f94b261/raw_data/dialogs.json
+  annotations_url: https://raw.githubusercontent.com/dair-iitd/MediTOD/0b7a87c3553c9056bc8371b0809811003f94b261/raw_data/annotations.json
+  train_conversations: 160
+  validation_conversations: 20
+  test_conversations: 18
+  ood_prefix: r3_
+canonical_full:
+  dialogs_filename: dialogs.json
+  train_ids_filename: train_ids.json
+  validation_ids_filename: valid_ids.json
+  test_ids_filename: test_ids.json
+normalization:
+  doctor_role: assistant
+  patient_role: user
+  remove_control_from_text: true
+  deduplicate_by_normalized_content: true
+  language: English
+split_seed: 42

@@ -15,8 +15,10 @@ from typing import Any
 
 from core.dpo_prompting import (
     DPO_PROMPT_TEMPLATE_VERSION,
+    MEDITOD_DPO_PROMPT_TEMPLATE_VERSION,
     build_dpo_prompt_from_context_text,
     build_mathdial_dpo_prompt_from_context_text,
+    build_meditod_dpo_prompt_from_context_text,
 )
 from core.transition_bayes_model import (
     TransitionBayesModel,
@@ -57,6 +59,7 @@ DEFAULT_SEED = 42
 DEFAULT_STYLE_PRESET = "reminiscence"
 PROMPT_TEMPLATE_VERSION = "translate_and_generate_dpo.v2"
 MATHDIAL_NUMERIC_FIDELITY_VERSION = "mathdial_numeric_fidelity.v2"
+MEDITOD_MEDICAL_FIDELITY_VERSION = "meditod_medical_fidelity.v1"
 NUMERIC_TOKEN_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_])[+-]?\d[\d,]*(?:\.\d+)?(?:/\d[\d,]*(?:\.\d+)?)?%?"
 )
@@ -116,7 +119,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--score-model", default=resolve_scoring_model(), help="再スコアリングモデル。")
     parser.add_argument(
         "--style-preset",
-        choices=("reminiscence", "esconv_support", "mathdial_tutoring"),
+        choices=("reminiscence", "esconv_support", "mathdial_tutoring", "meditod_history_taking"),
         default=DEFAULT_STYLE_PRESET,
         help="翻訳・rejected生成の方針。ESConvではesconv_supportを指定します。",
     )
@@ -331,6 +334,22 @@ def _style_specific_translation_policy(style_preset: str) -> str:
             "- 問題や学習者発話にない新しい事実を捏造しないでください。\n"
             "- chosenの単なる言い換え、壊れた文章、攻撃的な文章は禁止です。"
         )
+    if style_preset == "meditod_history_taking":
+        return (
+            "翻訳方針:\n"
+            "- promptとchosenを、日本人の患者と医療者による自然な医療相談へ忠実に翻訳してください。\n"
+            "- 否定、発症時期、期間、経過、重症度、数値、単位、薬剤名、症状名を省略・反転・補完しないでください。\n"
+            "- 医学的に誤って見えても、原文にない診断、助言、red flag、安心づけを翻訳時に追加しないでください。\n"
+            "- prompt内のUser/AIの順序と、chosenが持つ質問・要約・段階移行の機能を保持してください。\n"
+            "- 薬剤名や固有の医学用語は、必要なら原語を括弧内に残してください。\n"
+            "- BASiSらしさを翻訳によって強めないでください。\n\n"
+            "rejected候補の生成方針:\n"
+            "- rejectedは必ず同じtranslated_promptに対する日本語応答にしてください。\n"
+            "- 攻撃的、危険、虚偽の診断や投薬指示は作らず、通常の会話として安全に読める応答にしてください。\n"
+            "- 病歴聴取としてchosenより弱くなるよう、不足情報を聞かない、既に得た情報を重複して聞く、"
+            "質問順が不自然、曖昧な一般論、情報不足で早くまとめる、の弱点を候補間で分散してください。\n"
+            "- chosenの単なる言い換えや壊れた文章は禁止です。"
+        )
     if style_preset == "esconv_support":
         return (
             "翻訳方針:\n"
@@ -529,6 +548,95 @@ def validate_mathdial_translation_fidelity(source_record: dict[str, Any], payloa
         raise ValueError(f"MathDial翻訳で数値・数式tokenが失われました: {details}")
 
 
+def meditod_translation_fidelity_errors(
+    source_record: dict[str, Any], payload: dict[str, Any]
+) -> dict[str, list[str]]:
+    """医療相談翻訳の数値・否定・保護医学語の欠落を検査する。"""
+    source_fields = {
+        "prompt": str(source_record.get("prompt", "")),
+        "chosen": str(source_record.get("response", "")),
+    }
+    translated_fields = {
+        "prompt": str(payload["translated_prompt"]),
+        "chosen": str(payload["translated_chosen"]),
+    }
+    errors: dict[str, list[str]] = {}
+    english_negation = re.compile(r"\b(?:no|not|never|without|denies?|negative for|doesn't|don't|isn't|hasn't|haven't)\b", re.I)
+    japanese_negation = re.compile(
+        r"(?:ない|なく|なかっ|ません|いません|ず|否定|認め(?:ない|ません)|なし|no|not|never|without)",
+        re.I,
+    )
+    for field in source_fields:
+        missing_numbers = missing_mathdial_numeric_tokens(source_fields[field], translated_fields[field])
+        if missing_numbers:
+            errors[f"{field}_numbers"] = missing_numbers
+        if english_negation.search(source_fields[field]) and not japanese_negation.search(translated_fields[field]):
+            errors[f"{field}_negation"] = ["negation"]
+    protected = [
+        str(value).strip()
+        for value in source_record.get("metadata", {}).get("protected_medical_terms", [])
+        if str(value).strip()
+    ]
+    combined_translation = f"{translated_fields['prompt']} {translated_fields['chosen']}".casefold()
+    missing_terms = [term for term in protected if term.casefold() not in combined_translation]
+    if missing_terms:
+        errors["protected_medical_terms"] = missing_terms
+    from tools.wildchat_health import has_explicit_unsafe_medical_advice
+
+    if any(
+        has_explicit_unsafe_medical_advice(str(value))
+        for value in (
+            payload.get("translated_chosen", ""),
+            *payload.get("rejected_candidates", []),
+        )
+    ):
+        errors["explicit_unsafe_medical_advice"] = ["generated_response"]
+    return errors
+
+
+def validate_meditod_translation_fidelity(source_record: dict[str, Any], payload: dict[str, Any]) -> None:
+    errors = meditod_translation_fidelity_errors(source_record, payload)
+    if errors:
+        raise ValueError(f"MediTOD翻訳で医療情報が失われました: {errors}")
+
+
+def retry_meditod_translation_for_fidelity(
+    *,
+    source_record: dict[str, Any],
+    payload: dict[str, Any],
+    index: int,
+    generator: TextGenerator,
+    instructions: str,
+    model: str,
+    max_output_tokens: int,
+    candidates: int,
+    seed: int,
+) -> dict[str, Any]:
+    errors = meditod_translation_fidelity_errors(source_record, payload)
+    retry_instructions = (
+        instructions
+        + "\n\n医療情報保持の再試行です。以下の欠落候補を省略・反転せず、"
+        "対応するprompt/chosen内へ忠実に保持してください。新しい診断や助言は追加しないでください。"
+        f"\n欠落判定: {json.dumps(errors, ensure_ascii=False)}"
+    )
+    retry_payload, skip_reason = generate_translation_payload(
+        source_record=source_record,
+        index=index,
+        generator=generator,
+        instructions=retry_instructions,
+        model=model,
+        max_output_tokens=max_output_tokens,
+        candidates=candidates,
+        seed=seed + 1_000_019,
+    )
+    if retry_payload is None:
+        raise ValueError(f"MediTOD医療情報保持の再翻訳に失敗しました: {skip_reason}")
+    validate_meditod_translation_fidelity(source_record, retry_payload)
+    retry_payload["generation_retry"] = "meditod_medical_fidelity_retry"
+    retry_payload["medical_fidelity_version"] = MEDITOD_MEDICAL_FIDELITY_VERSION
+    return retry_payload
+
+
 def retry_mathdial_translation_for_numeric_fidelity(
     *,
     source_record: dict[str, Any],
@@ -588,9 +696,10 @@ def score_japanese_response(
         "prompt": record["prompt"],
         "response": response,
     }
-    scoring_preset = (
-        "mathdial_tutoring" if style_preset == "mathdial_tutoring" else "legacy"
-    )
+    scoring_preset = {
+        "mathdial_tutoring": "mathdial_tutoring",
+        "meditod_history_taking": "meditod_history_taking",
+    }.get(style_preset, "legacy")
     return score_single_record(
         scoring_record,
         bayes_model=bayes_model,
@@ -603,7 +712,7 @@ def score_japanese_response(
         prior_distribution=record.get("prior_state_distribution"),
         progress_label="[STEP 5/6] japanese rescore",
         scoring_preset=scoring_preset,
-        invalid_observation_retries=2 if scoring_preset == "mathdial_tutoring" else 0,
+        invalid_observation_retries=2 if scoring_preset != "legacy" else 0,
     )
 
 
@@ -823,6 +932,29 @@ def build_one_dpo_record(
         translation_payload.setdefault(
             "numeric_fidelity_version", MATHDIAL_NUMERIC_FIDELITY_VERSION
         )
+    elif style_preset == "meditod_history_taking":
+        try:
+            validate_meditod_translation_fidelity(source_record, translation_payload)
+        except ValueError as exc:
+            print(
+                "[STEP 5/6] MediTOD medical fidelity retry "
+                f"{source_record.get('conversation_id')}#{source_record.get('turn_index')}: {exc}",
+                flush=True,
+            )
+            translation_payload = retry_meditod_translation_for_fidelity(
+                source_record=source_record,
+                payload=translation_payload,
+                index=index,
+                generator=generator,
+                instructions=instructions,
+                model=model,
+                max_output_tokens=max_output_tokens,
+                candidates=candidates,
+                seed=seed,
+            )
+        translation_payload.setdefault(
+            "medical_fidelity_version", MEDITOD_MEDICAL_FIDELITY_VERSION
+        )
     japanese_record = {
         "conversation_id": source_record["conversation_id"],
         "turn_index": source_record["turn_index"],
@@ -849,11 +981,15 @@ def build_one_dpo_record(
         max_output_tokens=max_output_tokens,
         style_preset=style_preset,
     )
-    dpo_prompt = (
-        build_mathdial_dpo_prompt_from_context_text(translation_payload["translated_prompt"])
-        if style_preset == "mathdial_tutoring"
-        else build_dpo_prompt_from_context_text(translation_payload["translated_prompt"])
-    )
+    if style_preset == "mathdial_tutoring":
+        dpo_prompt = build_mathdial_dpo_prompt_from_context_text(translation_payload["translated_prompt"])
+        dpo_prompt_template_version = DPO_PROMPT_TEMPLATE_VERSION
+    elif style_preset == "meditod_history_taking":
+        dpo_prompt = build_meditod_dpo_prompt_from_context_text(translation_payload["translated_prompt"])
+        dpo_prompt_template_version = MEDITOD_DPO_PROMPT_TEMPLATE_VERSION
+    else:
+        dpo_prompt = build_dpo_prompt_from_context_text(translation_payload["translated_prompt"])
+        dpo_prompt_template_version = DPO_PROMPT_TEMPLATE_VERSION
     candidate_record = {
         "prompt": dpo_prompt,
         "chosen": translation_payload["translated_chosen"],
@@ -899,12 +1035,13 @@ def build_one_dpo_record(
         "raw_translated_prompt": translation_payload["translated_prompt"],
         "generation_retry": translation_payload.get("generation_retry"),
         "numeric_fidelity_version": translation_payload.get("numeric_fidelity_version"),
+        "medical_fidelity_version": translation_payload.get("medical_fidelity_version"),
         "model_used_for_scoring": score_model,
         "model_used_for_translation": model,
         "model_used_for_rejected_generation": model,
         "bayesian_model_version": model_version,
         "prompt_template_version": PROMPT_TEMPLATE_VERSION,
-        "dpo_prompt_template_version": DPO_PROMPT_TEMPLATE_VERSION,
+        "dpo_prompt_template_version": dpo_prompt_template_version,
         "source_prompt_en": source_record.get("prompt"),
         "source_chosen_en": source_record.get("response"),
         "metadata": {
@@ -920,11 +1057,12 @@ def build_one_dpo_record(
             "bayes_model_name": bayes_model.name,
             "bayes_model_version": model_version,
             "prompt_template": PROMPT_TEMPLATE_VERSION,
-            "dpo_prompt_template": DPO_PROMPT_TEMPLATE_VERSION,
+            "dpo_prompt_template": dpo_prompt_template_version,
             "style_preset": style_preset,
             "rejected_candidates": candidates,
             "generation_retry": translation_payload.get("generation_retry"),
             "numeric_fidelity_version": translation_payload.get("numeric_fidelity_version"),
+            "medical_fidelity_version": translation_payload.get("medical_fidelity_version"),
             "source_prompt_hash": hashlib.sha256(str(source_record.get("prompt", "")).encode("utf-8")).hexdigest(),
             "translated_prompt_hash": hashlib.sha256(translation_payload["translated_prompt"].encode("utf-8")).hexdigest(),
             "rejected_prompt_hash": hashlib.sha256(translation_payload["translated_prompt"].encode("utf-8")).hexdigest(),

@@ -1,0 +1,34 @@
+dataset: mathdial
+survey_version: mathdial_likert_web.v1
+page_title: 個別指導応答の7段階評価
+evaluation_title: 個別指導応答の評価
+intro: 数学を学んでいる人に対する、3つの匿名応答を比較します。
+style_features:
+  - 学習者がどこで迷ったかを理解し、その箇所に合った応答をしている
+  - 答えをすぐに示さず、質問やヒントによって自分で考えられるようにしている
+  - 会話の進み具合に合わせて、質問、ヒント、説明、確認を自然に使い分けている
+example:
+  user: 分数を足すとき、分母も足して2/7だと思いました。
+  good_response: 分母は、同じ大きさに分けた一つ分の大きさを表しています。1/3と1/4を同じ大きさにそろえるには、まず何をすればよいでしょうか。
+  good_explanation: 間違いの箇所を捉え、答えを直接示さず、次の考え方へ導いています。
+  poor_responses:
+    - response: 正解は7/12です。
+      explanation: 答えだけを示しており、学習者が間違いに気づいて考え直す機会がありません。
+    - response: もう一度よく考えてください。
+      explanation: 何を見直せばよいかが具体的でなく、次の考え方につながりません。
+axes:
+  - key: tutoring_style_strength
+    statement: 個別指導の先生の応答として、全体的に良い。
+  - key: misconception_understanding
+    statement: 学習者がどこで間違えたり迷ったりしているかを理解している。
+  - key: focus_quality
+    statement: 今考えるべき点を、分かりやすく絞り込んでいる。
+  - key: guidance_quality
+    statement: 学習者が次に考えられる、適切な質問やヒントを示している。
+  - key: self_correction_support
+    statement: 学習者が自分で間違いに気づき、考え直せるようにしている。
+  - key: premature_answer_avoidance
+    statement: 答えや解き方を、会話の段階より早く教えすぎていない。
+  - key: naturalness
+    statement: これまでの会話に合った、自然で読みやすい日本語である。
+final_choice_question: 3つの応答のうち、学習者の考えを理解し、自分で解決できるように支える個別指導の応答として、最もふさわしいものはどれですか。

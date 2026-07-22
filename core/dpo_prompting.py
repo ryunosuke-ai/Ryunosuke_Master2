@@ -11,6 +11,7 @@ CONTEXT_ONLY_DPO_PROMPT_TEMPLATE_VERSION = "dpo_user_ai_context_only.v1"
 NEUTRAL_CONVERSATION_DPO_PROMPT_TEMPLATE_VERSION = (
     "dpo_user_ai_neutral_instruction.v3"
 )
+MEDITOD_DPO_PROMPT_TEMPLATE_VERSION = "dpo_user_ai_meditod_neutral_medical.v1"
 DEFAULT_MAX_HISTORY_TURNS = 10
 MATHDIAL_CONTEXT_MARKER = "\n\nこれまでの学習対話:\n"
 NEUTRAL_CONVERSATION_INSTRUCTION = (
@@ -27,6 +28,9 @@ MATHDIAL_INSTRUCTION_LINES = [
     "返答は自然な日本語で、問題とこれまでの学習者の考えに即して簡潔に書いてください。",
     "必要に応じて質問、焦点化、段階的ヒント、説明、理解確認のいずれかを選んでください。",
 ]
+MEDITOD_INSTRUCTION = (
+    "以下の医療相談の会話の文脈に沿って、次の医療者側の応答を自然な日本語で生成してください。"
+)
 
 ROLE_PREFIX_PATTERN = re.compile(
     r"^\s*(?:"
@@ -114,6 +118,30 @@ def build_mathdial_dpo_prompt(
     if clean_user_text:
         lines.append(f"User: {clean_user_text}")
     lines.extend(["", "AI:"])
+    return "\n".join(lines)
+
+
+def build_meditod_dpo_prompt(
+    user_text: str = "",
+    history_turns: list[dict[str, str]] | tuple[dict[str, str], ...] | None = None,
+    *,
+    max_history_turns: int = DEFAULT_MAX_HISTORY_TURNS,
+) -> str:
+    """MediTOD学習・評価で共有する中立な医療者役割promptを作る。"""
+    if max_history_turns <= 0:
+        raise ValueError("max_history_turnsは正数である必要があります。")
+    lines = [MEDITOD_INSTRUCTION, ""]
+    for turn in list(history_turns or [])[-max_history_turns:]:
+        speaker = normalize_speaker(turn.get("speaker", "User"))
+        text = clean_turn_text(turn.get("text", ""))
+        if text:
+            lines.append(f"{speaker}: {text}")
+    clean_user_text = clean_turn_text(user_text)
+    if clean_user_text:
+        lines.append(f"User: {clean_user_text}")
+    if len(lines) == 2:
+        raise ValueError("MediTOD promptに有効な会話履歴がありません。")
+    lines.append("AI:")
     return "\n".join(lines)
 
 
@@ -228,6 +256,18 @@ def build_mathdial_dpo_prompt_from_context_text(
 ) -> str:
     """翻訳済み文脈からMathDial用DPO promptを作る。"""
     return build_mathdial_dpo_prompt(
+        history_turns=context_text_to_user_ai_turns(context_text),
+        max_history_turns=max_history_turns,
+    )
+
+
+def build_meditod_dpo_prompt_from_context_text(
+    context_text: str,
+    *,
+    max_history_turns: int = DEFAULT_MAX_HISTORY_TURNS,
+) -> str:
+    """翻訳済み文脈からMediTOD用DPO promptを作る。"""
+    return build_meditod_dpo_prompt(
         history_turns=context_text_to_user_ai_turns(context_text),
         max_history_turns=max_history_turns,
     )

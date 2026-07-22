@@ -1,0 +1,76 @@
+dataset_name: allenai/WildChat-1M
+split: train
+revision: 7d6490e462285cf85d91eabea0f9a954fbddcd1f
+language: English
+minimum_user_turns: 4
+minimum_exchanges: 3
+require_followup_information: true
+exclude_single_turn_knowledge_questions: true
+stream_shuffle_buffer_size: 10000
+exclude_toxic: true
+exclude_redacted: true
+near_duplicate_jaccard: 0.90
+domain_keywords:
+  - symptom
+  - symptoms
+  - pain
+  - cough
+  - fever
+  - headache
+  - nausea
+  - dizzy
+  - medication
+  - medicine
+  - doctor
+  - clinic
+  - hospital
+  - diagnosis
+  - treatment
+  - test result
+  - blood test
+  - health
+  - medical
+  - breathing
+  - rash
+  - infection
+patient_information_markers:
+  - i have
+  - i've had
+  - started
+  - for days
+  - for weeks
+  - getting worse
+  - taking
+  - my medication
+  - my symptoms
+  - also
+  - no history
+  - yes
+personal_consultation_markers:
+  - i have
+  - i've had
+  - i am taking
+  - i'm taking
+  - my symptom
+  - my pain
+  - my doctor
+  - my medication
+  - should i see
+  - happened to me
+respiratory_keywords:
+  - cough
+  - sputum
+  - shortness of breath
+  - breathing
+  - wheeze
+  - sore throat
+  - congestion
+  - chest pain
+toxic_keywords:
+  - explicit sexual
+  - racial slur
+  - kill yourself
+pii_patterns:
+  - '\\b[\\w.+-]+@[\\w.-]+\\.[A-Za-z]{2,}\\b'
+  - '\\b(?:\\+?\\d[ -]?){10,15}\\b'
+  - '\\b\\d{3}-\\d{2}-\\d{4}\\b'

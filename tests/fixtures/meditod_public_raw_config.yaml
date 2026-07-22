@@ -1,0 +1,21 @@
+dataset_name: MediTOD
+dataset_version: meditod_fixture
+source_mode: public_raw
+official_repository: https://github.com/dair-iitd/MediTOD
+revision: fixture
+license: {repository_license_declared: false, umls_required_for_canonical: true}
+public_raw:
+  dialogs_url: unused
+  annotations_url: unused
+  train_conversations: 2
+  validation_conversations: 1
+  test_conversations: 1
+  ood_prefix: r3_
+canonical_full:
+  dialogs_filename: dialogs.json
+  train_ids_filename: train_ids.json
+  validation_ids_filename: valid_ids.json
+  test_ids_filename: test_ids.json
+normalization:
+  language: English
+split_seed: 42

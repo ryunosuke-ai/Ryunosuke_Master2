@@ -35,6 +35,27 @@ def build_general_quality_generation_instructions() -> str:
     )
 
 
+def build_medical_general_quality_generation_instructions() -> str:
+    """MediTOD Random-DPO用に、選別戦略を教えず医療情報だけ保つ指示を返す。"""
+    return (
+        "あなたはDPO学習用の日本語医療相談データ作成者です。"
+        "英語の医療相談文脈と次の応答を、自然な日本語のprompt/chosen/rejectedへ変換してください。\n\n"
+        "翻訳方針:\n"
+        "- 元の話題、応答意図、会話順序を保持してください。\n"
+        "- 否定、発症時期、期間、数値、単位、薬剤名、症状名を省略・反転しないでください。\n"
+        "- 原文にない診断、助言、緊急性、安全網を追加しないでください。\n"
+        "- 薬剤名や固有の医学用語は必要なら原語を括弧内に残してください。\n"
+        "- chosenは同じ文脈に対する自然で簡潔な医療者側の応答にしてください。\n\n"
+        "rejected候補の生成方針:\n"
+        "- rejectedは同じtranslated_promptに対する応答としてください。\n"
+        "- 危険な診断・投薬、攻撃的表現、虚偽情報を作らないでください。\n"
+        "- 一般的な応答品質がchosenより弱いが、日本語として読める安全な応答を作ってください。\n"
+        "- chosenの単なる言い換えや壊れた文章は禁止です。\n\n"
+        "出力はJSONのみで、translated_prompt, translated_chosen, rejected_candidates, "
+        "chosen_quality_scoreを含めてください。"
+    )
+
+
 def build_general_quality_generation_input(
     record: dict[str, Any],
     *,

@@ -13,12 +13,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from core.dpo_prompting import DPO_PROMPT_TEMPLATE_VERSION, build_dpo_prompt_from_context_text, build_mathdial_dpo_prompt_from_context_text
+from core.dpo_prompting import (
+    DPO_PROMPT_TEMPLATE_VERSION,
+    MEDITOD_DPO_PROMPT_TEMPLATE_VERSION,
+    build_dpo_prompt_from_context_text,
+    build_mathdial_dpo_prompt_from_context_text,
+    build_meditod_dpo_prompt_from_context_text,
+)
 from core.random_dpo_prompting import (
     GENERAL_QUALITY_STYLE_PRESET,
     RANDOM_DPO_PROMPT_TEMPLATE_VERSION,
     build_general_quality_generation_input,
     build_general_quality_generation_instructions,
+    build_medical_general_quality_generation_instructions,
     validate_general_quality_payload,
 )
 from tools.analyze_small_corpus import TextGenerator
@@ -71,7 +78,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--input", default="", help="準備済みDailyDialog JSONL。未指定ならHF datasetから読み込みます。")
     parser.add_argument("--source-dataset", default="DailyDialog", help="入力JSONLのデータセット名。")
-    parser.add_argument("--prompt-preset", choices=("default", "mathdial_tutoring"), default="default")
+    parser.add_argument("--prompt-preset", choices=("default", "mathdial_tutoring", "meditod_history_taking"), default="default")
     parser.add_argument("--dataset-name", default=DEFAULT_DATASET_NAME)
     parser.add_argument("--split", default=DEFAULT_SPLIT)
     parser.add_argument("--start-dialogue", type=int, default=0)
@@ -82,6 +89,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest-output", default="")
     parser.add_argument("--model", default=resolve_scoring_model())
     parser.add_argument("--target-records", type=int, default=target_records)
+    parser.add_argument(
+        "--allow-target-shortfall",
+        action="store_true",
+        help="候補を使い切った成果物を保存し、不足判定を呼び出し側へ委ねます。",
+    )
     parser.add_argument("--max-source-records", type=int, default=None)
     parser.add_argument("--candidates", type=int, default=DEFAULT_CANDIDATES)
     parser.add_argument("--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS)
@@ -255,7 +267,16 @@ def build_random_dpo_record(
     translated_prompt = generation_payload["translated_prompt"]
     translated_chosen = generation_payload["translated_chosen"]
     rejected_text = generation_payload["rejected_candidates"][0]
-    dpo_prompt = build_mathdial_dpo_prompt_from_context_text(translated_prompt) if prompt_preset == "mathdial_tutoring" else build_dpo_prompt_from_context_text(translated_prompt)
+    translated_prompt_hash = hashlib.sha256(translated_prompt.encode("utf-8")).hexdigest()
+    if prompt_preset == "mathdial_tutoring":
+        dpo_prompt = build_mathdial_dpo_prompt_from_context_text(translated_prompt)
+        dpo_template_version = DPO_PROMPT_TEMPLATE_VERSION
+    elif prompt_preset == "meditod_history_taking":
+        dpo_prompt = build_meditod_dpo_prompt_from_context_text(translated_prompt)
+        dpo_template_version = MEDITOD_DPO_PROMPT_TEMPLATE_VERSION
+    else:
+        dpo_prompt = build_dpo_prompt_from_context_text(translated_prompt)
+        dpo_template_version = DPO_PROMPT_TEMPLATE_VERSION
     metadata = dict(source_record.get("metadata", {}))
     metadata.update(
         {
@@ -265,11 +286,14 @@ def build_random_dpo_record(
             "random_index": index,
             "source_hash": stable_source_hash(source_record),
             "style_preset": GENERAL_QUALITY_STYLE_PRESET,
+            "prompt_preset": prompt_preset,
             "generation_model": model,
             "prompt_template": RANDOM_DPO_PROMPT_TEMPLATE_VERSION,
-            "dpo_prompt_template": DPO_PROMPT_TEMPLATE_VERSION,
+            "dpo_prompt_template": dpo_template_version,
             "rejected_candidates": candidates,
             "raw_translated_prompt": translated_prompt,
+            "translated_prompt_hash": translated_prompt_hash,
+            "rejected_prompt_hash": translated_prompt_hash,
             "esconv_gold_records": 0,
         }
     )
@@ -294,13 +318,15 @@ def build_random_dpo_record(
         },
         "translation_quality_score": generation_payload["chosen_quality_score"],
         "raw_translated_prompt": translated_prompt,
+        "translated_prompt_hash": translated_prompt_hash,
+        "rejected_prompt_hash": translated_prompt_hash,
         "generation_retry": None,
         "model_used_for_scoring": NOT_USED_RANDOM_BASELINE,
         "model_used_for_translation": model,
         "model_used_for_rejected_generation": model,
         "bayesian_model_version": NOT_USED_RANDOM_BASELINE,
         "prompt_template_version": RANDOM_DPO_PROMPT_TEMPLATE_VERSION,
-        "dpo_prompt_template_version": DPO_PROMPT_TEMPLATE_VERSION,
+        "dpo_prompt_template_version": dpo_template_version,
         "source_prompt_en": source_record.get("prompt"),
         "source_chosen_en": source_record.get("response"),
         "metadata": metadata,
@@ -327,7 +353,11 @@ def build_random_dpo_records(
     heartbeat_path: Path | str | None = None,
 ) -> tuple[list[dict[str, Any]], Counter[str]]:
     """ランダム順のDailyDialog候補からDPOレコードを作る。"""
-    instructions = build_general_quality_generation_instructions()
+    instructions = (
+        build_medical_general_quality_generation_instructions()
+        if prompt_preset == "meditod_history_taking"
+        else build_general_quality_generation_instructions()
+    )
     records: list[dict[str, Any]] = list(existing_records or [])
     skipped: Counter[str] = Counter()
     processed: set[tuple[str, int]] = {
@@ -361,6 +391,31 @@ def build_random_dpo_records(
                 candidates=candidates,
                 seed=seed,
             )
+            if prompt_preset == "meditod_history_taking":
+                from tools.translate_and_generate_dpo import (
+                    meditod_translation_fidelity_errors,
+                    validate_meditod_translation_fidelity,
+                )
+
+                try:
+                    validate_meditod_translation_fidelity(source_record, payload)
+                except ValueError:
+                    errors = meditod_translation_fidelity_errors(source_record, payload)
+                    payload = generate_general_quality_payload(
+                        source_record=source_record,
+                        index=index,
+                        generator=generator,
+                        instructions=(
+                            instructions
+                            + "\n\n医療情報保持の再試行です。次の欠落候補を省略・反転せず保持してください: "
+                            + json.dumps(errors, ensure_ascii=False)
+                        ),
+                        model=model,
+                        max_output_tokens=max_output_tokens,
+                        candidates=candidates,
+                        seed=seed + 1_000_019,
+                    )
+                    validate_meditod_translation_fidelity(source_record, payload)
             return (
                 build_random_dpo_record(
                     source_record,
@@ -549,7 +604,7 @@ def main() -> int:
         skipped_output_path=skipped_path,
         heartbeat_path=args.heartbeat_file,
     )
-    if len(records) < args.target_records:
+    if len(records) < args.target_records and not args.allow_target_shortfall:
         raise RuntimeError(
             f"target_records={args.target_records} に届きませんでした: records={len(records)}"
         )

@@ -35,6 +35,7 @@ artifacts/datasets/
 artifacts/training_runs/
 artifacts/user_eval/
 artifacts/mathdial_wildchat/
+artifacts/meditod_wildchat/
 artifacts/primock57_wildchat/
 *.safetensors
 *.bin

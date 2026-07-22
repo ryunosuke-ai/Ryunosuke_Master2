@@ -1,0 +1,57 @@
+{
+  "1": {"dlg_id":"r1_1","utterances":[
+    {"speaker":"doctor","uttr_id":0,"text":"What brings you in?","keywords":[]},
+    {"speaker":"patient","uttr_id":1,"text":"I have had a cough for two weeks.","keywords":["cough"]},
+    {"speaker":"doctor","uttr_id":2,"text":"When did it begin and is it worsening?","keywords":[]},
+    {"speaker":"patient","uttr_id":3,"text":"It began two weeks ago and is worse.","keywords":[]},
+    {"speaker":"doctor","uttr_id":4,"text":"Any fever or shortness of breath?","keywords":[]},
+    {"speaker":"patient","uttr_id":5,"text":"No fever or breathing trouble.","keywords":[]},
+    {"speaker":"doctor","uttr_id":6,"text":"Do you take any medication?","keywords":[]},
+    {"speaker":"patient","uttr_id":7,"text":"I take no regular medication.","keywords":[]},
+    {"speaker":"control","uttr_id":8,"text":"done","keywords":[]}
+  ]},
+  "2": {"dlg_id":"r1_2","utterances":[
+    {"speaker":"doctor","uttr_id":0,"text":"How can I help today?","keywords":[]},
+    {"speaker":"patient","uttr_id":1,"text":"My stomach has hurt since Monday.","keywords":["pain"]},
+    {"speaker":"doctor","uttr_id":2,"text":"Where is the pain and how severe is it?","keywords":[]},
+    {"speaker":"patient","uttr_id":3,"text":"It is upper abdominal pain, about five out of ten.","keywords":[]},
+    {"speaker":"doctor","uttr_id":4,"text":"Does eating change it?","keywords":[]},
+    {"speaker":"patient","uttr_id":5,"text":"Food makes it worse.","keywords":[]},
+    {"speaker":"doctor","uttr_id":6,"text":"Any previous stomach illness?","keywords":[]},
+    {"speaker":"patient","uttr_id":7,"text":"No previous illness.","keywords":[]},
+    {"speaker":"control","uttr_id":8,"text":"done","keywords":[]}
+  ]},
+  "3": {"dlg_id":"r1_3","utterances":[
+    {"speaker":"doctor","uttr_id":0,"text":"What is your main concern?","keywords":[]},
+    {"speaker":"patient","uttr_id":1,"text":"I developed a rash after gardening.","keywords":["rash"]},
+    {"speaker":"doctor","uttr_id":2,"text":"When did it appear?","keywords":[]},
+    {"speaker":"patient","uttr_id":3,"text":"Three days ago.","keywords":[]},
+    {"speaker":"doctor","uttr_id":4,"text":"Has it spread or blistered?","keywords":[]},
+    {"speaker":"patient","uttr_id":5,"text":"It spread but did not blister.","keywords":[]},
+    {"speaker":"doctor","uttr_id":6,"text":"Did you start any new medicine?","keywords":[]},
+    {"speaker":"patient","uttr_id":7,"text":"No new medicine.","keywords":[]},
+    {"speaker":"control","uttr_id":8,"text":"done","keywords":[]}
+  ]},
+  "4": {"dlg_id":"r1_4","utterances":[
+    {"speaker":"doctor","uttr_id":0,"text":"Tell me what happened.","keywords":[]},
+    {"speaker":"patient","uttr_id":1,"text":"I have headaches every evening.","keywords":["headache"]},
+    {"speaker":"doctor","uttr_id":2,"text":"How long do they last?","keywords":[]},
+    {"speaker":"patient","uttr_id":3,"text":"About two hours.","keywords":[]},
+    {"speaker":"doctor","uttr_id":4,"text":"Any vision change or weakness?","keywords":[]},
+    {"speaker":"patient","uttr_id":5,"text":"No vision change or weakness.","keywords":[]},
+    {"speaker":"doctor","uttr_id":6,"text":"What medication have you tried?","keywords":[]},
+    {"speaker":"patient","uttr_id":7,"text":"I tried ibuprofen once.","keywords":[]},
+    {"speaker":"control","uttr_id":8,"text":"done","keywords":[]}
+  ]},
+  "5": {"dlg_id":"r3_5","utterances":[
+    {"speaker":"doctor","uttr_id":0,"text":"What brings you in?","keywords":[]},
+    {"speaker":"patient","uttr_id":1,"text":"My knee hurts after running.","keywords":["knee pain"]},
+    {"speaker":"doctor","uttr_id":2,"text":"When did the pain start?","keywords":[]},
+    {"speaker":"patient","uttr_id":3,"text":"It began yesterday.","keywords":[]},
+    {"speaker":"doctor","uttr_id":4,"text":"Can you bear weight?","keywords":[]},
+    {"speaker":"patient","uttr_id":5,"text":"Yes, but it is painful.","keywords":[]},
+    {"speaker":"doctor","uttr_id":6,"text":"Is there swelling or redness?","keywords":[]},
+    {"speaker":"patient","uttr_id":7,"text":"There is mild swelling and no redness.","keywords":[]},
+    {"speaker":"control","uttr_id":8,"text":"done","keywords":[]}
+  ]}
+}
