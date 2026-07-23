@@ -265,8 +265,17 @@ def test_streamlit_start_and_evaluation_screens_render(tmp_path: Path, monkeypat
     assert app.title[0].value == "相談支援応答の評価"
     assert len(app.radio) == 22
     assert any(
-        area.label == "そう選んだ理由を教えてください。"
+        area.label == "選んだ理由"
         for area in app.text_area
+    )
+    assert any(
+        "そう選んだ理由を教えてください。" in block.value
+        and "必須回答です。" in block.value
+        for block in app.markdown
+    )
+    assert any(
+        "rating-scroll-bottom-spacer" in block.value
+        for block in app.markdown
     )
     assert [radio.label for radio in app.radio[:3]] == ["応答A", "応答B", "応答C"]
     assert any("reference-panel" in block.value for block in app.markdown)

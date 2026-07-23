@@ -209,17 +209,31 @@ def render_evaluation(database: Path, definition: dict[str, Any], participant: P
                 ),
                 key=f"choice_{participant.participant_id}_{item_id}",
             )
+            st.markdown(
+                (
+                    '<div class="choice-reason-heading">'
+                    f"{html.escape(FINAL_CHOICE_REASON_QUESTION)}</div>"
+                    '<div class="choice-reason-required">必須回答です。</div>'
+                ),
+                unsafe_allow_html=True,
+            )
             final_choice_reason = st.text_area(
-                FINAL_CHOICE_REASON_QUESTION,
+                "選んだ理由",
                 value=(
                     str(saved.get("final_choice_reason") or "")
                     if saved
                     else ""
                 ),
                 placeholder="選んだ応答のどこが良かったか、他の応答と何が違ったかを書いてください。",
+                label_visibility="collapsed",
+                height=100,
                 key=f"choice_reason_{participant.participant_id}_{item_id}",
             )
             comment = st.text_area("この評価についてのコメント（任意）", value=str(saved.get("comment") or "") if saved else "")
+            st.markdown(
+                '<div class="rating-scroll-bottom-spacer" aria-hidden="true"></div>',
+                unsafe_allow_html=True,
+            )
         navigation = st.container(key="evaluation_navigation", border=False)
         with navigation:
             previous_column, next_column = st.columns([1, 2])

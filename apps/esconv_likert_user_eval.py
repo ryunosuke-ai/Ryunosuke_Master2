@@ -237,6 +237,19 @@ def apply_page_style() -> None:
             margin-top: 18px;
             margin-bottom: 2px;
         }
+        .choice-reason-heading {
+            color: #263746;
+            font-weight: 750;
+            margin: 14px 0 2px;
+        }
+        .choice-reason-required {
+            color: #9b3f36;
+            font-size: 0.78rem;
+            margin-bottom: 6px;
+        }
+        .rating-scroll-bottom-spacer {
+            height: 110px;
+        }
         div[data-testid="stForm"] {
             border: 0;
             padding: 0;
@@ -647,20 +660,34 @@ def render_evaluation(
                 ),
                 key=f"final_choice_{participant.participant_id}_{item_id}",
             )
+            st.markdown(
+                (
+                    '<div class="choice-reason-heading">'
+                    f"{html.escape(FINAL_CHOICE_REASON_QUESTION)}</div>"
+                    '<div class="choice-reason-required">必須回答です。</div>'
+                ),
+                unsafe_allow_html=True,
+            )
             final_choice_reason = st.text_area(
-                FINAL_CHOICE_REASON_QUESTION,
+                "選んだ理由",
                 value=(
                     str(saved.get("final_choice_reason") or "")
                     if saved
                     else ""
                 ),
                 placeholder="選んだ応答のどこが良かったか、他の応答と何が違ったかを書いてください。",
+                label_visibility="collapsed",
+                height=100,
                 key=f"final_choice_reason_{participant.participant_id}_{item_id}",
             )
             comment = st.text_area(
                 "この評価についてのコメント（任意）",
                 value=str(saved.get("comment") or "") if saved else "",
                 key=f"comment_{participant.participant_id}_{item_id}",
+            )
+            st.markdown(
+                '<div class="rating-scroll-bottom-spacer" aria-hidden="true"></div>',
+                unsafe_allow_html=True,
             )
         navigation = st.container(
             key="evaluation_navigation",

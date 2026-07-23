@@ -162,8 +162,17 @@ def test_streamlit_generic_layout_and_dataset_specific_text(tmp_path: Path, monk
     assert app.title[0].value == "医療面接応答の評価"
     assert len(app.radio) == len(axis_keys(definition)) * 3 + 1
     assert any(
-        area.label == "そう選んだ理由を教えてください。"
+        area.label == "選んだ理由"
         for area in app.text_area
+    )
+    assert any(
+        "そう選んだ理由を教えてください。" in block.value
+        and "必須回答です。" in block.value
+        for block in app.markdown
+    )
+    assert any(
+        "rating-scroll-bottom-spacer" in block.value
+        for block in app.markdown
     )
     assert any("reference-panel" in block.value for block in app.markdown)
     assert any("評価の目安" in block.value for block in app.markdown)
