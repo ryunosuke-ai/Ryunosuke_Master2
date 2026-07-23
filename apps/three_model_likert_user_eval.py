@@ -207,6 +207,7 @@ def render_evaluation(database: Path, definition: dict[str, Any], participant: P
                     if previous_choice in FINAL_CHOICES
                     else None
                 ),
+                horizontal=True,
                 key=f"choice_{participant.participant_id}_{item_id}",
             )
             final_choice_reason = st.text_area(
@@ -221,10 +222,6 @@ def render_evaluation(database: Path, definition: dict[str, Any], participant: P
                 key=f"choice_reason_{participant.participant_id}_{item_id}",
             )
             comment = st.text_area("この評価についてのコメント（任意）", value=str(saved.get("comment") or "") if saved else "")
-            st.markdown(
-                '<div class="rating-scroll-bottom-spacer" aria-hidden="true"></div>',
-                unsafe_allow_html=True,
-            )
         navigation = st.container(key="evaluation_navigation", border=False)
         with navigation:
             previous_column, next_column = st.columns([1, 2])

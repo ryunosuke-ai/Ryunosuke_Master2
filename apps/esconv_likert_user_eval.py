@@ -128,6 +128,20 @@ def apply_page_style() -> None:
             overscroll-behavior: contain;
             scrollbar-gutter: stable;
         }
+        [class*="st-key-rating_scroll_container_"]
+        div[data-testid="stElementContainer"]:has(div[data-testid="stTextArea"]) {
+            min-height: 142px !important;
+            overflow: visible !important;
+        }
+        [class*="st-key-rating_scroll_container_"]
+        div[data-testid="stTextArea"] {
+            min-height: 132px !important;
+        }
+        [class*="st-key-rating_scroll_container_"]
+        div[data-testid="stTextAreaRootElement"] {
+            min-height: 72px !important;
+            overflow: visible !important;
+        }
         .st-key-evaluation_validation {
             position: fixed;
             top: 72px;
@@ -236,9 +250,6 @@ def apply_page_style() -> None:
         .axis-heading {
             margin-top: 18px;
             margin-bottom: 2px;
-        }
-        .rating-scroll-bottom-spacer {
-            height: 110px;
         }
         div[data-testid="stForm"] {
             border: 0;
@@ -648,6 +659,7 @@ def render_evaluation(
                     if saved_choice in FINAL_CHOICES
                     else None
                 ),
+                horizontal=True,
                 key=f"final_choice_{participant.participant_id}_{item_id}",
             )
             final_choice_reason = st.text_area(
@@ -665,10 +677,6 @@ def render_evaluation(
                 "この評価についてのコメント（任意）",
                 value=str(saved.get("comment") or "") if saved else "",
                 key=f"comment_{participant.participant_id}_{item_id}",
-            )
-            st.markdown(
-                '<div class="rating-scroll-bottom-spacer" aria-hidden="true"></div>',
-                unsafe_allow_html=True,
             )
         navigation = st.container(
             key="evaluation_navigation",

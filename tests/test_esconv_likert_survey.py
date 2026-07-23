@@ -270,9 +270,12 @@ def test_streamlit_start_and_evaluation_screens_render(tmp_path: Path, monkeypat
     )
     assert not any("必須回答です。" in block.value for block in app.markdown)
     assert any(
-        "rating-scroll-bottom-spacer" in block.value
+        'data-testid="stElementContainer"]:has(div[data-testid="stTextArea"])'
+        in block.value
+        and "min-height: 142px" in block.value
         for block in app.markdown
     )
+    assert app.radio[-1].proto.horizontal is True
     assert [radio.label for radio in app.radio[:3]] == ["応答A", "応答B", "応答C"]
     assert any("reference-panel" in block.value for block in app.markdown)
     assert any(

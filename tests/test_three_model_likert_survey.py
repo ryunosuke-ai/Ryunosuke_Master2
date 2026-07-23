@@ -167,9 +167,12 @@ def test_streamlit_generic_layout_and_dataset_specific_text(tmp_path: Path, monk
     )
     assert not any("必須回答です。" in block.value for block in app.markdown)
     assert any(
-        "rating-scroll-bottom-spacer" in block.value
+        'data-testid="stElementContainer"]:has(div[data-testid="stTextArea"])'
+        in block.value
+        and "min-height: 142px" in block.value
         for block in app.markdown
     )
+    assert app.radio[-1].proto.horizontal is True
     assert any("reference-panel" in block.value for block in app.markdown)
     assert any("評価の目安" in block.value for block in app.markdown)
     assert any("position: fixed" in block.value and "evaluation_navigation" in block.value for block in app.markdown)
