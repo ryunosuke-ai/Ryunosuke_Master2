@@ -59,7 +59,7 @@ DEFAULT_SEED = 42
 DEFAULT_STYLE_PRESET = "reminiscence"
 PROMPT_TEMPLATE_VERSION = "translate_and_generate_dpo.v2"
 MATHDIAL_NUMERIC_FIDELITY_VERSION = "mathdial_numeric_fidelity.v2"
-MEDITOD_MEDICAL_FIDELITY_VERSION = "meditod_medical_fidelity.v1"
+MEDITOD_MEDICAL_FIDELITY_VERSION = "meditod_medical_fidelity.v2"
 NUMERIC_TOKEN_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_])[+-]?\d[\d,]*(?:\.\d+)?(?:/\d[\d,]*(?:\.\d+)?)?%?"
 )
@@ -522,6 +522,28 @@ def missing_mathdial_numeric_tokens(source_text: str, translated_text: str) -> l
     return missing
 
 
+MEDICAL_CITATION_PATTERN = re.compile(
+    r"\[\s*\d+(?:\s*[-–—]\s*\d+)?"
+    r"(?:\s*[,;]\s*\d+(?:\s*[-–—]\s*\d+)?)*\s*\]"
+)
+
+
+def remove_medical_citation_numbers(text: str) -> str:
+    """論文の参照番号を除き、患者情報として意味を持つ数値だけを検査する。"""
+    return MEDICAL_CITATION_PATTERN.sub("", text)
+
+
+def missing_meditod_numeric_tokens(
+    source_text: str,
+    translated_text: str,
+) -> list[str]:
+    """引用番号を除外してMediTOD翻訳の数値保持を検査する。"""
+    return missing_mathdial_numeric_tokens(
+        remove_medical_citation_numbers(source_text),
+        remove_medical_citation_numbers(translated_text),
+    )
+
+
 def mathdial_translation_fidelity_errors(
     source_record: dict[str, Any],
     payload: dict[str, Any],
@@ -567,7 +589,10 @@ def meditod_translation_fidelity_errors(
         re.I,
     )
     for field in source_fields:
-        missing_numbers = missing_mathdial_numeric_tokens(source_fields[field], translated_fields[field])
+        missing_numbers = missing_meditod_numeric_tokens(
+            source_fields[field],
+            translated_fields[field],
+        )
         if missing_numbers:
             errors[f"{field}_numbers"] = missing_numbers
         if english_negation.search(source_fields[field]) and not japanese_negation.search(translated_fields[field]):
@@ -612,29 +637,55 @@ def retry_meditod_translation_for_fidelity(
     candidates: int,
     seed: int,
 ) -> dict[str, Any]:
-    errors = meditod_translation_fidelity_errors(source_record, payload)
-    retry_instructions = (
-        instructions
-        + "\n\n医療情報保持の再試行です。以下の欠落候補を省略・反転せず、"
-        "対応するprompt/chosen内へ忠実に保持してください。新しい診断や助言は追加しないでください。"
-        f"\n欠落判定: {json.dumps(errors, ensure_ascii=False)}"
-    )
-    retry_payload, skip_reason = generate_translation_payload(
-        source_record=source_record,
-        index=index,
-        generator=generator,
-        instructions=retry_instructions,
-        model=model,
-        max_output_tokens=max_output_tokens,
-        candidates=candidates,
-        seed=seed + 1_000_019,
-    )
-    if retry_payload is None:
-        raise ValueError(f"MediTOD医療情報保持の再翻訳に失敗しました: {skip_reason}")
-    validate_meditod_translation_fidelity(source_record, retry_payload)
-    retry_payload["generation_retry"] = "meditod_medical_fidelity_retry"
-    retry_payload["medical_fidelity_version"] = MEDITOD_MEDICAL_FIDELITY_VERSION
-    return retry_payload
+    repaired = dict(payload)
+    for attempt in range(1, 3):
+        errors = meditod_translation_fidelity_errors(source_record, repaired)
+        repairable = {
+            key: value
+            for key, value in errors.items()
+            if key != "explicit_unsafe_medical_advice"
+        }
+        if not repairable:
+            validate_meditod_translation_fidelity(source_record, repaired)
+            break
+        retry_instructions = (
+            "あなたは医療相談データの翻訳校正者です。JSONのみを返してください。"
+            "translated_promptとtranslated_chosenを、対応する英語原文へ忠実になるよう修正します。"
+            "否定、発症時期、期間、数値、単位、薬剤名、症状名を省略・反転せず、"
+            "原文にない診断や助言は追加しないでください。論文の引用番号は再挿入不要です。"
+            "出力にはtranslated_promptとtranslated_chosenだけを含めてください。"
+        )
+        repair_input = (
+            f"attempt: {attempt}\n"
+            f"欠落判定: {json.dumps(repairable, ensure_ascii=False)}\n\n"
+            f"english_prompt:\n{source_record.get('prompt', '')}\n\n"
+            f"current_translated_prompt:\n{repaired.get('translated_prompt', '')}\n\n"
+            f"english_chosen_response:\n{source_record.get('response', '')}\n\n"
+            f"current_translated_chosen:\n{repaired.get('translated_chosen', '')}"
+        )
+        output_text = generator.generate(
+            instructions=retry_instructions,
+            input_text=repair_input,
+            model=model,
+            max_output_tokens=max_output_tokens,
+            response_text_format={"type": "json_object"},
+        )
+        patch = extract_json_object(output_text)
+        translated_prompt = str(patch.get("translated_prompt", "")).strip()
+        translated_chosen = str(patch.get("translated_chosen", "")).strip()
+        if not translated_prompt or not translated_chosen:
+            raise ValueError("MediTOD医療情報保持の修復JSONに翻訳本文がありません。")
+        repaired["translated_prompt"] = translated_prompt
+        repaired["translated_chosen"] = translated_chosen
+        try:
+            validate_meditod_translation_fidelity(source_record, repaired)
+            break
+        except ValueError:
+            if attempt == 2:
+                raise
+    repaired["generation_retry"] = "meditod_medical_fidelity_targeted_retry"
+    repaired["medical_fidelity_version"] = MEDITOD_MEDICAL_FIDELITY_VERSION
+    return repaired
 
 
 def retry_mathdial_translation_for_numeric_fidelity(
@@ -1388,6 +1439,11 @@ def build_dpo_records(
                 "numeric_fidelity_version": (
                     MATHDIAL_NUMERIC_FIDELITY_VERSION
                     if style_preset == "mathdial_tutoring"
+                    else None
+                ),
+                "medical_fidelity_version": (
+                    MEDITOD_MEDICAL_FIDELITY_VERSION
+                    if style_preset == "meditod_history_taking"
                     else None
                 ),
                 "skipped_at": datetime.now().astimezone().isoformat(timespec="seconds"),

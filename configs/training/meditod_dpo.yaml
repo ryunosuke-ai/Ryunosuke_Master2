@@ -1,7 +1,7 @@
 base_model: Qwen/Qwen3.5-27B
-selected_wildchat_records: 2000
+selected_wildchat_records: 3000
 gold_records: 500
-random_records: 2500
+random_records: 3500
 gold_in_random: 0
 rejected_candidates_basis: 4
 rejected_candidates_random: 1
@@ -16,3 +16,12 @@ lora_dropout: 0.05
 use_4bit: false
 seed: 42
 max_history_turns: 10
+adaptive_candidate_policy:
+  primary_minimum_user_turns: 4
+  expansion_minimum_user_turns: 3
+  fixed_clean_pool_cap: null
+  scoring_batch_records: 3000
+  ranked_rescue_after_source_exhaustion:
+    min_chosen_posterior: 0.60
+    max_rejected_posterior: 0.65
+    min_score_gap: 0.10

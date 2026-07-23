@@ -27,12 +27,12 @@ from tools.run_oracle_evaluation_lora_pair import (
     load_lora_pair_bundle,
 )
 from tools.score_dialogue_with_bayes_model import resolve_scoring_model
-from tools.translate_and_generate_dpo import missing_mathdial_numeric_tokens
+from tools.translate_and_generate_dpo import missing_meditod_numeric_tokens
 from tools.wildchat_health import MEDICATION_PATTERN
 
 
 TRANSLATION_VERSION = "meditod_eval_translation_v1"
-TRANSLATION_FIDELITY_VERSION = "meditod_eval_medical_fidelity_v1"
+TRANSLATION_FIDELITY_VERSION = "meditod_eval_medical_fidelity_v2"
 STRATA = (
     "symptom_attributes",
     "associated_symptoms",
@@ -238,7 +238,7 @@ def evaluation_translation_fidelity_errors(
         ]
     )
     errors: dict[str, list[str]] = {}
-    missing_numbers = missing_mathdial_numeric_tokens(source_text, translated_text)
+    missing_numbers = missing_meditod_numeric_tokens(source_text, translated_text)
     if missing_numbers:
         errors["numbers"] = missing_numbers
     if ENGLISH_NEGATION.search(source_text) and not JAPANESE_NEGATION.search(translated_text):

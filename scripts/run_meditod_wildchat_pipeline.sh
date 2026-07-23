@@ -40,8 +40,14 @@ SCORING_BATCH_RECORDS="${SCORING_BATCH_RECORDS:-3000}"
 SCORING_REQUESTS_PER_MINUTE="${SCORING_REQUESTS_PER_MINUTE:-120}"
 SCORING_RATE_LIMIT_MAX_RETRIES="${SCORING_RATE_LIMIT_MAX_RETRIES:-6}"
 SCORING_RATE_LIMIT_BACKOFF_SECONDS="${SCORING_RATE_LIMIT_BACKOFF_SECONDS:-15}"
-SELECTION_POOL_COUNT="${SELECTION_POOL_COUNT:-5000}"
 DPO_INITIAL_SELECTION_POOL_COUNT="${DPO_INITIAL_SELECTION_POOL_COUNT:-3000}"
+BASIS_SELECTED_COUNT="${MEDITOD_BASIS_SELECTED_COUNT:-3000}"
+GOLD_DPO_COUNT="${MEDITOD_GOLD_COUNT:-500}"
+RANDOM_DPO_COUNT="${MEDITOD_RANDOM_COUNT:-$((BASIS_SELECTED_COUNT + GOLD_DPO_COUNT))}"
+DPO_RESCUE_MIN_CHOSEN="${MEDITOD_DPO_RESCUE_MIN_CHOSEN:-0.60}"
+DPO_RESCUE_MAX_REJECTED="${MEDITOD_DPO_RESCUE_MAX_REJECTED:-0.65}"
+DPO_RESCUE_MIN_GAP="${MEDITOD_DPO_RESCUE_MIN_GAP:-0.10}"
+MEDITOD_RESUME_MIGRATION="${MEDITOD_RESUME_MIGRATION:-}"
 DPO_MAX_SOURCE_CHARACTERS="${DPO_MAX_SOURCE_CHARACTERS:-16000}"
 DPO_MAX_OUTPUT_TOKENS="${DPO_MAX_OUTPUT_TOKENS:-6144}"
 WILDCHAT_FULL_SCAN="${WILDCHAT_FULL_SCAN:-1}"
@@ -82,7 +88,7 @@ mkdir -p "$LOG_DIR" "$STATE_DIR"
 LOG_FILE="$LOG_DIR/pipeline_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-FINGERPRINT="$(python3 - "$RUN_TAG" "$SEED" "$DRY_RUN" "$MEDITOD_SOURCE_MODE" "$MEDITOD_DATA_TERMS_CONFIRMED" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$ANALYSIS_CONVERSATIONS" "$ANALYSIS_MAX_INPUT_CHARS" "$ANALYSIS_MAX_OUTPUT_TOKENS" "$SCORING_PILOT_RECORDS" "$SELECTION_POOL_COUNT" "$SCORING_BATCH_RECORDS" "$DPO_INITIAL_SELECTION_POOL_COUNT" "$DPO_MAX_SOURCE_CHARACTERS" "$DPO_MAX_OUTPUT_TOKENS" "$WILDCHAT_FULL_SCAN" "$WILDCHAT_CANDIDATE_TARGET_RECORDS" "$EVAL_COUNT" "$OOD_EVAL_COUNT" <<'PY'
+FINGERPRINT="$(python3 - "$RUN_TAG" "$SEED" "$DRY_RUN" "$MEDITOD_SOURCE_MODE" "$MEDITOD_DATA_TERMS_CONFIRMED" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$ANALYSIS_CONVERSATIONS" "$ANALYSIS_MAX_INPUT_CHARS" "$ANALYSIS_MAX_OUTPUT_TOKENS" "$SCORING_PILOT_RECORDS" "$SCORING_BATCH_RECORDS" "$DPO_INITIAL_SELECTION_POOL_COUNT" "$BASIS_SELECTED_COUNT" "$GOLD_DPO_COUNT" "$RANDOM_DPO_COUNT" "$DPO_RESCUE_MIN_CHOSEN" "$DPO_RESCUE_MAX_REJECTED" "$DPO_RESCUE_MIN_GAP" "$DPO_MAX_SOURCE_CHARACTERS" "$DPO_MAX_OUTPUT_TOKENS" "$WILDCHAT_FULL_SCAN" "$WILDCHAT_CANDIDATE_TARGET_RECORDS" "$EVAL_COUNT" "$OOD_EVAL_COUNT" <<'PY'
 import hashlib,json,pathlib,sys
 paths=[
  "configs/datasets/meditod.yaml","configs/datasets/wildchat_health.yaml",
@@ -91,6 +97,7 @@ paths=[
  "tools/meditod_dataset.py","tools/prepare_meditod.py","tools/prepare_meditod_for_analysis.py",
  "tools/analyze_meditod_corpus_transition_bayes.py","tools/wildchat_health.py",
  "tools/prioritize_health_candidates.py","tools/meditod_selection.py","tools/measure_basis_selection_pool.py",
+ "tools/prepare_meditod_personal_pool.py","tools/promote_meditod_dpo_rescue.py",
  "core/transition_bayes_model.py","tools/score_dialogue_with_transition_bayes_model.py",
  "tools/translate_and_generate_dpo.py","tools/build_random_dailydialog_dpo.py",
  "tools/prepare_meditod_gold.py","tools/mix_meditod_dpo.py","tools/meditod_evaluation.py",
@@ -104,12 +111,26 @@ print(hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",", ":")).en
 PY
 )"
 
-python3 - "$OUTPUT_ROOT/run_metadata.json" "$FINGERPRINT" "$RUN_TAG" "$SEED" "$DRY_RUN" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$MEDITOD_SOURCE_MODE" <<'PY'
+python3 - "$OUTPUT_ROOT/run_metadata.json" "$FINGERPRINT" "$RUN_TAG" "$SEED" "$DRY_RUN" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$MEDITOD_SOURCE_MODE" "$MEDITOD_RESUME_MIGRATION" <<'PY'
 import datetime,json,pathlib,sys
 path=pathlib.Path(sys.argv[1])
-payload={"experiment_fingerprint":sys.argv[2],"run_tag":sys.argv[3],"seed":int(sys.argv[4]),"dry_run":sys.argv[5]=="1","models":{"analysis":sys.argv[6],"scoring":sys.argv[7],"generation":sys.argv[8],"judge":sys.argv[9],"local":sys.argv[10]},"dataset_mode":sys.argv[11],"created_at":datetime.datetime.now(datetime.timezone.utc).isoformat()}
-if path.exists() and json.loads(path.read_text()).get("experiment_fingerprint") != sys.argv[2]:
- raise SystemExit("同じRUN_TAGの実験条件が変わっています。新しいRUN_TAGを使用してください。")
+now=datetime.datetime.now(datetime.timezone.utc).isoformat()
+payload={"experiment_fingerprint":sys.argv[2],"run_tag":sys.argv[3],"seed":int(sys.argv[4]),"dry_run":sys.argv[5]=="1","models":{"analysis":sys.argv[6],"scoring":sys.argv[7],"generation":sys.argv[8],"judge":sys.argv[9],"local":sys.argv[10]},"dataset_mode":sys.argv[11],"created_at":now}
+if path.exists():
+ current=json.loads(path.read_text())
+ if current.get("experiment_fingerprint") != sys.argv[2]:
+  migration=sys.argv[12]
+  if migration!="target3000_personal_health_fidelity_v2":
+   raise SystemExit("同じRUN_TAGの実験条件が変わっています。互換移行にはMEDITOD_RESUME_MIGRATION=target3000_personal_health_fidelity_v2を指定してください。")
+  if current.get("run_tag")!=sys.argv[3] or current.get("seed")!=int(sys.argv[4]) or current.get("dataset_mode")!=sys.argv[11] or current.get("models")!=payload["models"]:
+   raise SystemExit("再開移行で変更できないdataset/seed/model条件が一致しません。")
+  history=list(current.get("migrations",[]))
+  history.append({"name":migration,"migrated_at":now,"from_fingerprint":current.get("experiment_fingerprint"),"to_fingerprint":sys.argv[2]})
+  payload["created_at"]=current.get("created_at",now)
+  payload["migrations"]=history
+  payload["previous_experiment_fingerprint"]=current.get("experiment_fingerprint")
+  path.write_text(json.dumps(payload,ensure_ascii=False,indent=2)+"\n")
+  print(f"[migration] {migration}: run成果物を監査して互換再開します。")
 path.parent.mkdir(parents=True,exist_ok=True)
 if not path.exists(): path.write_text(json.dumps(payload,ensure_ascii=False,indent=2)+"\n")
 PY
@@ -234,6 +255,9 @@ ANALYSIS_CORPUS="$OUTPUT_ROOT/basis_model/meditod_analysis_corpus.jsonl"
 ANALYSIS_AGGREGATES="$OUTPUT_ROOT/basis_model/meditod_train_aggregates.json"
 COMPAT_MODEL="$OUTPUT_ROOT/basis_model/meditod_transition_compat.json"
 WILD_DIR="$OUTPUT_ROOT/wildchat"
+EXPANDED_WILD_DIR="$WILD_DIR/personal_three_turn_expansion"
+PERSONAL_CANDIDATES="$WILD_DIR/personal_health_consultation_candidates_v2.jsonl"
+PRIORITIZED_CANDIDATES="$OUTPUT_ROOT/scoring/prioritized_personal_candidates_v2.jsonl"
 SCORED_RAW="$OUTPUT_ROOT/scoring/wildchat_scored_raw.jsonl"
 SCORED="$OUTPUT_ROOT/scoring/wildchat_scored.jsonl"
 SELECT_DIR="$OUTPUT_ROOT/selections"
@@ -288,50 +312,155 @@ reconcile_scoring() {
   fi
 }
 
+prepare_personal_pool() {
+  local audit="${1:-0}"
+  local args=(
+    --config configs/datasets/wildchat_health.yaml
+    --conversations "$WILD_DIR/general_health_consultation_conversations.jsonl"
+    --candidates "$WILD_DIR/general_health_consultation_candidates.jsonl"
+    --output "$PERSONAL_CANDIDATES"
+    --report "$WILD_DIR/personal_health_pool_report.json"
+  )
+  if [[ -f "$EXPANDED_WILD_DIR/manifest.json" ]]; then
+    args+=(
+      --conversations "$EXPANDED_WILD_DIR/general_health_consultation_conversations.jsonl"
+      --candidates "$EXPANDED_WILD_DIR/general_health_consultation_candidates.jsonl"
+    )
+  fi
+  if [[ "$audit" == "1" ]]; then
+    args+=(
+      --accepted "$DPO_DIR/basis_selected_ja.jsonl"
+      --skipped "$DPO_DIR/basis_selected_ja_skipped.jsonl"
+      --quarantine-dir "$DPO_DIR/quarantine"
+    )
+  fi
+  python3 -m tools.prepare_meditod_personal_pool "${args[@]}"
+  python3 -m tools.prioritize_health_candidates \
+    --input "$PERSONAL_CANDIDATES" \
+    --output "$PRIORITIZED_CANDIDATES" \
+    --report "$OUTPUT_ROOT/scoring/personal_candidate_priority_report.json" \
+    --seed "$SEED"
+}
+
+expand_personal_pool() {
+  if [[ ! -f "$EXPANDED_WILD_DIR/manifest.json" ]]; then
+    local args=(
+      --config configs/datasets/wildchat_health.yaml
+      --output-dir "$EXPANDED_WILD_DIR"
+      --seed "$SEED"
+      --checkpoint-every "$WILDCHAT_CHECKPOINT_EVERY"
+      --heartbeat-file "$HEARTBEAT_FILE"
+      --minimum-user-turns 3
+      --require-personal-consultation
+    )
+    if [[ "$DRY_RUN" == "1" ]]; then
+      args+=(--fixture tests/fixtures/wildchat_health.jsonl)
+    else
+      [[ -n "$LIMIT" ]] && args+=(--limit "$LIMIT")
+    fi
+    python3 -m tools.wildchat_health "${args[@]}"
+  fi
+  prepare_personal_pool 0
+}
+
+measure_personal_selection_pool() {
+  local required="$1"
+  python3 -m tools.measure_basis_selection_pool \
+    --input "$SCORED" \
+    --allowed-records "$PERSONAL_CANDIDATES" \
+    --bayes-model "$COMPAT_MODEL" \
+    --output "$OUTPUT_ROOT/scoring/selection_pool_progress.json" \
+    --history "$OUTPUT_ROOT/scoring/selection_pool_history.jsonl" \
+    --method state_specific_margin \
+    --margin 0.05 \
+    --required "$required" \
+    --exclude-fallback-conversations \
+    --exclude-explicit-unsafe-medical-advice \
+    --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS"
+}
+
+score_next_personal_batch() {
+  local before after
+  before="$(wc -l < "$SCORED_RAW")"
+  retry_command python3 -m tools.score_dialogue_with_transition_bayes_model \
+    --input "$PRIORITIZED_CANDIDATES" \
+    --bayes-model "$COMPAT_MODEL" \
+    --output "$SCORED_RAW" \
+    --model "$SCORING_MODEL" \
+    --workers "$WORKERS" \
+    --max-new-records "$SCORING_BATCH_RECORDS" \
+    --scoring-preset "$SCORING_PRESET" \
+    --invalid-observation-retries 2 \
+    --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" \
+    --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" \
+    --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" \
+    --fallback-on-errors
+  after="$(wc -l < "$SCORED_RAW")"
+  if (( after == before )); then
+    if [[ ! -f "$EXPANDED_WILD_DIR/manifest.json" ]]; then
+      echo "[adaptive scoring] 4-turn個人健康相談を処理済みのため3-turn集合へ拡張します。"
+      expand_personal_pool
+      retry_command python3 -m tools.score_dialogue_with_transition_bayes_model \
+        --input "$PRIORITIZED_CANDIDATES" \
+        --bayes-model "$COMPAT_MODEL" \
+        --output "$SCORED_RAW" \
+        --model "$SCORING_MODEL" \
+        --workers "$WORKERS" \
+        --max-new-records "$SCORING_BATCH_RECORDS" \
+        --scoring-preset "$SCORING_PRESET" \
+        --invalid-observation-retries 2 \
+        --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" \
+        --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" \
+        --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" \
+        --fallback-on-errors
+      after="$(wc -l < "$SCORED_RAW")"
+    fi
+  fi
+  (( after > before )) || return 21
+  reconcile_scoring
+}
+
 score_wildchat_stage() {
   mkdir -p "$OUTPUT_ROOT/scoring"
-  local prioritized="$OUTPUT_ROOT/scoring/prioritized_candidates.jsonl" pilot="$SCORING_PILOT_RECORDS"
-  python3 -m tools.prioritize_health_candidates --input "$WILD_DIR/general_health_consultation_candidates.jsonl" --output "$prioritized" --report "$OUTPUT_ROOT/scoring/candidate_priority_report.json" --seed "$SEED"
+  local pilot="$SCORING_PILOT_RECORDS"
+  prepare_personal_pool 0
   if [[ "$DRY_RUN" == "1" ]]; then
-    python3 -m tools.meditod_pipeline_support mock-score --input "$prioritized" --output "$SCORED_RAW" --bayes-model "$COMPAT_MODEL"
+    python3 -m tools.meditod_pipeline_support mock-score --input "$PRIORITIZED_CANDIDATES" --output "$SCORED_RAW" --bayes-model "$COMPAT_MODEL"
     pilot="$(wc -l < "$SCORED_RAW")"
   elif [[ ! -f "$SCORED_RAW" ]]; then
-    retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-records "$pilot" --include-crossing-conversation --scoring-preset "$SCORING_PRESET" --invalid-observation-retries 2 --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" --fallback-on-errors
+    retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$PRIORITIZED_CANDIDATES" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-records "$pilot" --include-crossing-conversation --scoring-preset "$SCORING_PRESET" --invalid-observation-retries 2 --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" --fallback-on-errors
   fi
   python3 -m tools.validate_mathdial_scoring_pilot --input "$SCORED_RAW" --bayes-model "$COMPAT_MODEL" --output "$OUTPUT_ROOT/scoring/pilot_diagnostics.json" --required-records "$pilot" --max-fallback-rate 0.01 --max-invalid-rate 0.01 --min-observations 2
   reconcile_scoring
-  [[ "$DRY_RUN" == "1" ]] && { python3 -m tools.measure_basis_selection_pool --input "$SCORED" --bayes-model "$COMPAT_MODEL" --output "$OUTPUT_ROOT/scoring/selection_pool_progress.json" --method state_specific_margin --margin 0.05 --required 2 --exclude-fallback-conversations --exclude-explicit-unsafe-medical-advice --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS" || true; return; }
+  [[ "$DRY_RUN" == "1" ]] && { measure_personal_selection_pool 2 || true; return; }
   while true; do
-    python3 -m tools.measure_basis_selection_pool --input "$SCORED" --bayes-model "$COMPAT_MODEL" --output "$OUTPUT_ROOT/scoring/selection_pool_progress.json" --history "$OUTPUT_ROOT/scoring/selection_pool_history.jsonl" --method state_specific_margin --margin 0.05 --required "$SELECTION_POOL_COUNT" --exclude-fallback-conversations --exclude-explicit-unsafe-medical-advice --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS"
+    measure_personal_selection_pool "$DPO_INITIAL_SELECTION_POOL_COUNT"
     local eligible
     eligible="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["eligible_records"])' "$OUTPUT_ROOT/scoring/selection_pool_progress.json")"
     (( eligible >= DPO_INITIAL_SELECTION_POOL_COUNT )) && break
-    local before after
-    before="$(wc -l < "$SCORED_RAW")"
-    retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$prioritized" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-new-records "$SCORING_BATCH_RECORDS" --scoring-preset "$SCORING_PRESET" --invalid-observation-retries 2 --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" --fallback-on-errors
-    after="$(wc -l < "$SCORED_RAW")"; (( after > before )) || { echo "全候補をscoringしてもclean候補が不足しました。" >&2; return 20; }
-    reconcile_scoring
+    score_next_personal_batch || {
+      [[ "$?" == "21" ]] && break
+      return 1
+    }
   done
   python3 -m tools.validate_scoring_fallbacks --input "$SCORED" --output "$OUTPUT_ROOT/scoring/fallback_diagnostics.json" --warning-rate 0.01 --fatal-rate 0.05 --diagnostic-only
 }
 
 select_data_stage() {
-  local count="$SELECTION_POOL_COUNT"
-  if [[ "$DRY_RUN" == "1" ]]; then count=2; else
+  local count random_count
+  if [[ "$DRY_RUN" == "1" ]]; then count=2; random_count=2; else
     local eligible; eligible="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["eligible_records"])' "$OUTPUT_ROOT/scoring/selection_pool_progress.json")"
-    (( eligible < count )) && count="$eligible"
-    (( count >= 2500 )) || { echo "比較候補が不足しています: $count/2500" >&2; return 20; }
+    count="$eligible"
+    random_count="$(wc -l < "$PERSONAL_CANDIDATES")"
+    (( count > 0 )) || { echo "BASiS選別候補がありません。" >&2; return 20; }
+    (( random_count >= RANDOM_DPO_COUNT )) || { echo "個人健康相談のRandom候補が不足しています: $random_count/$RANDOM_DPO_COUNT" >&2; return 20; }
   fi
-  python3 -m tools.meditod_selection --scored "$SCORED" --meditod-conversations "$MED_CONV" --bayes-model "$COMPAT_MODEL" --output-dir "$SELECT_DIR" --count "$count" --random-count "$count" --seed "$SEED" --selection-margin 0.05 --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS"
+  python3 -m tools.meditod_selection --scored "$SCORED" --allowed-records "$PERSONAL_CANDIDATES" --domain-candidates "$PERSONAL_CANDIDATES" --meditod-conversations "$MED_CONV" --bayes-model "$COMPAT_MODEL" --output-dir "$SELECT_DIR" --count "$count" --random-count "$random_count" --seed "$SEED" --selection-margin 0.05 --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS"
 }
 
 extend_scoring_selection() {
-  local before after
-  before="$(wc -l < "$SCORED_RAW")"
-  retry_command python3 -m tools.score_dialogue_with_transition_bayes_model --input "$OUTPUT_ROOT/scoring/prioritized_candidates.jsonl" --bayes-model "$COMPAT_MODEL" --output "$SCORED_RAW" --model "$SCORING_MODEL" --workers "$WORKERS" --max-new-records "$SCORING_BATCH_RECORDS" --scoring-preset "$SCORING_PRESET" --invalid-observation-retries 2 --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" --fallback-on-errors
-  after="$(wc -l < "$SCORED_RAW")"; (( after > before )) || return 20
-  reconcile_scoring
-  python3 -m tools.measure_basis_selection_pool --input "$SCORED" --bayes-model "$COMPAT_MODEL" --output "$OUTPUT_ROOT/scoring/selection_pool_progress.json" --history "$OUTPUT_ROOT/scoring/selection_pool_history.jsonl" --method state_specific_margin --margin 0.05 --required "$SELECTION_POOL_COUNT" --exclude-fallback-conversations --exclude-explicit-unsafe-medical-advice --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS"
+  score_next_personal_batch || return $?
+  measure_personal_selection_pool "$DPO_INITIAL_SELECTION_POOL_COUNT"
   select_data_stage
   # build_dpo中の追加scoringでselection成果物が変わるため、古いhash markerを残さない。
   rm -f "$STATE_DIR/select_data_SUCCESS.json"
@@ -339,8 +468,23 @@ extend_scoring_selection() {
 
 build_dpo_stage() {
   mkdir -p "$DPO_DIR"
-  local basis=2000 gold=500 random=2500 gold_source=900
+  local basis="$BASIS_SELECTED_COUNT" gold="$GOLD_DPO_COUNT" random="$RANDOM_DPO_COUNT" gold_source=1200
   [[ "$DRY_RUN" == "1" ]] && { basis=1; gold=1; random=2; gold_source=2; }
+  prepare_personal_pool 1
+  reconcile_scoring
+  measure_personal_selection_pool "$DPO_INITIAL_SELECTION_POOL_COUNT"
+  if [[ "$DRY_RUN" != "1" ]]; then
+    while true; do
+      local initial_eligible
+      initial_eligible="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["eligible_records"])' "$OUTPUT_ROOT/scoring/selection_pool_progress.json")"
+      (( initial_eligible >= DPO_INITIAL_SELECTION_POOL_COUNT )) && break
+      extend_scoring_selection || {
+        [[ "$?" == "21" ]] && break
+        return 1
+      }
+    done
+  fi
+  select_data_stage
   python3 -m tools.prepare_meditod_gold --samples "$MED_SAMPLES" --output "$DPO_DIR/gold_candidates_en.jsonl" --target "$gold_source" --seed "$SEED"
   if [[ "$DRY_RUN" == "1" ]]; then
     python3 -m tools.meditod_pipeline_support mock-dpo --input "$SELECT_DIR/basis_top.jsonl" --output "$DPO_DIR/basis_selected_ja.jsonl" --count "$basis" --source-dataset WildChat-BASiS
@@ -349,23 +493,30 @@ build_dpo_stage() {
   else
     while true; do
       retry_command python3 -m tools.translate_and_generate_dpo --input "$SELECT_DIR/basis_top.jsonl" --bayes-model "$COMPAT_MODEL" --output "$DPO_DIR/basis_selected_ja.jsonl" --model "$GENERATION_MODEL" --score-model "$SCORING_MODEL" --style-preset meditod_history_taking --candidates 4 --max-output-tokens "$DPO_MAX_OUTPUT_TOKENS" --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS" --min-score-gap 0.20 --min-chosen-posterior 0.70 --max-rejected-posterior 0.55 --target-records "$basis" --workers "$WORKERS" --skip-sample-errors --allow-target-shortfall --heartbeat-file "$HEARTBEAT_FILE" --heartbeat-stage-prefix basis_dpo --seed "$SEED"
-      local accepted eligible
+      local accepted
       accepted="$(wc -l < "$DPO_DIR/basis_selected_ja.jsonl")"
       (( accepted >= basis )) && break
-      eligible="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["eligible_records"])' "$OUTPUT_ROOT/scoring/selection_pool_progress.json")"
-      (( eligible < SELECTION_POOL_COUNT )) || { echo "clean候補上限でもBASiS DPOが不足: $accepted/$basis" >&2; return 20; }
+      local extend_status=0
+      set +e
       extend_scoring_selection
+      extend_status=$?
+      set -e
+      if (( extend_status != 0 )); then
+        (( extend_status == 21 )) || return "$extend_status"
+        echo "[adaptive scoring] 全個人健康相談候補を処理したため順位救済を実行します。"
+        python3 -m tools.promote_meditod_dpo_rescue \
+          --accepted "$DPO_DIR/basis_selected_ja.jsonl" \
+          --skipped "$DPO_DIR/basis_selected_ja_skipped.jsonl" \
+          --target-records "$basis" \
+          --min-chosen "$DPO_RESCUE_MIN_CHOSEN" \
+          --max-rejected "$DPO_RESCUE_MAX_REJECTED" \
+          --min-gap "$DPO_RESCUE_MIN_GAP" \
+          --report "$DPO_DIR/basis_ranked_rescue_report.json"
+        break
+      fi
     done
     retry_command python3 -m tools.translate_and_generate_dpo --input "$DPO_DIR/gold_candidates_en.jsonl" --bayes-model "$COMPAT_MODEL" --output "$DPO_DIR/meditod_gold_ja.jsonl" --model "$GENERATION_MODEL" --score-model "$SCORING_MODEL" --style-preset meditod_history_taking --candidates 4 --max-output-tokens "$DPO_MAX_OUTPUT_TOKENS" --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS" --min-score-gap 0.20 --min-chosen-posterior 0.70 --max-rejected-posterior 0.55 --target-records "$gold" --workers "$WORKERS" --skip-sample-errors --heartbeat-file "$HEARTBEAT_FILE" --heartbeat-stage-prefix gold_dpo --seed "$SEED"
-    while true; do
-      retry_command python3 -m tools.build_random_dailydialog_dpo --input "$SELECT_DIR/domain_random.jsonl" --source-dataset WildChat --prompt-preset meditod_history_taking --output "$DPO_DIR/random_ja.jsonl" --daily-output "$DPO_DIR/random_ja.jsonl" --target-records "$random" --candidates 1 --max-output-tokens "$DPO_MAX_OUTPUT_TOKENS" --model "$GENERATION_MODEL" --workers "$WORKERS" --skip-sample-errors --allow-target-shortfall --heartbeat-file "$HEARTBEAT_FILE" --seed "$SEED"
-      local random_accepted random_eligible
-      random_accepted="$(wc -l < "$DPO_DIR/random_ja.jsonl")"
-      (( random_accepted >= random )) && break
-      random_eligible="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["eligible_records"])' "$OUTPUT_ROOT/scoring/selection_pool_progress.json")"
-      (( random_eligible < SELECTION_POOL_COUNT )) || { echo "clean候補上限でもRandom DPOが不足: $random_accepted/$random" >&2; return 20; }
-      extend_scoring_selection
-    done
+    retry_command python3 -m tools.build_random_dailydialog_dpo --input "$SELECT_DIR/domain_random.jsonl" --source-dataset WildChat --prompt-preset meditod_history_taking --output "$DPO_DIR/random_ja.jsonl" --daily-output "$DPO_DIR/random_ja.jsonl" --target-records "$random" --candidates 1 --max-output-tokens "$DPO_MAX_OUTPUT_TOKENS" --model "$GENERATION_MODEL" --workers "$WORKERS" --skip-sample-errors --heartbeat-file "$HEARTBEAT_FILE" --seed "$SEED"
   fi
   python3 -m tools.mix_meditod_dpo --basis "$DPO_DIR/basis_selected_ja.jsonl" --gold "$DPO_DIR/meditod_gold_ja.jsonl" --random "$DPO_DIR/random_ja.jsonl" --basis-output "$DPO_DIR/meditod_basis_train.jsonl" --random-output "$DPO_DIR/meditod_random_train.jsonl" --basis-count "$basis" --gold-count "$gold" --random-count "$random"
 }

@@ -25,11 +25,19 @@ def measure_pool(
     exclude_fallback_conversations: bool = False,
     max_source_characters: int | None = None,
     exclude_explicit_unsafe_medical_advice: bool = False,
+    allowed_record_keys: set[tuple[str, int]] | None = None,
 ) -> dict:
     model = load_transition_bayes_model(model_path)
     labels = derive_selection_labels_from_model(
         model, method=method, minimum_margin=margin
     )
+    if allowed_record_keys is not None:
+        scored = [
+            row
+            for row in scored
+            if (str(row.get("conversation_id", "")), int(row.get("turn_index", -1)))
+            in allowed_record_keys
+        ]
     fallback_conversations = {
         str(row.get("conversation_id", ""))
         for row in scored
@@ -106,6 +114,7 @@ def measure_pool(
         "exclude_explicit_unsafe_medical_advice": exclude_explicit_unsafe_medical_advice,
         "explicit_unsafe_medical_advice_records": unsafe_records,
         "label_derivation": labels,
+        "allowed_record_filter": allowed_record_keys is not None,
     }
 
 
@@ -118,6 +127,10 @@ def main() -> int:
         "--method",
         choices=("mean_difference", "state_specific_margin"),
         default="state_specific_margin",
+    )
+    parser.add_argument(
+        "--allowed-records",
+        help="このJSONLに含まれるconversation_id/turn_indexだけを候補数へ含めます。",
     )
     parser.add_argument(
         "--exclude-explicit-unsafe-medical-advice",
@@ -144,6 +157,16 @@ def main() -> int:
         for line in Path(args.input).open(encoding="utf-8")
         if line.strip()
     ]
+    allowed_record_keys = None
+    if args.allowed_records:
+        allowed_record_keys = {
+            (str(row["conversation_id"]), int(row["turn_index"]))
+            for row in (
+                json.loads(line)
+                for line in Path(args.allowed_records).open(encoding="utf-8")
+                if line.strip()
+            )
+        }
     report = measure_pool(
         scored,
         model_path=args.bayes_model,
@@ -152,6 +175,7 @@ def main() -> int:
         exclude_fallback_conversations=args.exclude_fallback_conversations,
         max_source_characters=args.max_source_characters,
         exclude_explicit_unsafe_medical_advice=args.exclude_explicit_unsafe_medical_advice,
+        allowed_record_keys=allowed_record_keys,
     )
     report["required_records"] = args.required
     report["sufficient"] = report["eligible_records"] >= args.required

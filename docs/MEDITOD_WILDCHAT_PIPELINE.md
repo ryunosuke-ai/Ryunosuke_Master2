@@ -10,7 +10,7 @@ MediTOD train
   → WildChat健康相談のstreaming抽出
   → Terraによる観測分類と既存posterior更新
   → MMRを含むBASiS選別
-  → 日本語DPO (BASiS 2,000 + gold 500 / Random 2,500)
+  → 日本語DPO (BASiS 3,000 + gold 500 / Random 3,500)
   → Qwen3.5-27B DPO LoRA
   → Base / BASiS / Randomのblind Oracle評価・統計
 ```
@@ -42,6 +42,17 @@ MediTOD train
 | `statistics` | Friedman、Holm事後比較、効果量、bootstrap CI、診療cluster感度分析 |
 | `report` | run内の統計と監査情報をMarkdown化 |
 | `prepare_user_eval` | Oracle上のBASiS優位項目から副次的人手評価A/Bを作成 |
+
+`score_wildchat / build_dpo`は固定clean pool上限を持たない。4 user turns以上の
+個人健康相談を優先し、BASiS採択が不足した場合だけ3 user turns以上へ拡張する。
+個人健康相談判定は`wildchat_personal_health.v3`で固定し、同じuser発話内の
+本人・家族の症状または服薬情報を要求する。文章作成、要約、課題、創作へ
+途中で移る長大セッションは、医学語を含んでいても候補から除外する。
+未処理候補を3,000件単位でscoring・再選別し、全候補を使い切った場合だけ、
+安全性、同一context、`chosen > rejected`、score gap 0.10以上を満たす
+厳格基準未達ペアを順位救済する。救済件数と条件はmanifestへ保存する。
+有限のsourceをすべて使ってもこの条件を満たす3,000件が存在しない場合は、
+件数を水増しせず品質エラーとして停止する。
 
 ## 実行
 
@@ -79,6 +90,25 @@ PYTHONUNBUFFERED=1 \
 ```
 
 stage単独または範囲再開は、同じ`RUN_TAG`と同じ実験条件を維持して`START_STAGE / END_STAGE`を指定する。config、モデル、件数等が変わる場合は新しい`RUN_TAG`を使う。
+
+旧v2のscoringと採択済みDPOを品質監査して再利用する場合は、次の互換移行名を
+明示する。新しい個人健康相談filterに合格した採択済みレコードは継承し、
+非健康相談は`dpo/quarantine/`へ隔離する。旧fidelity検査だけで失敗した
+サンプルは医療情報保持検査v2で再評価する。
+
+```bash
+RUN_TAG=meditod_wildchat_gpt56_v2 \
+MEDITOD_DATA_TERMS_CONFIRMED=1 \
+MEDITOD_RESUME_MIGRATION=target3000_personal_health_fidelity_v2 \
+START_STAGE=build_dpo \
+END_STAGE=prepare_user_eval \
+WORKERS=4 \
+SCORING_REQUESTS_PER_MINUTE=120 \
+TRAIN_CUDA_VISIBLE_DEVICES=0,1 \
+EVAL_CUDA_VISIBLE_DEVICES=0,1 \
+PYTHONUNBUFFERED=1 \
+./scripts/run_meditod_wildchat_watchdog.sh
+```
 
 ## 人手評価
 

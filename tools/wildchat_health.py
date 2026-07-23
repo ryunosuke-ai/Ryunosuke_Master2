@@ -6,7 +6,9 @@ import argparse
 import datetime
 import json
 import re
+import unicodedata
 from collections import Counter
+from functools import lru_cache
 from itertools import islice
 from pathlib import Path
 from typing import Any, Iterable
@@ -21,6 +23,7 @@ from tools.wildchat_tutoring import (
     write_jsonl,
 )
 
+HEALTH_FILTER_VERSION = "wildchat_personal_health.v3"
 
 KNOWLEDGE_PREFIXES = (
     "what is ",
@@ -30,6 +33,75 @@ KNOWLEDGE_PREFIXES = (
     "tell me about ",
     "how does ",
 )
+NON_CONSULTATION_PATTERN = re.compile(
+    r"\b(?:"
+    r"(?:summari[sz]e|summery|summerize)\s+(?:this|the following)\b"
+    r"|(?:summari[sz]e|summery|summerize|draw a summary|rewrite|translate|"
+    r"proofread|paraphrase|"
+    r"improve|shorten|rephrase).{0,60}"
+    r"(?:passage|text|sentence|email|article|abstract|paper|resume|paragraph)"
+    r"|(?:write|writing|working on|create|make|generate|draft|prepare|edit|"
+    r"help (?:me )?"
+    r"(?:write|make|create|draw)).{0,80}"
+    r"(?:script|screenplay|comic|manga|novel|article|essay|fiction|story|"
+    r"lyrics|poem|website|slides?|presentation|powerpoint|resume|email|"
+    r"character|faqs?|report|summary|expression|prompt|text|letter|content)"
+    r"|(?:exam|quiz|multiple[- ]choice|group of answer choices|homework)"
+    r"|(?:text[- ]based adventure|role ?play|dating expert|content writer|"
+    r"sci[- ]?fi|fictional|flowchart image|find (?:a )?(?:city|neighbou?rhood)|"
+    r"professional summarizer|pretend to be (?:a )?(?:famous )?author|"
+    r"risk of bias|check grammar|correct (?:the )?grammar|youtube shorts?|"
+    r"ai agent|doctor who|write (?:a )?(?:follow[- ]?up|sequel))"
+    r"|(?:weekly meal plan|meal planning|workout plan|fitness plan)"
+    r")\b",
+    re.IGNORECASE,
+)
+CONTENT_DOMAIN_PATTERN = re.compile(
+    r"\b(?:research (?:paper|study|article)|journal article|abstract|passage|"
+    r"chapter|book i'm writing|comic|novel|story|video game|horror game|"
+    r"zombie outbreak|employee survey|presentation|powerpoint|flowchart|"
+    r"case study|student nurse|clinical placement|nursing documentation|"
+    r"competency assessment programme|fabric features?|product features?)\b",
+    re.IGNORECASE,
+)
+PERSONAL_PRONOUN_PATTERN = re.compile(
+    r"\b(?:i|i've|i'm|i'd|me|my|mine|we|we've|we're|our|"
+    r"my (?:child|son|daughter|mother|father|partner|husband|wife))\b",
+    re.IGNORECASE,
+)
+PERSONAL_HEALTH_ACTION_PATTERN = re.compile(
+    r"\b(?:have|had|feel|feeling|felt|experience|experiencing|suffer|"
+    r"suffering|diagnosed|taking|take|developed|started|worsening|"
+    r"getting worse|tested positive|tested negative|hurt|hurts)\b",
+    re.IGNORECASE,
+)
+PERSONAL_CLINICAL_TERM_PATTERN = re.compile(
+    r"\b(?:symptoms?|pain|ache|cough|fever|headache|nausea|dizz(?:y|iness)|"
+    r"medications?|medicine|breath(?:ing|lessness)?|rash|infection|bleeding|"
+    r"vomit(?:ing)?|diarrh(?:ea|oea)|swelling|allerg(?:y|ies|ic)|"
+    r"blood pressure|heart rate|diagnosed|diagnosis|sore|burning|hurts?|"
+    r"anxiety|depression|ocd|autism)\b",
+    re.IGNORECASE,
+)
+DIRECT_CONSULTATION_PATTERN = re.compile(
+    r"\b(?:should (?:i|we) (?:see|contact|visit)|"
+    r"what (?:could|might) (?:this|these symptoms) be|"
+    r"(?:my|our) (?:doctor|medication|medicine|symptoms?|pain)|"
+    r"give (?:your|me) (?:a )?view on my symptoms|"
+    r"what kind of illness (?:i|we) (?:have|might have))\b",
+    re.IGNORECASE,
+)
+
+
+def _has_personal_clinical_signal(text: str) -> bool:
+    """同一の短い範囲に本人の状態変化と臨床語があるか判定する。"""
+    pronoun = PERSONAL_PRONOUN_PATTERN.search(text)
+    action = PERSONAL_HEALTH_ACTION_PATTERN.search(text)
+    clinical = PERSONAL_CLINICAL_TERM_PATTERN.search(text)
+    if not pronoun or not action or not clinical:
+        return False
+    positions = (pronoun.start(), action.start(), clinical.start())
+    return max(positions) - min(positions) <= 180
 MEDICATION_PATTERN = re.compile(
     r"\b(?:aspirin|ibuprofen|acetaminophen|paracetamol|amoxicillin|azithromycin|"
     r"metformin|insulin|warfarin|lisinopril|prednisone|albuterol|omeprazole|"
@@ -38,28 +110,94 @@ MEDICATION_PATTERN = re.compile(
 )
 UNSAFE_MEDICAL_ADVICE_PATTERNS = (
     re.compile(r"\b(?:stop|discontinue|double|triple)\s+(?:taking\s+)?(?:your\s+)?(?:medication|medicine|dose|insulin|warfarin)\b", re.I),
-    re.compile(r"\btake\s+\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml)\b", re.I),
+    re.compile(
+        r"(?:^|[.!?]\s*)(?:please\s+)?take\s+\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml)\b"
+        r"|\b(?:you\s+should|you\s+must)\s+take\s+\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml)\b",
+        re.I,
+    ),
     re.compile(r"\b(?:definitely|certainly)\s+(?:have|is)\b", re.I),
     re.compile(r"\b(?:no need|do not need|don't need)\s+to\s+(?:see|contact|visit)\s+(?:a\s+)?(?:doctor|clinic|hospital)\b", re.I),
     re.compile(r"(?:薬|服用|投薬).{0,12}(?:中止|倍量|2倍|３倍|3倍)", re.I),
-    re.compile(r"\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml).{0,10}(?:飲んで|服用して|投与して)", re.I),
+    re.compile(
+        r"\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml).{0,12}"
+        r"(?:(?:飲んで|服用して|投与して)(?:ください|下さい)|"
+        r"(?:飲む|服用する|投与する)べき)",
+        re.I,
+    ),
     re.compile(r"(?:間違いなく|確実に).{0,8}(?:です|病気|疾患)", re.I),
     re.compile(r"(?:受診|医師|病院).{0,10}(?:必要ありません|不要です|行かなくて)", re.I),
 )
 
 
+@lru_cache(maxsize=256)
+def _keyword_pattern(value: str) -> re.Pattern[str]:
+    """英語keywordを単語境界付きで照合し、Spain内のpain等を除外する。"""
+    escaped = re.escape(str(value).strip()).replace(r"\ ", r"\s+")
+    prefix = r"(?<![A-Za-z0-9_])" if value and value[0].isalnum() else ""
+    suffix = r"(?![A-Za-z0-9_])" if value and value[-1].isalnum() else ""
+    return re.compile(prefix + escaped + suffix, re.IGNORECASE)
+
+
 def _contains_any(text: str, values: Iterable[str]) -> bool:
-    lowered = text.lower()
-    return any(str(value).lower() in lowered for value in values)
+    return any(_keyword_pattern(str(value)).search(text) for value in values)
+
+
+def is_personal_health_consultation(
+    record: dict[str, Any],
+    config: dict[str, Any],
+) -> bool:
+    """本人の健康問題について情報を追加しながら相談する会話か判定する。"""
+    user_turns = [
+        unicodedata.normalize("NFKC", turn["text"][:2_000])
+        for turn in record["turns"]
+        if turn["role"] == "user"
+    ]
+    if not user_turns:
+        return False
+    # 長いWildChat会話は途中で別用途へ移ることがある。文章作成・課題・創作が
+    # 混ざる会話は、後続turnを医療相談と誤認しないよう会話単位で除外する。
+    if any(
+        NON_CONSULTATION_PATTERN.search(text[:2_000])
+        or CONTENT_DOMAIN_PATTERN.search(text[:2_000])
+        for text in user_turns
+    ):
+        return False
+    substantive = [text.strip() for text in user_turns if len(tokenize(text)) >= 4]
+    if substantive:
+        first = substantive[0][:2_000]
+        if (
+            len(substantive[0]) > 1_200
+            and not DIRECT_CONSULTATION_PATTERN.search(first)
+        ):
+            return False
+        if first.startswith(('"', "“")) and not DIRECT_CONSULTATION_PATTERN.search(first):
+            return False
+    # 挨拶後に別用途へ遷移する長大セッションを除くため、相談開始は最初の
+    # 実質的な3 user発話以内に現れることを要求する。
+    for text in substantive[:3]:
+        # 論文・記事の貼り付け本文を一人称相談と誤認しない。個人相談の
+        # 発端は通常、短い依頼または長文でも冒頭に症状が現れる。
+        candidate_text = text[:2_000]
+        if not _contains_any(candidate_text, config["domain_keywords"]):
+            continue
+        if DIRECT_CONSULTATION_PATTERN.search(candidate_text):
+            return True
+        clinical = PERSONAL_CLINICAL_TERM_PATTERN.search(candidate_text)
+        if not clinical:
+            continue
+        if _has_personal_clinical_signal(candidate_text):
+            return True
+    return False
 
 
 def health_domain_flags(record: dict[str, Any], config: dict[str, Any]) -> dict[str, bool]:
     user_turns = [turn["text"] for turn in record["turns"] if turn["role"] == "user"]
     all_text = " ".join(turn["text"] for turn in record["turns"])
-    user_text = " ".join(user_turns)
+    # 粗判定で巨大な貼り付け文書全体を何度も走査しない。
+    user_text = " ".join(text[:2_000] for text in user_turns)
     health = _contains_any(user_text, config["domain_keywords"])
     respiratory = health and _contains_any(user_text, config["respiratory_keywords"])
-    personal = _contains_any(user_text, config.get("personal_consultation_markers", []))
+    personal = is_personal_health_consultation(record, config)
     followups = user_turns[1:]
     followup_information = any(
         len(tokenize(text)) >= 3
@@ -99,12 +237,20 @@ def has_explicit_unsafe_medical_advice(text: str) -> bool:
     return any(pattern.search(text) for pattern in UNSAFE_MEDICAL_ADVICE_PATTERNS)
 
 
-def sample_with_medical_metadata(sample: dict[str, Any]) -> dict[str, Any]:
+def sample_with_medical_metadata(
+    sample: dict[str, Any],
+    *,
+    conversation_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """共通scoring recordへ翻訳保持対象の薬剤名だけを追加する。"""
     record = sample_to_scoring_record(sample)
     record["metadata"] = {
         **record["metadata"],
         "protected_medical_terms": protected_medical_terms(sample),
+        "personal_health_consultation": bool(
+            (conversation_metadata or {}).get("personal_symptom_consultation")
+        ),
+        "health_filter_version": HEALTH_FILTER_VERSION,
     }
     return record
 
@@ -164,6 +310,9 @@ def extract_candidates(
         if not flags["health"]:
             counts["excluded_non_health"] += 1
             continue
+        if config.get("require_personal_consultation", False) and not flags["personal"]:
+            counts["excluded_non_personal_health"] += 1
+            continue
         if flags["single_knowledge"] and config.get("exclude_single_turn_knowledge_questions", True):
             counts["excluded_medical_knowledge_only"] += 1
             continue
@@ -190,6 +339,7 @@ def extract_candidates(
                 "domain": "general_health_consultation",
                 "has_followup_patient_information": True,
                 "personal_symptom_consultation": flags["personal"],
+                "health_filter_version": HEALTH_FILTER_VERSION,
                 "pii_metadata_retained": False,
             }
         )
@@ -227,9 +377,15 @@ def main() -> int:
     parser.add_argument("--progress-every", type=int, default=10_000)
     parser.add_argument("--checkpoint-every", type=int, default=100_000)
     parser.add_argument("--heartbeat-file")
+    parser.add_argument("--minimum-user-turns", type=int)
+    parser.add_argument("--require-personal-consultation", action="store_true")
     parser.add_argument("--no-resume", action="store_true")
     args = parser.parse_args()
     config = load_yaml(args.config)
+    if args.minimum_user_turns is not None:
+        config["minimum_user_turns"] = args.minimum_user_turns
+    if args.require_personal_consultation:
+        config["require_personal_consultation"] = True
     output = Path(args.output_dir)
     general_path = output / "general_health_consultation_conversations.jsonl"
     respiratory_path = output / "respiratory_health_conversations.jsonl"
@@ -248,7 +404,11 @@ def main() -> int:
             output / "statistics.json",
             output / "manifest.json",
         )
-        if checkpoint.get("completed") is True and all(path.is_file() for path in outputs):
+        if (
+            checkpoint.get("completed") is True
+            and checkpoint.get("health_filter_version") == HEALTH_FILTER_VERSION
+            and all(path.is_file() for path in outputs)
+        ):
             print("[extract_wildchat_health] completed checkpointを再利用", flush=True)
             return 0
         initial_general = [json.loads(line) for line in general_path.open(encoding="utf-8") if line.strip()]
@@ -277,6 +437,7 @@ def main() -> int:
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "seed": args.seed,
             "completed": completed,
+            "health_filter_version": HEALTH_FILTER_VERSION,
             "statistics": counts,
         }
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -301,7 +462,10 @@ def main() -> int:
     write_jsonl(general, general_path)
     write_jsonl(respiratory, respiratory_path)
     general_samples = [
-        sample_with_medical_metadata(sample)
+        sample_with_medical_metadata(
+            sample,
+            conversation_metadata=record.get("metadata", {}),
+        )
         for record in general
         for sample in build_assistant_samples(record)
         if sample["metadata"]["dpo_eligible"] and sample.get("next_user_turn") is not None
@@ -316,6 +480,7 @@ def main() -> int:
         "config": config,
         "stream_shuffle_seed": args.seed,
         "target_candidate_records": args.target_candidate_records,
+        "health_filter_version": HEALTH_FILTER_VERSION,
         "statistics": stats,
         "pii_policy": "retain conversation_hash and source_model only; discard source metadata",
     }

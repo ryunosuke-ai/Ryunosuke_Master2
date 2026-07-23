@@ -5,6 +5,7 @@ language: English
 minimum_user_turns: 4
 minimum_exchanges: 3
 require_followup_information: true
+require_personal_consultation: true
 exclude_single_turn_knowledge_questions: true
 stream_shuffle_buffer_size: 10000
 exclude_toxic: true

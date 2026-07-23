@@ -66,12 +66,18 @@ def select_groups(
     bayes_model_path: Path | str,
     selection_margin: float,
     max_source_characters: int | None,
+    allowed_record_keys: set[tuple[str, int]] | None = None,
+    domain_candidates: list[dict[str, Any]] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     deduped = {}
     for row in scored:
         key = (str(row["conversation_id"]), int(row["turn_index"]))
         if key not in deduped or float(row.get("posterior", 0)) > float(deduped[key].get("posterior", 0)):
             deduped[key] = row
+    if allowed_record_keys is not None:
+        deduped = {
+            key: row for key, row in deduped.items() if key in allowed_record_keys
+        }
     length_filtered = [
         row for row in deduped.values()
         if max_source_characters is None or source_text_characters(row) <= max_source_characters
@@ -84,7 +90,19 @@ def select_groups(
         str(row["conversation_id"]) for row in scored if row.get("llm_error")
     }
     rng = random.Random(seed)
-    randomized = sorted(pool, key=lambda row: (str(row["conversation_id"]), int(row["turn_index"])))
+    domain_source = domain_candidates if domain_candidates is not None else pool
+    randomized = sorted(
+        [
+            row
+            for row in domain_source
+            if (
+                max_source_characters is None
+                or source_text_characters(row) <= max_source_characters
+            )
+            and not has_explicit_unsafe_medical_advice(str(row.get("response", "")))
+        ],
+        key=lambda row: (str(row["conversation_id"]), int(row["turn_index"])),
+    )
     rng.shuffle(randomized)
     reference = build_topic_reference(conversations)
     for row in pool:
@@ -130,8 +148,22 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--selection-margin", type=float, default=0.05)
     parser.add_argument("--max-source-characters", type=int)
+    parser.add_argument("--allowed-records")
+    parser.add_argument(
+        "--domain-candidates",
+        help="domain_randomをscoring済み集合ではなく、この個人健康相談候補から作ります。",
+    )
     args = parser.parse_args()
     scored = read_jsonl(args.scored)
+    allowed_rows = read_jsonl(args.allowed_records) if args.allowed_records else None
+    allowed_record_keys = (
+        {
+            (str(row["conversation_id"]), int(row["turn_index"]))
+            for row in allowed_rows
+        }
+        if allowed_rows is not None
+        else None
+    )
     groups = select_groups(
         scored,
         read_jsonl(args.meditod_conversations),
@@ -141,6 +173,10 @@ def main() -> int:
         bayes_model_path=args.bayes_model,
         selection_margin=args.selection_margin,
         max_source_characters=args.max_source_characters,
+        allowed_record_keys=allowed_record_keys,
+        domain_candidates=(
+            read_jsonl(args.domain_candidates) if args.domain_candidates else None
+        ),
     )
     shortages = {
         name: (len(rows), args.random_count if name == "domain_random" else args.count)

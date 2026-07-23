@@ -31,10 +31,16 @@ from tools.meditod_evaluation import (
     evaluation_translation_fidelity_errors,
     select_eval_prompts,
 )
+from tools.prepare_meditod_personal_pool import audit_resume_records
+from tools.promote_meditod_dpo_rescue import rescue_eligible
 from tools.score_dialogue_with_transition_bayes_model import (
     build_meditod_scoring_instructions,
 )
-from tools.translate_and_generate_dpo import meditod_translation_fidelity_errors
+from tools.translate_and_generate_dpo import (
+    MEDITOD_MEDICAL_FIDELITY_VERSION,
+    meditod_translation_fidelity_errors,
+    retry_meditod_translation_for_fidelity,
+)
 from tools.wildchat_health import extract_candidates, health_domain_flags
 from tools.wildchat_health import has_explicit_unsafe_medical_advice
 
@@ -150,6 +156,166 @@ def test_meditod_prompt_and_translation_fidelity():
     unsafe = {**good, "rejected_candidates": ["metformin 1000 mgを服用してください。"]}
     assert "explicit_unsafe_medical_advice" in meditod_translation_fidelity_errors(source, unsafe)
     assert has_explicit_unsafe_medical_advice("Take 500 mg of this medicine.")
+    assert MEDITOD_MEDICAL_FIDELITY_VERSION == "meditod_medical_fidelity.v2"
+
+
+def test_meditod_fidelity_ignores_citation_numbers_but_keeps_clinical_numbers():
+    source = {
+        "prompt": "Dopamine is discussed in prior work [144–146] and [4, 149]. I take 500 mg for 3 days.",
+        "response": "Do you still take 500 mg?",
+        "metadata": {"protected_medical_terms": []},
+    }
+    good = {
+        "translated_prompt": "ドパミンは先行研究で論じられています。500 mgを3日間服用しています。",
+        "translated_chosen": "現在も500 mgを服用していますか。",
+        "rejected_candidates": ["薬について確認できますか。"],
+    }
+    assert meditod_translation_fidelity_errors(source, good) == {}
+    bad = {**good, "translated_prompt": "薬を3日間服用しています。"}
+    assert meditod_translation_fidelity_errors(source, bad)["prompt_numbers"] == ["500"]
+
+
+def test_health_filter_uses_word_boundaries_and_requires_personal_consultation():
+    config = load_yaml("configs/datasets/wildchat_health.yaml")
+    false_positive = {
+        "turns": [
+            {"role": "user", "text": "Write a manga set in Spain."},
+            {"role": "assistant", "text": "What genre?"},
+            {"role": "user", "text": "A hospital drama."},
+        ]
+    }
+    personal = {
+        "turns": [
+            {"role": "user", "text": "I have chest pain and a cough."},
+            {"role": "assistant", "text": "When did it start?"},
+            {"role": "user", "text": "It started 3 days ago and is worse."},
+        ]
+    }
+    assert not health_domain_flags(false_positive, config)["personal"]
+    assert health_domain_flags(personal, config)["personal"]
+
+
+def test_health_filter_rejects_task_drift_after_greeting():
+    config = load_yaml("configs/datasets/wildchat_health.yaml")
+    writing_task = {
+        "turns": [
+            {"role": "user", "text": "Hi there!"},
+            {"role": "assistant", "text": "Hello."},
+            {
+                "role": "user",
+                "text": (
+                    "Please summarize this medical research paper. "
+                    "I have included a passage about pain and medication."
+                ),
+            },
+            {"role": "assistant", "text": "Please share it."},
+            {"role": "user", "text": "The patient had pain for three days."},
+        ]
+    }
+    delayed_consultation = {
+        "turns": [
+            {"role": "user", "text": "Are you there?"},
+            {"role": "assistant", "text": "Yes."},
+            {
+                "role": "user",
+                "text": "I have chest pain and a cough that started three days ago.",
+            },
+            {"role": "assistant", "text": "Is the pain worse when breathing?"},
+            {"role": "user", "text": "Yes, and I also feel dizzy."},
+        ]
+    }
+    assert not health_domain_flags(writing_task, config)["personal"]
+    assert health_domain_flags(delayed_consultation, config)["personal"]
+
+
+def test_meditod_targeted_fidelity_repair_preserves_rejected_candidates():
+    class RepairGenerator:
+        def generate(self, **kwargs):
+            return json.dumps(
+                {
+                    "translated_prompt": "500 mgを3日間服用しています。",
+                    "translated_chosen": "痛みはまだ続いていますか。",
+                },
+                ensure_ascii=False,
+            )
+
+    source = {
+        "prompt": "I have taken 500 mg for 3 days.",
+        "response": "Does the pain continue?",
+        "metadata": {"protected_medical_terms": []},
+    }
+    payload = {
+        "translated_prompt": "薬を3日間服用しています。",
+        "translated_chosen": "痛みはまだ続いていますか。",
+        "rejected_candidates": ["すぐに診断できます。"],
+    }
+    repaired = retry_meditod_translation_for_fidelity(
+        source_record=source,
+        payload=payload,
+        index=0,
+        generator=RepairGenerator(),
+        instructions="unused",
+        model="mock",
+        max_output_tokens=1000,
+        candidates=4,
+        seed=42,
+    )
+    assert repaired["rejected_candidates"] == payload["rejected_candidates"]
+    assert repaired["generation_retry"] == "meditod_medical_fidelity_targeted_retry"
+    assert meditod_translation_fidelity_errors(source, repaired) == {}
+
+
+def test_resume_audit_keeps_domain_records_and_requeues_old_fidelity_errors():
+    accepted = [
+        {"source_dialogue_id": "health", "turn_index": 1},
+        {"source_dialogue_id": "comic", "turn_index": 1},
+    ]
+    skipped = [
+        {
+            "source_dialogue_id": "health",
+            "turn_index": 3,
+            "skip_reason": "sample_error",
+            "error_message": "MediTOD翻訳で医療情報が失われました: citation",
+        },
+        {
+            "source_dialogue_id": "health",
+            "turn_index": 5,
+            "skip_reason": "low_chosen",
+        },
+    ]
+    audit = audit_resume_records(
+        accepted=accepted,
+        skipped=skipped,
+        allowed_ids={"health"},
+    )
+    assert len(audit["accepted"]) == 1
+    assert len(audit["accepted_quarantine"]) == 1
+    assert len(audit["fidelity_retry"]) == 1
+    assert len(audit["skipped"]) == 1
+
+
+def test_ranked_rescue_requires_safe_same_context_pair():
+    row = {
+        "skip_reason": "low_chosen",
+        "prompt": "p",
+        "chosen": "発症時期を教えてください。",
+        "rejected": "分かりません。",
+        "score_chosen": 0.68,
+        "score_rejected": 0.40,
+        "score_gap": 0.28,
+        "metadata": {
+            "translated_prompt_hash": "same",
+            "rejected_prompt_hash": "same",
+        },
+    }
+    assert rescue_eligible(row, min_chosen=0.60, max_rejected=0.65, min_gap=0.10)
+    unsafe = {**row, "rejected": "Take 500 mg of this medicine."}
+    assert not rescue_eligible(
+        unsafe,
+        min_chosen=0.60,
+        max_rejected=0.65,
+        min_gap=0.10,
+    )
 
 
 def test_random_dpo_can_report_shortfall_to_adaptive_pipeline(tmp_path: Path):
