@@ -23,7 +23,7 @@ from tools.wildchat_tutoring import (
     write_jsonl,
 )
 
-HEALTH_FILTER_VERSION = "wildchat_personal_health.v3"
+HEALTH_FILTER_VERSION = "wildchat_health_broad.v4"
 
 KNOWLEDGE_PREFIXES = (
     "what is ",
@@ -221,6 +221,25 @@ def health_domain_flags(record: dict[str, Any], config: dict[str, Any]) -> dict[
         "explicit_pii": explicit_pii,
         "toxic_text": toxic_text,
     }
+
+
+def health_conversation_diagnostic_category(
+    record: dict[str, Any],
+    config: dict[str, Any],
+) -> str:
+    """主実験の採否に使わない健康会話の診断カテゴリを返す。"""
+    if is_personal_health_consultation(record, config):
+        return "personal_consultation"
+    user_text = " ".join(
+        turn["text"][:2_000]
+        for turn in record.get("turns", [])
+        if turn.get("role") == "user"
+    )
+    if NON_CONSULTATION_PATTERN.search(user_text) or CONTENT_DOMAIN_PATTERN.search(
+        user_text
+    ):
+        return "health_related_task"
+    return "general_health_dialogue"
 
 
 def protected_medical_terms(sample: dict[str, Any]) -> list[str]:

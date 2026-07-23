@@ -59,7 +59,7 @@ DEFAULT_SEED = 42
 DEFAULT_STYLE_PRESET = "reminiscence"
 PROMPT_TEMPLATE_VERSION = "translate_and_generate_dpo.v2"
 MATHDIAL_NUMERIC_FIDELITY_VERSION = "mathdial_numeric_fidelity.v2"
-MEDITOD_MEDICAL_FIDELITY_VERSION = "meditod_medical_fidelity.v2"
+MEDITOD_MEDICAL_FIDELITY_VERSION = "meditod_medical_fidelity.v3"
 NUMERIC_TOKEN_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_])[+-]?\d[\d,]*(?:\.\d+)?(?:/\d[\d,]*(?:\.\d+)?)?%?"
 )
@@ -526,6 +526,42 @@ MEDICAL_CITATION_PATTERN = re.compile(
     r"\[\s*\d+(?:\s*[-–—]\s*\d+)?"
     r"(?:\s*[,;]\s*\d+(?:\s*[-–—]\s*\d+)?)*\s*\]"
 )
+MEDITOD_PERSONAL_MEDICAL_PATTERN = re.compile(
+    r"\b(?:i|i've|i'm|me|my|we|our)\b.{0,100}"
+    r"\b(?:have|had|feel|felt|experience|suffer|diagnosed|taking|take|"
+    r"developed|started|worsening|tested|hurt|hurts)\b.{0,100}"
+    r"\b(?:symptoms?|pain|ache|cough|fever|headache|nausea|dizz(?:y|iness)|"
+    r"medications?|medicine|breath(?:ing|lessness)?|rash|infection|bleeding|"
+    r"vomit(?:ing)?|diarrh(?:ea|oea)|swelling|allerg(?:y|ies|ic)|"
+    r"blood pressure|heart rate|diagnos(?:ed|is)|sore|burning)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+MEDITOD_CLINICAL_CONTEXT_PATTERN = re.compile(
+    r"\b(?:symptoms?|pain|ache|cough|fever|headache|nausea|dizz(?:y|iness)|"
+    r"medications?|medicine|dose|dosage|tablet|capsule|blood pressure|"
+    r"heart rate|pulse|temperature|oxygen|saturation|glucose|a1c|"
+    r"cholesterol|creatinine|hemoglobin|test|result|lab|diagnos(?:ed|is)|"
+    r"treatment|therapy|bleeding|vomit(?:ing)?|diarrh(?:ea|oea)|swelling|"
+    r"rash|infection|breath(?:ing|lessness)?|sore|burning|onset|started|"
+    r"worse|worsening|history|pregnan(?:t|cy)|period)\b",
+    re.IGNORECASE,
+)
+MEDITOD_CLINICAL_UNIT_PATTERN = re.compile(
+    r"^\s*(?:mg|mcg|µg|ug|g|kg|ml|mL|l|L|mmol(?:/L)?|mol/L|mg/dL|"
+    r"mmHg|bpm|beats?(?:\s+per\s+minute)?|°\s*[CF]|degrees?\s*[CF]|"
+    r"cm|mm|m)\b",
+    re.IGNORECASE,
+)
+MEDITOD_TIME_UNIT_PATTERN = re.compile(
+    r"^\s*(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?|"
+    r"秒|分|時間|日|週間|週|か月|ヶ月|月|年)\b",
+    re.IGNORECASE,
+)
+MEDITOD_VITAL_PREFIX_PATTERN = re.compile(
+    r"(?:blood pressure|heart rate|pulse|temperature|oxygen saturation|"
+    r"glucose|a1c|cholesterol|creatinine|hemoglobin|bp|hr)\s*(?:is|was|of|:)?\s*$",
+    re.IGNORECASE,
+)
 
 
 def remove_medical_citation_numbers(text: str) -> str:
@@ -533,14 +569,98 @@ def remove_medical_citation_numbers(text: str) -> str:
     return MEDICAL_CITATION_PATTERN.sub("", text)
 
 
+def extract_medical_citation_numbers(text: str) -> list[str]:
+    """監査用に除外した論文引用番号を出現順で返す。"""
+    values: list[str] = []
+    for citation in MEDICAL_CITATION_PATTERN.findall(text):
+        values.extend(extract_normalized_numeric_tokens(citation))
+    return list(dict.fromkeys(values))
+
+
+def is_personal_meditod_source(source_record: dict[str, Any]) -> bool:
+    """metadataまたは本文から本人の健康相談かを保守的に判定する。"""
+    metadata = source_record.get("metadata", {})
+    if metadata.get("personal_health_consultation") is True:
+        return True
+    source_text = (
+        f"{source_record.get('prompt', '')}\n{source_record.get('response', '')}"
+    )
+    return bool(MEDITOD_PERSONAL_MEDICAL_PATTERN.search(source_text))
+
+
+def extract_meditod_required_numeric_tokens(
+    text: str,
+    *,
+    strict_personal: bool,
+) -> list[str]:
+    """MediTOD翻訳で意味保持が必要な数値だけを抽出する。"""
+    canonical = remove_medical_citation_numbers(text)
+    if strict_personal:
+        return list(dict.fromkeys(extract_normalized_numeric_tokens(canonical)))
+
+    required: list[str] = []
+    for match in NUMERIC_TOKEN_PATTERN.finditer(canonical):
+        token = normalize_numeric_token(match.group(0))
+        left = canonical[max(0, match.start() - 120) : match.start()]
+        right = canonical[match.end() : min(len(canonical), match.end() + 80)]
+        context = f"{left} {right}"
+        has_clinical_context = bool(MEDITOD_CLINICAL_CONTEXT_PATTERN.search(context))
+        has_clinical_unit = bool(MEDITOD_CLINICAL_UNIT_PATTERN.search(right))
+        has_time_unit = bool(MEDITOD_TIME_UNIT_PATTERN.search(right))
+        has_age_context = bool(
+            re.search(r"\bage(?:d)?\s*$", left, re.IGNORECASE)
+            or re.match(r"\s*[- ]?year[- ]old\b", right, re.IGNORECASE)
+            or re.match(r"\s*歳", right)
+        )
+        has_vital_prefix = bool(MEDITOD_VITAL_PREFIX_PATTERN.search(left))
+        is_clinical_percentage = token.endswith("%") and has_clinical_context
+        if (
+            has_clinical_unit
+            or has_age_context
+            or has_vital_prefix
+            or is_clinical_percentage
+            or (has_time_unit and has_clinical_context)
+        ):
+            required.append(token)
+    return list(dict.fromkeys(required))
+
+
+def missing_required_numeric_tokens(
+    required_tokens: list[str],
+    translated_text: str,
+) -> list[str]:
+    """指定された数値tokenが翻訳側に意味的に存在するか確認する。"""
+    translated_tokens = set(
+        extract_normalized_numeric_tokens(remove_medical_citation_numbers(translated_text))
+    )
+    translated_components = {
+        component.rstrip("%")
+        for token in translated_tokens
+        for component in token.rstrip("%").split("/")
+    }
+    missing: list[str] = []
+    for token in required_tokens:
+        if token in translated_tokens:
+            continue
+        if "/" not in token and token.rstrip("%") in translated_components:
+            continue
+        missing.append(token)
+    return missing
+
+
 def missing_meditod_numeric_tokens(
     source_text: str,
     translated_text: str,
+    *,
+    strict_personal: bool = False,
 ) -> list[str]:
-    """引用番号を除外してMediTOD翻訳の数値保持を検査する。"""
-    return missing_mathdial_numeric_tokens(
-        remove_medical_citation_numbers(source_text),
-        remove_medical_citation_numbers(translated_text),
+    """引用・非臨床数値を除外してMediTOD翻訳の数値保持を検査する。"""
+    return missing_required_numeric_tokens(
+        extract_meditod_required_numeric_tokens(
+            source_text,
+            strict_personal=strict_personal,
+        ),
+        translated_text,
     )
 
 
@@ -583,6 +703,7 @@ def meditod_translation_fidelity_errors(
         "chosen": str(payload["translated_chosen"]),
     }
     errors: dict[str, list[str]] = {}
+    strict_personal = is_personal_meditod_source(source_record)
     english_negation = re.compile(r"\b(?:no|not|never|without|denies?|negative for|doesn't|don't|isn't|hasn't|haven't)\b", re.I)
     japanese_negation = re.compile(
         r"(?:ない|なく|なかっ|ません|いません|ず|否定|認め(?:ない|ません)|なし|no|not|never|without)",
@@ -592,6 +713,7 @@ def meditod_translation_fidelity_errors(
         missing_numbers = missing_meditod_numeric_tokens(
             source_fields[field],
             translated_fields[field],
+            strict_personal=strict_personal,
         )
         if missing_numbers:
             errors[f"{field}_numbers"] = missing_numbers
@@ -617,6 +739,31 @@ def meditod_translation_fidelity_errors(
     ):
         errors["explicit_unsafe_medical_advice"] = ["generated_response"]
     return errors
+
+
+def meditod_translation_fidelity_details(
+    source_record: dict[str, Any],
+) -> dict[str, Any]:
+    """採択レコードへ保存するfidelity判定根拠を作る。"""
+    strict_personal = is_personal_meditod_source(source_record)
+    source_fields = {
+        "prompt": str(source_record.get("prompt", "")),
+        "chosen": str(source_record.get("response", "")),
+    }
+    return {
+        "strict_personal_numeric_fidelity": strict_personal,
+        "protected_numeric_tokens": {
+            field: extract_meditod_required_numeric_tokens(
+                text,
+                strict_personal=strict_personal,
+            )
+            for field, text in source_fields.items()
+        },
+        "excluded_citation_numbers": {
+            field: extract_medical_citation_numbers(text)
+            for field, text in source_fields.items()
+        },
+    }
 
 
 def validate_meditod_translation_fidelity(source_record: dict[str, Any], payload: dict[str, Any]) -> None:
@@ -1006,6 +1153,10 @@ def build_one_dpo_record(
         translation_payload.setdefault(
             "medical_fidelity_version", MEDITOD_MEDICAL_FIDELITY_VERSION
         )
+        translation_payload.setdefault(
+            "medical_fidelity_details",
+            meditod_translation_fidelity_details(source_record),
+        )
     japanese_record = {
         "conversation_id": source_record["conversation_id"],
         "turn_index": source_record["turn_index"],
@@ -1087,6 +1238,7 @@ def build_one_dpo_record(
         "generation_retry": translation_payload.get("generation_retry"),
         "numeric_fidelity_version": translation_payload.get("numeric_fidelity_version"),
         "medical_fidelity_version": translation_payload.get("medical_fidelity_version"),
+        "medical_fidelity_details": translation_payload.get("medical_fidelity_details"),
         "model_used_for_scoring": score_model,
         "model_used_for_translation": model,
         "model_used_for_rejected_generation": model,
@@ -1114,6 +1266,9 @@ def build_one_dpo_record(
             "generation_retry": translation_payload.get("generation_retry"),
             "numeric_fidelity_version": translation_payload.get("numeric_fidelity_version"),
             "medical_fidelity_version": translation_payload.get("medical_fidelity_version"),
+            "medical_fidelity_details": translation_payload.get(
+                "medical_fidelity_details"
+            ),
             "source_prompt_hash": hashlib.sha256(str(source_record.get("prompt", "")).encode("utf-8")).hexdigest(),
             "translated_prompt_hash": hashlib.sha256(translation_payload["translated_prompt"].encode("utf-8")).hexdigest(),
             "rejected_prompt_hash": hashlib.sha256(translation_payload["translated_prompt"].encode("utf-8")).hexdigest(),

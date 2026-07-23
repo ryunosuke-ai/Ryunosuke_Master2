@@ -32,6 +32,10 @@ from tools.meditod_evaluation import (
     select_eval_prompts,
 )
 from tools.prepare_meditod_personal_pool import audit_resume_records
+from tools.prepare_meditod_broad_pool import (
+    restore_broad_resume_records,
+    verify_broad_pool_artifacts,
+)
 from tools.promote_meditod_dpo_rescue import rescue_eligible
 from tools.score_dialogue_with_transition_bayes_model import (
     build_meditod_scoring_instructions,
@@ -39,6 +43,7 @@ from tools.score_dialogue_with_transition_bayes_model import (
 from tools.translate_and_generate_dpo import (
     MEDITOD_MEDICAL_FIDELITY_VERSION,
     meditod_translation_fidelity_errors,
+    missing_meditod_numeric_tokens,
     retry_meditod_translation_for_fidelity,
 )
 from tools.wildchat_health import extract_candidates, health_domain_flags
@@ -136,6 +141,40 @@ def test_wildchat_health_filter_is_domain_and_multiturn_only():
     assert "probing" not in all_text and "scaffolding" not in all_text
 
 
+def test_wildchat_broad_health_keeps_non_personal_multiturn_task():
+    config = load_yaml("configs/datasets/wildchat_health.yaml")
+    assert config["require_personal_consultation"] is False
+    rows = [
+        {
+            "language": "English",
+            "toxic": False,
+            "redacted": False,
+            "model": "gpt-4",
+            "conversation": [
+                {
+                    "role": "user",
+                    "content": "Please summarize this medical research article.",
+                },
+                {"role": "assistant", "content": "Which section should I summarize?"},
+                {"role": "user", "content": "Start with the diagnosis section."},
+                {"role": "assistant", "content": "What level of detail do you need?"},
+                {"role": "user", "content": "Also cover the treatment results."},
+                {"role": "assistant", "content": "Should I include limitations?"},
+                {"role": "user", "content": "Yes, include the clinical limitations too."},
+                {"role": "assistant", "content": "I will summarize those sections."},
+            ],
+        }
+    ]
+    general, _, _ = extract_candidates(
+        rows,
+        config,
+        progress_every=0,
+        checkpoint_every=0,
+    )
+    assert len(general) == 1
+    assert health_domain_flags(general[0], config)["personal"] is False
+
+
 def test_meditod_prompt_and_translation_fidelity():
     prompt = build_meditod_dpo_prompt(
         history_turns=[
@@ -156,7 +195,7 @@ def test_meditod_prompt_and_translation_fidelity():
     unsafe = {**good, "rejected_candidates": ["metformin 1000 mgを服用してください。"]}
     assert "explicit_unsafe_medical_advice" in meditod_translation_fidelity_errors(source, unsafe)
     assert has_explicit_unsafe_medical_advice("Take 500 mg of this medicine.")
-    assert MEDITOD_MEDICAL_FIDELITY_VERSION == "meditod_medical_fidelity.v2"
+    assert MEDITOD_MEDICAL_FIDELITY_VERSION == "meditod_medical_fidelity.v3"
 
 
 def test_meditod_fidelity_ignores_citation_numbers_but_keeps_clinical_numbers():
@@ -173,6 +212,33 @@ def test_meditod_fidelity_ignores_citation_numbers_but_keeps_clinical_numbers():
     assert meditod_translation_fidelity_errors(source, good) == {}
     bad = {**good, "translated_prompt": "薬を3日間服用しています。"}
     assert meditod_translation_fidelity_errors(source, bad)["prompt_numbers"] == ["500"]
+
+
+def test_meditod_fidelity_ignores_real_citation_series_and_geology_numbers():
+    citation_source = (
+        "Dopamine is linked to schizophrenia [144–146], receptor changes [147], "
+        "D2 affinity [4, 149], and imaging findings [150–178]."
+    )
+    assert missing_meditod_numeric_tokens(
+        citation_source,
+        "ドパミンは統合失調症や受容体変化、画像所見と関連します。",
+    ) == []
+    geology_source = (
+        "The extinction happened 252 million years ago. A later model used "
+        "720000 observations across 24 sections."
+    )
+    assert missing_meditod_numeric_tokens(
+        geology_source,
+        "大量絶滅は非常に古く、後のモデルでは多くの観測を使いました。",
+    ) == []
+    assert missing_meditod_numeric_tokens(
+        "I take 500 mg for my pain.",
+        "痛み止めを服用しています。",
+    ) == ["500"]
+    assert missing_meditod_numeric_tokens(
+        "My cough started 3 days ago.",
+        "咳が始まりました。",
+    ) == ["3"]
 
 
 def test_health_filter_uses_word_boundaries_and_requires_personal_consultation():
@@ -292,6 +358,102 @@ def test_resume_audit_keeps_domain_records_and_requeues_old_fidelity_errors():
     assert len(audit["accepted_quarantine"]) == 1
     assert len(audit["fidelity_retry"]) == 1
     assert len(audit["skipped"]) == 1
+
+
+def test_broad_pool_verification_and_resume_restore():
+    config = load_yaml("configs/datasets/wildchat_health.yaml")
+    conversation = {
+        "conversation_id": "health",
+        "turns": [
+            {"role": "user", "text": "I have had a cough for 3 days."},
+            {"role": "assistant", "text": "Do you take any medicine?"},
+            {"role": "user", "text": "No medicine."},
+        ],
+    }
+    source = {
+        "conversation_id": "health",
+        "turn_index": 1,
+        "prompt": "User: I have had a cough for 3 days.\nAI:",
+        "response": "Do you take any medicine?",
+        "metadata": {
+            "personal_health_consultation": True,
+            "protected_medical_terms": [],
+        },
+    }
+    manifest = {
+        "dataset": config["dataset_name"],
+        "revision": config["revision"],
+        "stream_shuffle_seed": 42,
+        "config": {**config, "require_personal_consultation": False},
+        "statistics": {
+            "stream_rows": 10,
+            "stream_exhausted": 1,
+            "general_conversations": 1,
+            "general_candidate_records": 1,
+        },
+    }
+    report = verify_broad_pool_artifacts(
+        config=config,
+        conversations=[conversation],
+        candidates=[source],
+        manifest=manifest,
+        statistics={"stream_exhausted": 1},
+        seed=42,
+    )
+    assert report["broad_candidate_records"] == 1
+    assert report["personal_filter_affects_main_eligibility"] is False
+
+    source_hash = __import__("hashlib").sha256(
+        source["prompt"].encode("utf-8")
+    ).hexdigest()
+    accepted = {
+        "source_dialogue_id": "health",
+        "turn_index": 1,
+        "prompt": "医療相談\nAI:",
+        "chosen": "3日間の咳なのですね。薬は服用していますか。",
+        "rejected": "分かりません。",
+        "raw_translated_prompt": "3日間、咳があります。",
+        "translated_chosen": "3日間の咳なのですね。薬は服用していますか。",
+        "score_chosen": 0.9,
+        "score_rejected": 0.4,
+        "score_gap": 0.5,
+        "model_used_for_translation": "terra",
+        "model_used_for_scoring": "terra",
+        "bayesian_model_version": "basis-v1",
+        "metadata": {
+            "source_prompt_hash": source_hash,
+            "translated_prompt_hash": "same",
+            "rejected_prompt_hash": "same",
+            "rejected_candidates": 4,
+            "protected_medical_terms": [],
+        },
+    }
+    fidelity_skip = {
+        "source_dialogue_id": "health",
+        "turn_index": 1,
+        "skip_reason": "sample_error",
+        "error_message": "MediTOD翻訳で医療情報が失われました: citation",
+        "source_prompt_hash": source_hash,
+    }
+    restored = restore_broad_resume_records(
+        sources=[source],
+        accepted=[],
+        skipped=[],
+        quarantined_accepted=[accepted],
+        quarantined_skipped=[fidelity_skip],
+        fidelity_retry=[],
+        expected_generation_model="terra",
+        expected_scoring_model="terra",
+        expected_bayes_version="basis-v1",
+        expected_candidates=4,
+        min_score_gap=0.20,
+        min_chosen_posterior=0.70,
+        max_rejected_posterior=0.55,
+    )
+    assert len(restored["accepted"]) == 1
+    assert restored["report"]["accepted_restored_from_personal_quarantine"] == 1
+    assert restored["report"]["fidelity_errors_requeued"] == 0
+    assert restored["accepted"][0]["medical_fidelity_version"].endswith(".v3")
 
 
 def test_ranked_rescue_requires_safe_same_context_pair():

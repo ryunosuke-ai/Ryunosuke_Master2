@@ -97,7 +97,8 @@ paths=[
  "tools/meditod_dataset.py","tools/prepare_meditod.py","tools/prepare_meditod_for_analysis.py",
  "tools/analyze_meditod_corpus_transition_bayes.py","tools/wildchat_health.py",
  "tools/prioritize_health_candidates.py","tools/meditod_selection.py","tools/measure_basis_selection_pool.py",
- "tools/prepare_meditod_personal_pool.py","tools/promote_meditod_dpo_rescue.py",
+ "tools/prepare_meditod_personal_pool.py","tools/prepare_meditod_broad_pool.py",
+ "tools/promote_meditod_dpo_rescue.py",
  "core/transition_bayes_model.py","tools/score_dialogue_with_transition_bayes_model.py",
  "tools/translate_and_generate_dpo.py","tools/build_random_dailydialog_dpo.py",
  "tools/prepare_meditod_gold.py","tools/mix_meditod_dpo.py","tools/meditod_evaluation.py",
@@ -120,8 +121,12 @@ if path.exists():
  current=json.loads(path.read_text())
  if current.get("experiment_fingerprint") != sys.argv[2]:
   migration=sys.argv[12]
-  if migration!="target3000_personal_health_fidelity_v2":
-   raise SystemExit("同じRUN_TAGの実験条件が変わっています。互換移行にはMEDITOD_RESUME_MIGRATION=target3000_personal_health_fidelity_v2を指定してください。")
+  allowed_migrations={
+   "target3000_personal_health_fidelity_v2",
+   "target3000_broad_health_fidelity_v3",
+  }
+  if migration not in allowed_migrations:
+   raise SystemExit("同じRUN_TAGの実験条件が変わっています。互換移行には対応するMEDITOD_RESUME_MIGRATIONを指定してください。")
   if current.get("run_tag")!=sys.argv[3] or current.get("seed")!=int(sys.argv[4]) or current.get("dataset_mode")!=sys.argv[11] or current.get("models")!=payload["models"]:
    raise SystemExit("再開移行で変更できないdataset/seed/model条件が一致しません。")
   history=list(current.get("migrations",[]))
@@ -134,6 +139,24 @@ if path.exists():
 path.parent.mkdir(parents=True,exist_ok=True)
 if not path.exists(): path.write_text(json.dumps(payload,ensure_ascii=False,indent=2)+"\n")
 PY
+
+if [[ "$MEDITOD_RESUME_MIGRATION" == "target3000_broad_health_fidelity_v3" ]]; then
+  MIGRATION_MARKER="$STATE_DIR/broad_health_fidelity_v3_migration_applied"
+  if [[ ! -f "$MIGRATION_MARKER" || "$(<"$MIGRATION_MARKER")" != "$FINGERPRINT" ]]; then
+    rm -f \
+      "$STATE_DIR/score_wildchat_SUCCESS.json" \
+      "$STATE_DIR/select_data_SUCCESS.json" \
+      "$STATE_DIR/build_dpo_SUCCESS.json" \
+      "$STATE_DIR/train_SUCCESS.json" \
+      "$STATE_DIR/prepare_eval_SUCCESS.json" \
+      "$STATE_DIR/generate_responses_SUCCESS.json" \
+      "$STATE_DIR/oracle_eval_SUCCESS.json" \
+      "$STATE_DIR/statistics_SUCCESS.json" \
+      "$STATE_DIR/report_SUCCESS.json" \
+      "$STATE_DIR/prepare_user_eval_SUCCESS.json"
+    printf '%s\n' "$FINGERPRINT" > "$MIGRATION_MARKER"
+  fi
+fi
 
 write_status() {
   python3 - "$STATUS_FILE" "$HEARTBEAT_FILE" "$RUN_TAG" "$1" "$2" "$3" <<'PY'
@@ -192,9 +215,9 @@ stage_outputs() {
     preprocess) printf '%s\n' "$MED_ROOT/data/meditod_conversations.jsonl" "$MED_ROOT/data/meditod_assistant_samples.jsonl" ;;
     build_basis) printf '%s\n' "$COMPAT_MODEL" "$OUTPUT_ROOT/basis_model/meditod_model_quality.json" ;;
     extract_wildchat) printf '%s\n' "$WILD_DIR/general_health_consultation_candidates.jsonl" "$WILD_DIR/manifest.json" ;;
-    score_wildchat) printf '%s\n' "$SCORED" "$OUTPUT_ROOT/scoring/selection_pool_progress.json" ;;
-    select_data) printf '%s\n' "$SELECT_DIR/basis_top.jsonl" "$SELECT_DIR/domain_random.jsonl" "$SELECT_DIR/topic_similarity_top.jsonl" ;;
-    build_dpo) printf '%s\n' "$DPO_DIR/meditod_basis_train.jsonl" "$DPO_DIR/meditod_random_train.jsonl" ;;
+    score_wildchat) printf '%s\n' "$SCORED" "$OUTPUT_ROOT/scoring/selection_pool_progress.json" "$WILD_DIR/reuse_manifest.json" ;;
+    select_data) printf '%s\n' "$SELECT_DIR/basis_top.jsonl" "$SELECT_DIR/domain_random.jsonl" "$SELECT_DIR/topic_similarity_top.jsonl" "$SELECT_DIR/selection_report.json" ;;
+    build_dpo) printf '%s\n' "$DPO_DIR/meditod_basis_train.jsonl" "$DPO_DIR/meditod_random_train.jsonl" "$DPO_DIR/broad_resume_manifest.json" ;;
     train) printf '%s\n' "$TRAIN_DIR/basis_lora/adapter_config.json" "$TRAIN_DIR/random_lora/adapter_config.json" ;;
     prepare_eval)
       printf '%s\n' "$EVAL_DIR/prompts_ja.jsonl" "$EVAL_DIR/prompts_all_ja.jsonl" "$EVAL_DIR/prompt_selection_manifest.json"
@@ -255,9 +278,9 @@ ANALYSIS_CORPUS="$OUTPUT_ROOT/basis_model/meditod_analysis_corpus.jsonl"
 ANALYSIS_AGGREGATES="$OUTPUT_ROOT/basis_model/meditod_train_aggregates.json"
 COMPAT_MODEL="$OUTPUT_ROOT/basis_model/meditod_transition_compat.json"
 WILD_DIR="$OUTPUT_ROOT/wildchat"
-EXPANDED_WILD_DIR="$WILD_DIR/personal_three_turn_expansion"
-PERSONAL_CANDIDATES="$WILD_DIR/personal_health_consultation_candidates_v2.jsonl"
-PRIORITIZED_CANDIDATES="$OUTPUT_ROOT/scoring/prioritized_personal_candidates_v2.jsonl"
+HEALTH_CONVERSATIONS="$WILD_DIR/general_health_consultation_conversations.jsonl"
+HEALTH_CANDIDATES="$WILD_DIR/general_health_consultation_candidates.jsonl"
+PRIORITIZED_CANDIDATES="$OUTPUT_ROOT/scoring/prioritized_candidates.jsonl"
 SCORED_RAW="$OUTPUT_ROOT/scoring/wildchat_scored_raw.jsonl"
 SCORED="$OUTPUT_ROOT/scoring/wildchat_scored.jsonl"
 SELECT_DIR="$OUTPUT_ROOT/selections"
@@ -312,62 +335,54 @@ reconcile_scoring() {
   fi
 }
 
-prepare_personal_pool() {
+prepare_broad_pool() {
   local audit="${1:-0}"
   local args=(
     --config configs/datasets/wildchat_health.yaml
-    --conversations "$WILD_DIR/general_health_consultation_conversations.jsonl"
-    --candidates "$WILD_DIR/general_health_consultation_candidates.jsonl"
-    --output "$PERSONAL_CANDIDATES"
-    --report "$WILD_DIR/personal_health_pool_report.json"
+    --conversations "$HEALTH_CONVERSATIONS"
+    --candidates "$HEALTH_CANDIDATES"
+    --manifest "$WILD_DIR/manifest.json"
+    --statistics "$WILD_DIR/statistics.json"
+    --reuse-manifest "$WILD_DIR/reuse_manifest.json"
+    --diagnostic-report "$WILD_DIR/broad_health_diagnostic_report.json"
+    --seed "$SEED"
   )
-  if [[ -f "$EXPANDED_WILD_DIR/manifest.json" ]]; then
-    args+=(
-      --conversations "$EXPANDED_WILD_DIR/general_health_consultation_conversations.jsonl"
-      --candidates "$EXPANDED_WILD_DIR/general_health_consultation_candidates.jsonl"
-    )
-  fi
   if [[ "$audit" == "1" ]]; then
+    args=(
+      --config configs/datasets/wildchat_health.yaml
+      --conversations "$HEALTH_CONVERSATIONS"
+      --candidates "$HEALTH_CANDIDATES"
+      --manifest "$WILD_DIR/manifest.json"
+      --statistics "$WILD_DIR/statistics.json"
+      --reuse-manifest "$DPO_DIR/broad_resume_manifest.json"
+      --diagnostic-report "$DPO_DIR/broad_resume_diagnostic.json"
+      --seed "$SEED"
+    )
     args+=(
       --accepted "$DPO_DIR/basis_selected_ja.jsonl"
       --skipped "$DPO_DIR/basis_selected_ja_skipped.jsonl"
       --quarantine-dir "$DPO_DIR/quarantine"
+      --bayes-model "$COMPAT_MODEL"
+      --generation-model "$GENERATION_MODEL"
+      --scoring-model "$SCORING_MODEL"
+      --rejected-candidates 4
+      --min-score-gap 0.20
+      --min-chosen-posterior 0.70
+      --max-rejected-posterior 0.55
     )
   fi
-  python3 -m tools.prepare_meditod_personal_pool "${args[@]}"
+  python3 -m tools.prepare_meditod_broad_pool "${args[@]}"
   python3 -m tools.prioritize_health_candidates \
-    --input "$PERSONAL_CANDIDATES" \
+    --input "$HEALTH_CANDIDATES" \
     --output "$PRIORITIZED_CANDIDATES" \
-    --report "$OUTPUT_ROOT/scoring/personal_candidate_priority_report.json" \
+    --report "$OUTPUT_ROOT/scoring/candidate_priority_report.json" \
     --seed "$SEED"
 }
 
-expand_personal_pool() {
-  if [[ ! -f "$EXPANDED_WILD_DIR/manifest.json" ]]; then
-    local args=(
-      --config configs/datasets/wildchat_health.yaml
-      --output-dir "$EXPANDED_WILD_DIR"
-      --seed "$SEED"
-      --checkpoint-every "$WILDCHAT_CHECKPOINT_EVERY"
-      --heartbeat-file "$HEARTBEAT_FILE"
-      --minimum-user-turns 3
-      --require-personal-consultation
-    )
-    if [[ "$DRY_RUN" == "1" ]]; then
-      args+=(--fixture tests/fixtures/wildchat_health.jsonl)
-    else
-      [[ -n "$LIMIT" ]] && args+=(--limit "$LIMIT")
-    fi
-    python3 -m tools.wildchat_health "${args[@]}"
-  fi
-  prepare_personal_pool 0
-}
-
-measure_personal_selection_pool() {
+measure_selection_pool() {
   local required="$1"
   python3 -m tools.measure_basis_selection_pool \
     --input "$SCORED" \
-    --allowed-records "$PERSONAL_CANDIDATES" \
     --bayes-model "$COMPAT_MODEL" \
     --output "$OUTPUT_ROOT/scoring/selection_pool_progress.json" \
     --history "$OUTPUT_ROOT/scoring/selection_pool_history.jsonl" \
@@ -379,7 +394,7 @@ measure_personal_selection_pool() {
     --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS"
 }
 
-score_next_personal_batch() {
+score_next_batch() {
   local before after
   before="$(wc -l < "$SCORED_RAW")"
   retry_command python3 -m tools.score_dialogue_with_transition_bayes_model \
@@ -396,26 +411,6 @@ score_next_personal_batch() {
     --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" \
     --fallback-on-errors
   after="$(wc -l < "$SCORED_RAW")"
-  if (( after == before )); then
-    if [[ ! -f "$EXPANDED_WILD_DIR/manifest.json" ]]; then
-      echo "[adaptive scoring] 4-turn個人健康相談を処理済みのため3-turn集合へ拡張します。"
-      expand_personal_pool
-      retry_command python3 -m tools.score_dialogue_with_transition_bayes_model \
-        --input "$PRIORITIZED_CANDIDATES" \
-        --bayes-model "$COMPAT_MODEL" \
-        --output "$SCORED_RAW" \
-        --model "$SCORING_MODEL" \
-        --workers "$WORKERS" \
-        --max-new-records "$SCORING_BATCH_RECORDS" \
-        --scoring-preset "$SCORING_PRESET" \
-        --invalid-observation-retries 2 \
-        --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" \
-        --rate-limit-max-retries "$SCORING_RATE_LIMIT_MAX_RETRIES" \
-        --rate-limit-initial-backoff-seconds "$SCORING_RATE_LIMIT_BACKOFF_SECONDS" \
-        --fallback-on-errors
-      after="$(wc -l < "$SCORED_RAW")"
-    fi
-  fi
   (( after > before )) || return 21
   reconcile_scoring
 }
@@ -423,7 +418,7 @@ score_next_personal_batch() {
 score_wildchat_stage() {
   mkdir -p "$OUTPUT_ROOT/scoring"
   local pilot="$SCORING_PILOT_RECORDS"
-  prepare_personal_pool 0
+  prepare_broad_pool 0
   if [[ "$DRY_RUN" == "1" ]]; then
     python3 -m tools.meditod_pipeline_support mock-score --input "$PRIORITIZED_CANDIDATES" --output "$SCORED_RAW" --bayes-model "$COMPAT_MODEL"
     pilot="$(wc -l < "$SCORED_RAW")"
@@ -432,13 +427,13 @@ score_wildchat_stage() {
   fi
   python3 -m tools.validate_mathdial_scoring_pilot --input "$SCORED_RAW" --bayes-model "$COMPAT_MODEL" --output "$OUTPUT_ROOT/scoring/pilot_diagnostics.json" --required-records "$pilot" --max-fallback-rate 0.01 --max-invalid-rate 0.01 --min-observations 2
   reconcile_scoring
-  [[ "$DRY_RUN" == "1" ]] && { measure_personal_selection_pool 2 || true; return; }
+  [[ "$DRY_RUN" == "1" ]] && { measure_selection_pool 2 || true; return; }
   while true; do
-    measure_personal_selection_pool "$DPO_INITIAL_SELECTION_POOL_COUNT"
+    measure_selection_pool "$DPO_INITIAL_SELECTION_POOL_COUNT"
     local eligible
     eligible="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["eligible_records"])' "$OUTPUT_ROOT/scoring/selection_pool_progress.json")"
     (( eligible >= DPO_INITIAL_SELECTION_POOL_COUNT )) && break
-    score_next_personal_batch || {
+    score_next_batch || {
       [[ "$?" == "21" ]] && break
       return 1
     }
@@ -447,20 +442,26 @@ score_wildchat_stage() {
 }
 
 select_data_stage() {
+  local requested_random_count="${1:-0}"
   local count random_count
   if [[ "$DRY_RUN" == "1" ]]; then count=2; random_count=2; else
     local eligible; eligible="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["eligible_records"])' "$OUTPUT_ROOT/scoring/selection_pool_progress.json")"
     count="$eligible"
-    random_count="$(wc -l < "$PERSONAL_CANDIDATES")"
+    local broad_count
+    broad_count="$(wc -l < "$HEALTH_CANDIDATES")"
+    random_count=$(( RANDOM_DPO_COUNT * 2 ))
+    (( random_count < count )) && random_count="$count"
+    (( requested_random_count > random_count )) && random_count="$requested_random_count"
+    (( random_count > broad_count )) && random_count="$broad_count"
     (( count > 0 )) || { echo "BASiS選別候補がありません。" >&2; return 20; }
-    (( random_count >= RANDOM_DPO_COUNT )) || { echo "個人健康相談のRandom候補が不足しています: $random_count/$RANDOM_DPO_COUNT" >&2; return 20; }
+    (( random_count >= RANDOM_DPO_COUNT )) || { echo "広域健康Random候補が不足しています: $random_count/$RANDOM_DPO_COUNT" >&2; return 20; }
   fi
-  python3 -m tools.meditod_selection --scored "$SCORED" --allowed-records "$PERSONAL_CANDIDATES" --domain-candidates "$PERSONAL_CANDIDATES" --meditod-conversations "$MED_CONV" --bayes-model "$COMPAT_MODEL" --output-dir "$SELECT_DIR" --count "$count" --random-count "$random_count" --seed "$SEED" --selection-margin 0.05 --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS"
+  python3 -m tools.meditod_selection --scored "$SCORED" --domain-candidates "$HEALTH_CANDIDATES" --meditod-conversations "$MED_CONV" --wildchat-conversations "$HEALTH_CONVERSATIONS" --health-config configs/datasets/wildchat_health.yaml --bayes-model "$COMPAT_MODEL" --output-dir "$SELECT_DIR" --count "$count" --random-count "$random_count" --seed "$SEED" --selection-margin 0.05 --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS"
 }
 
 extend_scoring_selection() {
-  score_next_personal_batch || return $?
-  measure_personal_selection_pool "$DPO_INITIAL_SELECTION_POOL_COUNT"
+  score_next_batch || return $?
+  measure_selection_pool "$DPO_INITIAL_SELECTION_POOL_COUNT"
   select_data_stage
   # build_dpo中の追加scoringでselection成果物が変わるため、古いhash markerを残さない。
   rm -f "$STATE_DIR/select_data_SUCCESS.json"
@@ -470,9 +471,9 @@ build_dpo_stage() {
   mkdir -p "$DPO_DIR"
   local basis="$BASIS_SELECTED_COUNT" gold="$GOLD_DPO_COUNT" random="$RANDOM_DPO_COUNT" gold_source=1200
   [[ "$DRY_RUN" == "1" ]] && { basis=1; gold=1; random=2; gold_source=2; }
-  prepare_personal_pool 1
+  prepare_broad_pool 1
   reconcile_scoring
-  measure_personal_selection_pool "$DPO_INITIAL_SELECTION_POOL_COUNT"
+  measure_selection_pool "$DPO_INITIAL_SELECTION_POOL_COUNT"
   if [[ "$DRY_RUN" != "1" ]]; then
     while true; do
       local initial_eligible
@@ -503,7 +504,7 @@ build_dpo_stage() {
       set -e
       if (( extend_status != 0 )); then
         (( extend_status == 21 )) || return "$extend_status"
-        echo "[adaptive scoring] 全個人健康相談候補を処理したため順位救済を実行します。"
+        echo "[adaptive scoring] 全広域健康候補を処理したため順位救済を実行します。"
         python3 -m tools.promote_meditod_dpo_rescue \
           --accepted "$DPO_DIR/basis_selected_ja.jsonl" \
           --skipped "$DPO_DIR/basis_selected_ja_skipped.jsonl" \
@@ -516,7 +517,23 @@ build_dpo_stage() {
       fi
     done
     retry_command python3 -m tools.translate_and_generate_dpo --input "$DPO_DIR/gold_candidates_en.jsonl" --bayes-model "$COMPAT_MODEL" --output "$DPO_DIR/meditod_gold_ja.jsonl" --model "$GENERATION_MODEL" --score-model "$SCORING_MODEL" --style-preset meditod_history_taking --candidates 4 --max-output-tokens "$DPO_MAX_OUTPUT_TOKENS" --max-source-characters "$DPO_MAX_SOURCE_CHARACTERS" --min-score-gap 0.20 --min-chosen-posterior 0.70 --max-rejected-posterior 0.55 --target-records "$gold" --workers "$WORKERS" --skip-sample-errors --heartbeat-file "$HEARTBEAT_FILE" --heartbeat-stage-prefix gold_dpo --seed "$SEED"
-    retry_command python3 -m tools.build_random_dailydialog_dpo --input "$SELECT_DIR/domain_random.jsonl" --source-dataset WildChat --prompt-preset meditod_history_taking --output "$DPO_DIR/random_ja.jsonl" --daily-output "$DPO_DIR/random_ja.jsonl" --target-records "$random" --candidates 1 --max-output-tokens "$DPO_MAX_OUTPUT_TOKENS" --model "$GENERATION_MODEL" --workers "$WORKERS" --skip-sample-errors --heartbeat-file "$HEARTBEAT_FILE" --seed "$SEED"
+    local random_selection_count=$(( random * 2 ))
+    while true; do
+      retry_command python3 -m tools.build_random_dailydialog_dpo --input "$SELECT_DIR/domain_random.jsonl" --source-dataset WildChat --prompt-preset meditod_history_taking --output "$DPO_DIR/random_ja.jsonl" --daily-output "$DPO_DIR/random_ja.jsonl" --target-records "$random" --candidates 1 --max-output-tokens "$DPO_MAX_OUTPUT_TOKENS" --model "$GENERATION_MODEL" --workers "$WORKERS" --skip-sample-errors --allow-target-shortfall --heartbeat-file "$HEARTBEAT_FILE" --seed "$SEED"
+      local random_accepted broad_count
+      random_accepted="$(wc -l < "$DPO_DIR/random_ja.jsonl")"
+      (( random_accepted >= random )) && break
+      broad_count="$(wc -l < "$HEALTH_CANDIDATES")"
+      (( random_selection_count < broad_count )) || {
+        echo "全広域健康候補を使ってもRandom DPOが不足しました: $random_accepted/$random" >&2
+        return 20
+      }
+      random_selection_count=$(( random_selection_count + random ))
+      (( random_selection_count > broad_count )) && random_selection_count="$broad_count"
+      echo "[adaptive random] 候補を${random_selection_count}件へ拡張します。"
+      select_data_stage "$random_selection_count"
+      rm -f "$STATE_DIR/select_data_SUCCESS.json"
+    done
   fi
   python3 -m tools.mix_meditod_dpo --basis "$DPO_DIR/basis_selected_ja.jsonl" --gold "$DPO_DIR/meditod_gold_ja.jsonl" --random "$DPO_DIR/random_ja.jsonl" --basis-output "$DPO_DIR/meditod_basis_train.jsonl" --random-output "$DPO_DIR/meditod_random_train.jsonl" --basis-count "$basis" --gold-count "$gold" --random-count "$random"
 }

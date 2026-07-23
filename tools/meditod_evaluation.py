@@ -238,7 +238,12 @@ def evaluation_translation_fidelity_errors(
         ]
     )
     errors: dict[str, list[str]] = {}
-    missing_numbers = missing_meditod_numeric_tokens(source_text, translated_text)
+    # MediTOD本体は患者・医療者対話なので、引用番号を除く数値を厳格に保持する。
+    missing_numbers = missing_meditod_numeric_tokens(
+        source_text,
+        translated_text,
+        strict_personal=True,
+    )
     if missing_numbers:
         errors["numbers"] = missing_numbers
     if ENGLISH_NEGATION.search(source_text) and not JAPANESE_NEGATION.search(translated_text):

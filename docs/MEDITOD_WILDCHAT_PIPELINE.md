@@ -43,11 +43,13 @@ MediTOD train
 | `report` | run内の統計と監査情報をMarkdown化 |
 | `prepare_user_eval` | Oracle上のBASiS優位項目から副次的人手評価A/Bを作成 |
 
-`score_wildchat / build_dpo`は固定clean pool上限を持たない。4 user turns以上の
-個人健康相談を優先し、BASiS採択が不足した場合だけ3 user turns以上へ拡張する。
-個人健康相談判定は`wildchat_personal_health.v3`で固定し、同じuser発話内の
-本人・家族の症状または服薬情報を要求する。文章作成、要約、課題、創作へ
-途中で移る長大セッションは、医学語を含んでいても候補から除外する。
+`score_wildchat / build_dpo`は固定clean pool上限を持たない。主候補は
+`wildchat_health_broad.v4`の広域健康ドメイン集合であり、4 user turns以上、
+assistant後の追加情報、健康関連性を粗条件とする。本人の症状相談、論文要約、
+文章作成、教育用途などの用途分類は主実験の採否に使わない。個人健康相談判定は
+診断用ablationとして集計するだけで、BASiSが状態・戦略・遷移に基づいて
+目的スタイルを選別する。
+
 未処理候補を3,000件単位でscoring・再選別し、全候補を使い切った場合だけ、
 安全性、同一context、`chosen > rejected`、score gap 0.10以上を満たす
 厳格基準未達ペアを順位救済する。救済件数と条件はmanifestへ保存する。
@@ -91,16 +93,18 @@ PYTHONUNBUFFERED=1 \
 
 stage単独または範囲再開は、同じ`RUN_TAG`と同じ実験条件を維持して`START_STAGE / END_STAGE`を指定する。config、モデル、件数等が変わる場合は新しい`RUN_TAG`を使う。
 
-旧v2のscoringと採択済みDPOを品質監査して再利用する場合は、次の互換移行名を
-明示する。新しい個人健康相談filterに合格した採択済みレコードは継承し、
-非健康相談は`dpo/quarantine/`へ隔離する。旧fidelity検査だけで失敗した
-サンプルは医療情報保持検査v2で再評価する。
+旧v2の全体走査、scoring、採択済みDPOを品質監査して再利用する場合は、
+次の互換移行名を明示する。全体走査済みartifactはdataset revision、seed、
+件数、file hashを検証し、`reuse_manifest.json`へ保存する。strict personal
+filterで隔離された採択結果は、source/prompt/model/Bayes/threshold/contextと
+医療情報保持検査v3を通過したものだけ復元する。元quarantineは監査履歴として
+変更しない。旧fidelity検査だけで失敗したサンプルは再処理する。
 
 ```bash
 RUN_TAG=meditod_wildchat_gpt56_v2 \
 MEDITOD_DATA_TERMS_CONFIRMED=1 \
-MEDITOD_RESUME_MIGRATION=target3000_personal_health_fidelity_v2 \
-START_STAGE=build_dpo \
+MEDITOD_RESUME_MIGRATION=target3000_broad_health_fidelity_v3 \
+START_STAGE=score_wildchat \
 END_STAGE=prepare_user_eval \
 WORKERS=4 \
 SCORING_REQUESTS_PER_MINUTE=120 \
@@ -109,6 +113,11 @@ EVAL_CUDA_VISIBLE_DEVICES=0,1 \
 PYTHONUNBUFFERED=1 \
 ./scripts/run_meditod_wildchat_watchdog.sh
 ```
+
+医療情報保持検査v3は、角括弧内の論文引用番号と非臨床文書の識別番号を
+保持対象から外す。一方、個人相談の数値、投薬量、期間、年齢、バイタル、
+検査値などは保持し、不一致時はprompt/chosen翻訳だけを最大2回修復する。
+rejected候補は修復時に再生成しない。
 
 ## 人手評価
 

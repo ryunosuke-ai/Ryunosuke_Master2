@@ -11,6 +11,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from core.mathdial_basis import load_yaml
 from core.transition_bayes_model import load_transition_bayes_model
 from tools.extract_high_posterior_dialogues import (
     derive_selection_label_diagnostics,
@@ -18,8 +19,11 @@ from tools.extract_high_posterior_dialogues import (
     select_high_posterior_records,
 )
 from tools.mathdial_selection import length_summary, mmr_select, source_text_characters
+from tools.wildchat_health import (
+    has_explicit_unsafe_medical_advice,
+    health_conversation_diagnostic_category,
+)
 from tools.wildchat_tutoring import tokenize
-from tools.wildchat_health import has_explicit_unsafe_medical_advice
 
 
 def read_jsonl(path: Path | str) -> list[dict[str, Any]]:
@@ -141,6 +145,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="MediTOD WildChat 3群選別")
     parser.add_argument("--scored", required=True)
     parser.add_argument("--meditod-conversations", required=True)
+    parser.add_argument("--wildchat-conversations")
+    parser.add_argument(
+        "--health-config",
+        default="configs/datasets/wildchat_health.yaml",
+    )
     parser.add_argument("--bayes-model", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--count", type=int, default=2000)
@@ -214,6 +223,30 @@ def main() -> int:
             for row in scored
         ),
     }
+    if args.wildchat_conversations:
+        health_config = load_yaml(args.health_config)
+        categories = {
+            str(row["conversation_id"]): health_conversation_diagnostic_category(
+                row,
+                health_config,
+            )
+            for row in read_jsonl(args.wildchat_conversations)
+        }
+        report["diagnostic_category_coverage"] = {
+            name: dict(
+                Counter(
+                    categories.get(
+                        str(row["conversation_id"]),
+                        "unknown",
+                    )
+                    for row in rows
+                )
+            )
+            for name, rows in groups.items()
+        }
+        report["diagnostic_category_policy"] = (
+            "diagnostic_only; not used for selection eligibility"
+        )
     output.mkdir(parents=True, exist_ok=True)
     (output / "selection_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return 0
