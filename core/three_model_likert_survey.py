@@ -21,6 +21,8 @@ RESPONSE_POSITIONS = ("A", "B", "C")
 LIKERT_MIN = 1
 LIKERT_MAX = 7
 FINAL_CHOICES = ("応答A", "応答B", "応答C", "ほぼ同じ", "判断できない")
+FINAL_CHOICE_REASON_QUESTION = "そう選んだ理由を教えてください。"
+LEGACY_FINAL_CHOICE_REASON = "理由なし"
 
 
 @dataclass(frozen=True)
@@ -140,11 +142,21 @@ def initialize_database(path: Path, definition: dict[str, Any]) -> None:
             CREATE TABLE IF NOT EXISTS responses (
               participant_id TEXT NOT NULL, experiment TEXT NOT NULL CHECK (experiment IN ('A','B')),
               item_id TEXT NOT NULL, ratings_json TEXT NOT NULL, final_choice TEXT NOT NULL,
+              final_choice_reason TEXT NOT NULL DEFAULT '理由なし',
               comment TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
               PRIMARY KEY (participant_id,item_id),
               FOREIGN KEY (participant_id) REFERENCES participants(participant_id) ON DELETE CASCADE);
             """
         )
+        response_columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(responses)").fetchall()
+        }
+        if "final_choice_reason" not in response_columns:
+            connection.execute(
+                "ALTER TABLE responses ADD COLUMN final_choice_reason "
+                "TEXT NOT NULL DEFAULT '理由なし'"
+            )
         expected = {"survey_version": definition["survey_version"], "dataset": definition["dataset"]}
         for key, value in expected.items():
             row = connection.execute("SELECT value FROM survey_metadata WHERE key=?", (key,)).fetchone()
@@ -186,19 +198,47 @@ def validate_ratings(ratings: dict[str, dict[str, int]], definition: dict[str, A
             raise ValueError(f"{axis}: 評価値は1〜7の整数です。")
 
 
-def save_response(path: Path, definition: dict[str, Any], *, participant: Participant, item_id: str, ratings: dict[str, dict[str, int]], final_choice: str, comment: str) -> bool:
+def save_response(
+    path: Path,
+    definition: dict[str, Any],
+    *,
+    participant: Participant,
+    item_id: str,
+    ratings: dict[str, dict[str, int]],
+    final_choice: str,
+    final_choice_reason: str,
+    comment: str,
+) -> bool:
     validate_ratings(ratings, definition)
     if final_choice not in FINAL_CHOICES:
         raise ValueError("最終選択が不正です。")
+    normalized_reason = final_choice_reason.strip()
+    if not normalized_reason:
+        raise ValueError("最終選択の理由を入力してください。")
     initialize_database(path, definition)
     now = utc_now()
     with connect_database(path) as connection:
         existing = connection.execute("SELECT 1 FROM responses WHERE participant_id=? AND item_id=?", (participant.participant_id, item_id)).fetchone()
         connection.execute(
-            """INSERT INTO responses VALUES (?,?,?,?,?,?,?,?)
+            """INSERT INTO responses(
+                participant_id,experiment,item_id,ratings_json,final_choice,
+                final_choice_reason,comment,created_at,updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?)
             ON CONFLICT(participant_id,item_id) DO UPDATE SET ratings_json=excluded.ratings_json,
-            final_choice=excluded.final_choice,comment=excluded.comment,updated_at=excluded.updated_at""",
-            (participant.participant_id, participant.experiment, item_id, json.dumps(ratings, ensure_ascii=False), final_choice, comment.strip(), now, now),
+            final_choice=excluded.final_choice,
+            final_choice_reason=excluded.final_choice_reason,
+            comment=excluded.comment,updated_at=excluded.updated_at""",
+            (
+                participant.participant_id,
+                participant.experiment,
+                item_id,
+                json.dumps(ratings, ensure_ascii=False),
+                final_choice,
+                normalized_reason,
+                comment.strip(),
+                now,
+                now,
+            ),
         )
     return existing is None
 
@@ -215,7 +255,21 @@ def export_responses_csv(path: Path, definition: dict[str, Any], output: Path) -
     with connect_database(path) as connection:
         rows = connection.execute("SELECT p.full_name,p.participant_id,p.experiment,p.consented_at,r.* FROM responses r JOIN participants p ON p.participant_id=r.participant_id ORDER BY p.created_at,r.item_id").fetchall()
     output.parent.mkdir(parents=True, exist_ok=True)
-    fields = ["dataset", "full_name", "participant_id", "experiment", "item_id", "axis_key", "response_position", "rating", "final_choice", "comment", "created_at", "updated_at"]
+    fields = [
+        "dataset",
+        "full_name",
+        "participant_id",
+        "experiment",
+        "item_id",
+        "axis_key",
+        "response_position",
+        "rating",
+        "final_choice",
+        "final_choice_reason",
+        "comment",
+        "created_at",
+        "updated_at",
+    ]
     written = 0
     with output.open("w", encoding="utf-8-sig", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=fields); writer.writeheader()
@@ -223,7 +277,23 @@ def export_responses_csv(path: Path, definition: dict[str, Any], output: Path) -
             ratings = json.loads(row["ratings_json"])
             for axis in axis_keys(definition):
                 for position in RESPONSE_POSITIONS:
-                    writer.writerow({"dataset": definition["dataset"], "full_name": row["full_name"], "participant_id": row["participant_id"], "experiment": row["experiment"], "item_id": row["item_id"], "axis_key": axis, "response_position": position, "rating": ratings[axis][position], "final_choice": row["final_choice"], "comment": row["comment"], "created_at": row["created_at"], "updated_at": row["updated_at"]})
+                    writer.writerow(
+                        {
+                            "dataset": definition["dataset"],
+                            "full_name": row["full_name"],
+                            "participant_id": row["participant_id"],
+                            "experiment": row["experiment"],
+                            "item_id": row["item_id"],
+                            "axis_key": axis,
+                            "response_position": position,
+                            "rating": ratings[axis][position],
+                            "final_choice": row["final_choice"],
+                            "final_choice_reason": row["final_choice_reason"],
+                            "comment": row["comment"],
+                            "created_at": row["created_at"],
+                            "updated_at": row["updated_at"],
+                        }
+                    )
                     written += 1
     return written
 

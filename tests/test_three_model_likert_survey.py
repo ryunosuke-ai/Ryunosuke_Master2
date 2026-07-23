@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import sqlite3
 from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
@@ -70,7 +71,16 @@ def test_sqlite_assignment_resume_export_and_statistics(tmp_path: Path):
     participant, created = assign_participant(database, definition, "研究 太郎", requested_experiment="A")
     assert created
     item_id = private[0]["item_id"]
-    save_response(database, definition, participant=participant, item_id=item_id, ratings=complete_ratings(definition, 6), final_choice=FINAL_CHOICES[0], comment="確認")
+    save_response(
+        database,
+        definition,
+        participant=participant,
+        item_id=item_id,
+        ratings=complete_ratings(definition, 6),
+        final_choice=FINAL_CHOICES[0],
+        final_choice_reason="不足情報を具体的に聞いているため",
+        comment="確認",
+    )
     resumed, created_again = assign_participant(database, definition, " 研究  太郎 ", requested_experiment="A")
     assert not created_again and resumed.participant_id == participant.participant_id
     assert item_id in load_participant_responses(database, definition, participant.participant_id)
@@ -78,13 +88,60 @@ def test_sqlite_assignment_resume_export_and_statistics(tmp_path: Path):
     written = export_responses_csv(database, definition, output)
     assert written == len(axis_keys(definition)) * 3
     with output.open(encoding="utf-8-sig") as file:
-        assert next(csv.DictReader(file))["full_name"] == "研究 太郎"
+        first_row = next(csv.DictReader(file))
+    assert first_row["full_name"] == "研究 太郎"
+    assert first_row["final_choice_reason"].startswith("不足情報")
     mapping = {row["item_id"]: row["position_to_model"] for row in private}
     values, choices = load_ratings(database, mapping)
     assert choices
     # 参加者が1名だけのため検定表は空だが、復号済み構造は保持される。
     assert values
     assert analyze(values, permutations=10, bootstrap=10, seed=42) == ([], [], [])
+
+
+def test_generic_existing_database_migrates_reason_column(tmp_path: Path):
+    definition = load_definition(
+        Path("configs/user_evaluations/meditod_likert_v1.yaml")
+    )
+    database = tmp_path / "legacy.sqlite3"
+    participant, _ = assign_participant(database, definition, "既存 医療回答者")
+    with sqlite3.connect(database) as connection:
+        connection.execute("ALTER TABLE responses RENAME TO responses_new")
+        connection.execute(
+            """
+            CREATE TABLE responses (
+                participant_id TEXT NOT NULL,
+                experiment TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                ratings_json TEXT NOT NULL,
+                final_choice TEXT NOT NULL,
+                comment TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (participant_id, item_id)
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO responses VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                participant.participant_id,
+                participant.experiment,
+                "item_01",
+                json.dumps(complete_ratings(definition, 6)),
+                FINAL_CHOICES[0],
+                "",
+                "created",
+                "updated",
+            ),
+        )
+        connection.execute("DROP TABLE responses_new")
+    loaded = load_participant_responses(
+        database,
+        definition,
+        participant.participant_id,
+    )
+    assert loaded["item_01"]["final_choice_reason"] == "理由なし"
 
 
 def test_streamlit_generic_layout_and_dataset_specific_text(tmp_path: Path, monkeypatch):
@@ -104,5 +161,10 @@ def test_streamlit_generic_layout_and_dataset_specific_text(tmp_path: Path, monk
     assert not app.exception
     assert app.title[0].value == "医療面接応答の評価"
     assert len(app.radio) == len(axis_keys(definition)) * 3 + 1
+    assert any(
+        area.label == "そう選んだ理由を教えてください。"
+        for area in app.text_area
+    )
     assert any("reference-panel" in block.value for block in app.markdown)
+    assert any("評価の目安" in block.value for block in app.markdown)
     assert any("position: fixed" in block.value and "evaluation_navigation" in block.value for block in app.markdown)

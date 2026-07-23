@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -130,6 +131,7 @@ def test_response_upsert_resume_and_csv_export(tmp_path: Path):
         item_id="item_01",
         ratings=complete_ratings(6),
         final_choice="応答B",
+        final_choice_reason="会話に合っているため",
         comment="最初の回答",
     )
     updated = save_response(
@@ -138,6 +140,7 @@ def test_response_upsert_resume_and_csv_export(tmp_path: Path):
         item_id="item_01",
         ratings=complete_ratings(7),
         final_choice="応答A",
+        final_choice_reason="気持ちを具体的に受け止めているため",
         comment="修正済み",
     )
     responses = load_participant_responses(database, participant.participant_id)
@@ -145,6 +148,7 @@ def test_response_upsert_resume_and_csv_export(tmp_path: Path):
     assert updated is False
     assert responses["item_01"]["ratings"]["style_strength"]["A"] == 7
     assert responses["item_01"]["final_choice"] == "応答A"
+    assert responses["item_01"]["final_choice_reason"].startswith("気持ち")
 
     output = tmp_path / "responses.csv"
     written = export_responses_csv(database, output)
@@ -152,6 +156,46 @@ def test_response_upsert_resume_and_csv_export(tmp_path: Path):
         rows = list(csv.DictReader(file))
     assert written == len(EXPECTED_AXIS_KEYS) * len(RESPONSE_POSITIONS)
     assert rows[0]["full_name"] == "研究 太郎"
+    assert rows[0]["final_choice_reason"].startswith("気持ち")
+
+
+def test_existing_database_adds_reason_without_losing_responses(tmp_path: Path):
+    database = tmp_path / "legacy.sqlite3"
+    participant, _ = assign_participant(database, "既存 回答者")
+    with sqlite3.connect(database) as connection:
+        connection.execute("ALTER TABLE responses RENAME TO responses_new")
+        connection.execute(
+            """
+            CREATE TABLE responses (
+                participant_id TEXT NOT NULL,
+                experiment TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                ratings_json TEXT NOT NULL,
+                final_choice TEXT NOT NULL,
+                comment TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (participant_id, item_id)
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO responses VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                participant.participant_id,
+                participant.experiment,
+                "item_01",
+                json.dumps(complete_ratings()),
+                "応答A",
+                "",
+                "created",
+                "updated",
+            ),
+        )
+        connection.execute("DROP TABLE responses_new")
+    responses = load_participant_responses(database, participant.participant_id)
+    assert responses["item_01"]["final_choice"] == "応答A"
+    assert responses["item_01"]["final_choice_reason"] == "理由なし"
 
 
 def test_reference_html_escapes_input_and_contains_all_responses():
@@ -161,6 +205,9 @@ def test_reference_html_escapes_input_and_contains_all_responses():
     assert "<script>" not in rendered
     assert "&lt;script&gt;" in rendered
     assert all(f"応答{position}" in rendered for position in RESPONSE_POSITIONS)
+    assert "評価の目安" in rendered
+    assert "良い例" in rendered
+    assert "良くない例2" in rendered
 
 
 def test_readable_text_html_adds_sentence_breaks_without_changing_text():
@@ -185,12 +232,20 @@ def test_missing_evaluation_fields_prevent_incomplete_submission():
         for axis_key in EXPECTED_AXIS_KEYS
     }
     ratings["style_strength"]["B"] = None
-    assert find_missing_evaluation_fields(ratings, None) == [
+    assert find_missing_evaluation_fields(ratings, None, "") == [
         "質問1・応答B",
         "最後の質問",
+        "選んだ理由",
     ]
     ratings["style_strength"]["B"] = 6
-    assert find_missing_evaluation_fields(ratings, "応答A") == []
+    assert find_missing_evaluation_fields(ratings, "応答A", "") == [
+        "選んだ理由"
+    ]
+    assert find_missing_evaluation_fields(
+        ratings,
+        "応答A",
+        "具体的に受け止めているため",
+    ) == []
 
 
 def test_streamlit_start_and_evaluation_screens_render(tmp_path: Path, monkeypatch):
@@ -209,6 +264,10 @@ def test_streamlit_start_and_evaluation_screens_render(tmp_path: Path, monkeypat
     assert not app.exception
     assert app.title[0].value == "相談支援応答の評価"
     assert len(app.radio) == 22
+    assert any(
+        area.label == "そう選んだ理由を教えてください。"
+        for area in app.text_area
+    )
     assert [radio.label for radio in app.radio[:3]] == ["応答A", "応答B", "応答C"]
     assert any("reference-panel" in block.value for block in app.markdown)
     assert any(
@@ -284,6 +343,7 @@ def test_streamlit_same_name_resumes_first_unanswered_item(tmp_path: Path, monke
         item_id="item_01",
         ratings=complete_ratings(6),
         final_choice="応答A",
+        final_choice_reason="理由を記録",
         comment="",
     )
     monkeypatch.setenv("ESCONV_SURVEY_DATABASE", database.as_posix())

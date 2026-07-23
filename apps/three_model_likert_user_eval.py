@@ -23,6 +23,7 @@ from apps.esconv_likert_user_eval import (  # noqa: E402
     reset_evaluation_scroll,
 )
 from core.three_model_likert_survey import (  # noqa: E402
+    FINAL_CHOICE_REASON_QUESTION,
     FINAL_CHOICES,
     RESPONSE_POSITIONS,
     Participant,
@@ -57,7 +58,10 @@ def requested_experiment() -> str | None:
     return value
 
 
-def build_reference_html(item: dict[str, Any]) -> str:
+def build_reference_html(
+    item: dict[str, Any],
+    definition: dict[str, Any],
+) -> str:
     parts = [
         '<div class="reference-panel">',
         '<div class="reference-heading">これまでの会話</div>',
@@ -72,6 +76,31 @@ def build_reference_html(item: dict[str, Any]) -> str:
                 "</div>",
             ]
         )
+    example = definition["example"]
+    poor_examples = "".join(
+        (
+            '<div class="guide-poor">'
+            f"<strong>良くない例{index}</strong>"
+            f"{readable_text_html(row['response'])}<br>"
+            f"特徴: {readable_text_html(row['explanation'])}"
+            "</div>"
+        )
+        for index, row in enumerate(example["poor_responses"], start=1)
+    )
+    parts.extend(
+        [
+            '<div class="reference-example-guide">',
+            '<div class="guide-heading">評価の目安</div>',
+            '<div class="guide-good">',
+            "<strong>良い例</strong>",
+            readable_text_html(example["good_response"]),
+            "<br>特徴: ",
+            readable_text_html(example["good_explanation"]),
+            "</div>",
+            poor_examples,
+            "</div>",
+        ]
+    )
     parts.append("</div>")
     return "".join(parts)
 
@@ -149,7 +178,10 @@ def render_evaluation(database: Path, definition: dict[str, Any], participant: P
     with st.form(f"evaluation_{participant.participant_id}_{item_id}"):
         reference_column, rating_column = st.columns([1.08, 0.92], gap="large")
         with reference_column:
-            st.markdown(build_reference_html(item), unsafe_allow_html=True)
+            st.markdown(
+                build_reference_html(item, definition),
+                unsafe_allow_html=True,
+            )
         scroll = rating_column.container(height=500, border=False, key=f"rating_scroll_container_{item_id}", autoscroll=False)
         with scroll:
             render_html_panel("rating-guide", "各質問について応答A〜Cをそれぞれ1〜7で評価してください。1は『全く当てはまらない』、4は『どちらともいえない』、7は『非常によく当てはまる』です。")
@@ -167,7 +199,26 @@ def render_evaluation(database: Path, definition: dict[str, Any], participant: P
                 st.divider()
             previous_choice = str(saved.get("final_choice") or "") if saved else ""
             st.markdown("#### 最後の質問")
-            final_choice = st.radio(str(item["final_choice_question"]), list(FINAL_CHOICES), index=FINAL_CHOICES.index(previous_choice) if previous_choice in FINAL_CHOICES else None, key=f"choice_{participant.participant_id}_{item_id}")
+            final_choice = st.radio(
+                str(definition["final_choice_question"]),
+                list(FINAL_CHOICES),
+                index=(
+                    FINAL_CHOICES.index(previous_choice)
+                    if previous_choice in FINAL_CHOICES
+                    else None
+                ),
+                key=f"choice_{participant.participant_id}_{item_id}",
+            )
+            final_choice_reason = st.text_area(
+                FINAL_CHOICE_REASON_QUESTION,
+                value=(
+                    str(saved.get("final_choice_reason") or "")
+                    if saved
+                    else ""
+                ),
+                placeholder="選んだ応答のどこが良かったか、他の応答と何が違ったかを書いてください。",
+                key=f"choice_reason_{participant.participant_id}_{item_id}",
+            )
             comment = st.text_area("この評価についてのコメント（任意）", value=str(saved.get("comment") or "") if saved else "")
         navigation = st.container(key="evaluation_navigation", border=False)
         with navigation:
@@ -184,12 +235,23 @@ def render_evaluation(database: Path, definition: dict[str, Any], participant: P
     missing = [f"質問{number + 1}・応答{position}" for number, axis in enumerate(axis_keys(definition)) for position in RESPONSE_POSITIONS if ratings[axis][position] is None]
     if final_choice is None:
         missing.append("最後の質問")
+    if not final_choice_reason.strip():
+        missing.append("選んだ理由")
     if missing:
         notice.warning("未回答があります: " + "、".join(missing[:8]))
         return
     completed = {axis: {position: int(ratings[axis][position]) for position in RESPONSE_POSITIONS} for axis in axis_keys(definition)}
     try:
-        save_response(database, definition, participant=participant, item_id=item_id, ratings=completed, final_choice=str(final_choice), comment=comment)
+        save_response(
+            database,
+            definition,
+            participant=participant,
+            item_id=item_id,
+            ratings=completed,
+            final_choice=str(final_choice),
+            final_choice_reason=final_choice_reason,
+            comment=comment,
+        )
     except (OSError, ValueError) as exc:
         notice.error(f"回答を保存できませんでした: {exc}")
         return

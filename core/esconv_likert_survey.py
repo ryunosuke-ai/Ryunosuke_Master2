@@ -20,6 +20,8 @@ RESPONSE_POSITIONS = ("A", "B", "C")
 LIKERT_MIN = 1
 LIKERT_MAX = 7
 FINAL_CHOICES = ("応答A", "応答B", "応答C", "ほぼ同じ", "判断できない")
+FINAL_CHOICE_REASON_QUESTION = "そう選んだ理由を教えてください。"
+LEGACY_FINAL_CHOICE_REASON = "理由なし"
 EXPECTED_AXIS_KEYS = (
     "style_strength",
     "esconv_tone_similarity",
@@ -174,6 +176,7 @@ def initialize_database(path: Path) -> None:
                 item_id TEXT NOT NULL,
                 ratings_json TEXT NOT NULL,
                 final_choice TEXT NOT NULL,
+                final_choice_reason TEXT NOT NULL DEFAULT '理由なし',
                 comment TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -183,6 +186,15 @@ def initialize_database(path: Path) -> None:
             );
             """
         )
+        response_columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(responses)").fetchall()
+        }
+        if "final_choice_reason" not in response_columns:
+            connection.execute(
+                "ALTER TABLE responses ADD COLUMN final_choice_reason "
+                "TEXT NOT NULL DEFAULT '理由なし'"
+            )
         existing = connection.execute(
             "SELECT value FROM survey_metadata WHERE key = 'survey_version'"
         ).fetchone()
@@ -294,12 +306,16 @@ def save_response(
     item_id: str,
     ratings: dict[str, dict[str, int]],
     final_choice: str,
+    final_choice_reason: str,
     comment: str,
 ) -> bool:
     """1itemの回答をupsertし、新規保存ならTrueを返す。"""
     validate_ratings(ratings)
     if final_choice not in FINAL_CHOICES:
         raise ValueError("最終選択が不正です。")
+    normalized_reason = final_choice_reason.strip()
+    if not normalized_reason:
+        raise ValueError("最終選択の理由を入力してください。")
     if not item_id.strip():
         raise ValueError("item_idが空です。")
     initialize_database(path)
@@ -314,11 +330,12 @@ def save_response(
             """
             INSERT INTO responses(
                 participant_id, experiment, item_id, ratings_json,
-                final_choice, comment, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                final_choice, final_choice_reason, comment, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(participant_id, item_id) DO UPDATE SET
                 ratings_json = excluded.ratings_json,
                 final_choice = excluded.final_choice,
+                final_choice_reason = excluded.final_choice_reason,
                 comment = excluded.comment,
                 updated_at = excluded.updated_at
             """,
@@ -328,6 +345,7 @@ def save_response(
                 item_id,
                 ratings_json,
                 final_choice,
+                normalized_reason,
                 comment.strip(),
                 current_time,
                 current_time,
@@ -346,7 +364,7 @@ def load_participant_responses(
     with connect_database(path) as connection:
         rows = connection.execute(
             """
-            SELECT item_id, ratings_json, final_choice, comment,
+            SELECT item_id, ratings_json, final_choice, final_choice_reason, comment,
                    created_at, updated_at
             FROM responses
             WHERE participant_id = ?
@@ -359,6 +377,7 @@ def load_participant_responses(
             "item_id": row["item_id"],
             "ratings": json.loads(row["ratings_json"]),
             "final_choice": row["final_choice"],
+            "final_choice_reason": row["final_choice_reason"],
             "comment": row["comment"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
@@ -376,7 +395,8 @@ def export_responses_csv(path: Path, output: Path) -> int:
             """
             SELECT p.full_name, p.participant_id, p.experiment,
                    p.consented_at, r.item_id, r.ratings_json,
-                   r.final_choice, r.comment, r.created_at, r.updated_at
+                   r.final_choice, r.final_choice_reason, r.comment,
+                   r.created_at, r.updated_at
             FROM responses r
             JOIN participants p ON p.participant_id = r.participant_id
             ORDER BY p.created_at, r.item_id
@@ -392,6 +412,7 @@ def export_responses_csv(path: Path, output: Path) -> int:
         "response_position",
         "rating",
         "final_choice",
+        "final_choice_reason",
         "comment",
         "created_at",
         "updated_at",
@@ -411,6 +432,7 @@ def export_responses_csv(path: Path, output: Path) -> int:
                     "consented_at",
                     "item_id",
                     "final_choice",
+                    "final_choice_reason",
                     "comment",
                     "created_at",
                     "updated_at",

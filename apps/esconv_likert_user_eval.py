@@ -19,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from core.esconv_likert_survey import (  # noqa: E402
     EXPECTED_AXIS_KEYS,
+    FINAL_CHOICE_REASON_QUESTION,
     FINAL_CHOICES,
     RESPONSE_POSITIONS,
     Participant,
@@ -34,6 +35,7 @@ from scripts.prepare_esconv_google_form_likert_eval import (  # noqa: E402
     GOOD_RESPONSE_EXPLANATION,
     LIKERT_ANCHORS,
     POOR_RESPONSE_EXAMPLES,
+    FINAL_CHOICE_QUESTION,
     STYLE_FEATURES,
 )
 
@@ -197,6 +199,32 @@ def apply_page_style() -> None:
             line-break: strict;
             text-wrap: pretty;
             overflow-wrap: anywhere;
+        }
+        .reference-example-guide {
+            border-top: 2px solid #d7dde3;
+            margin-top: 8px;
+            padding-top: 8px;
+            font-size: 0.78rem;
+            line-height: 1.42;
+        }
+        .reference-example-guide .guide-heading {
+            color: #52606d;
+            font-weight: 750;
+            margin-bottom: 5px;
+        }
+        .reference-example-guide .guide-good,
+        .reference-example-guide .guide-poor {
+            padding: 5px 7px;
+            margin-top: 5px;
+            background: #f7f8fa;
+            border-left: 3px solid #237a57;
+        }
+        .reference-example-guide .guide-poor {
+            border-left-color: #9b4b42;
+        }
+        .reference-example-guide strong {
+            display: inline-block;
+            margin-right: 4px;
         }
         .rating-guide {
             background: #eef3f7;
@@ -405,6 +433,30 @@ def build_reference_html(item: dict[str, Any]) -> str:
                 "</div>",
             ]
         )
+    poor_examples = "".join(
+        (
+            '<div class="guide-poor">'
+            f"<strong>良くない例{index}</strong>"
+            f"{readable_text_html(example['response'])}<br>"
+            f"特徴: {readable_text_html(example['explanation'])}"
+            "</div>"
+        )
+        for index, example in enumerate(POOR_RESPONSE_EXAMPLES, start=1)
+    )
+    parts.extend(
+        [
+            '<div class="reference-example-guide">',
+            '<div class="guide-heading">評価の目安</div>',
+            '<div class="guide-good">',
+            "<strong>良い例</strong>",
+            readable_text_html(GOOD_RESPONSE_EXAMPLE),
+            "<br>特徴: ",
+            readable_text_html(GOOD_RESPONSE_EXPLANATION),
+            "</div>",
+            poor_examples,
+            "</div>",
+        ]
+    )
     parts.append("</div>")
     return "".join(parts)
 
@@ -427,6 +479,7 @@ def rating_default(
 def find_missing_evaluation_fields(
     ratings: dict[str, dict[str, int | None]],
     final_choice: str | None,
+    final_choice_reason: str,
 ) -> list[str]:
     """未回答の評価項目を表示順に返す。"""
     missing = [
@@ -437,6 +490,8 @@ def find_missing_evaluation_fields(
     ]
     if final_choice is None:
         missing.append("最後の質問")
+    if not final_choice_reason.strip():
+        missing.append("選んだ理由")
     return missing
 
 
@@ -583,7 +638,7 @@ def render_evaluation(
             saved_choice = str(saved.get("final_choice") or "") if saved else ""
             st.markdown("#### 最後の質問")
             final_choice = st.radio(
-                str(item["final_choice_question"]),
+                FINAL_CHOICE_QUESTION,
                 options=list(FINAL_CHOICES),
                 index=(
                     FINAL_CHOICES.index(saved_choice)
@@ -591,6 +646,16 @@ def render_evaluation(
                     else None
                 ),
                 key=f"final_choice_{participant.participant_id}_{item_id}",
+            )
+            final_choice_reason = st.text_area(
+                FINAL_CHOICE_REASON_QUESTION,
+                value=(
+                    str(saved.get("final_choice_reason") or "")
+                    if saved
+                    else ""
+                ),
+                placeholder="選んだ応答のどこが良かったか、他の応答と何が違ったかを書いてください。",
+                key=f"final_choice_reason_{participant.participant_id}_{item_id}",
             )
             comment = st.text_area(
                 "この評価についてのコメント（任意）",
@@ -621,7 +686,11 @@ def render_evaluation(
         st.rerun()
     if not submitted:
         return
-    missing = find_missing_evaluation_fields(ratings, final_choice)
+    missing = find_missing_evaluation_fields(
+        ratings,
+        final_choice,
+        final_choice_reason,
+    )
     if missing:
         validation_notice.warning(
             "未回答があります。右側の質問を確認してください: "
@@ -642,6 +711,7 @@ def render_evaluation(
             item_id=item_id,
             ratings=completed_ratings,
             final_choice=str(final_choice),
+            final_choice_reason=final_choice_reason,
             comment=comment,
         )
     except (OSError, ValueError) as exc:
