@@ -521,6 +521,49 @@ def test_random_dpo_can_report_shortfall_to_adaptive_pipeline(tmp_path: Path):
     assert output.read_text(encoding="utf-8") == ""
 
 
+def test_meditod_gold_can_use_safe_shortfall_as_translation_pool():
+    """gold 500件を満たす予備poolなら、上限未達でも保存できる。"""
+    from tools.prepare_meditod_gold import collect_gold_candidates
+
+    samples = []
+    for index in range(3):
+        samples.append(
+            {
+                "sample_id": f"s{index}",
+                "conversation_id": f"c{index}",
+                "history": [{"role": "user", "text": "咳があります。"}],
+                "response": "いつからですか。",
+                "next_user_turn": "昨日からです。",
+                "metadata": {
+                    "split": "train",
+                    "dpo_eligible": True,
+                    "ood": False,
+                    "assistant_turn_index": 1,
+                    "response_slots": ["symptom"],
+                    "response_intents": ["question"],
+                    "response_attributes": ["onset"],
+                },
+            }
+        )
+
+    rows = collect_gold_candidates(
+        samples,
+        target=5,
+        seed=42,
+        allow_target_shortfall=True,
+        minimum_records=2,
+    )
+    assert len(rows) == 3
+    with pytest.raises(ValueError, match="gold候補が不足"):
+        collect_gold_candidates(
+            samples,
+            target=5,
+            seed=42,
+            allow_target_shortfall=True,
+            minimum_records=4,
+        )
+
+
 def test_eval_selection_and_annotation_metrics_are_cluster_aware_inputs():
     config = load_yaml(FIXTURES / "meditod_public_raw_config.yaml")
     _, samples, _ = prepare_public_raw(FIXTURES / "meditod_dialogs.json", FIXTURES / "meditod_annotations.json", config=config, seed=42)

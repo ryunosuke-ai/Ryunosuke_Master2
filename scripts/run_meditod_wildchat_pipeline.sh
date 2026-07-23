@@ -237,6 +237,28 @@ stage_outputs() {
   esac
 }
 
+write_stage_marker() {
+  local name="$1" marker
+  local -a outputs
+  marker="$STATE_DIR/${name}_SUCCESS.json"
+  mapfile -t outputs < <(stage_outputs "$name")
+  python3 - "$marker" "$FINGERPRINT" "$name" "${outputs[@]}" <<'PY'
+import datetime,hashlib,json,pathlib,sys
+
+def file_hash(path):
+ with path.open("rb") as source:
+  digest=hashlib.sha256()
+  for chunk in iter(lambda: source.read(1024 * 1024), b""):
+   digest.update(chunk)
+ return digest.hexdigest()
+
+missing=[name for name in sys.argv[4:] if not pathlib.Path(name).is_file()]
+if missing: raise SystemExit(f"stage完了成果物が不足しています: {missing}")
+payload={"stage":sys.argv[3],"experiment_fingerprint":sys.argv[2],"completed_at":datetime.datetime.now(datetime.timezone.utc).isoformat(),"output_hashes":{name:file_hash(pathlib.Path(name)) for name in sys.argv[4:]}}
+path=pathlib.Path(sys.argv[1]); path.parent.mkdir(parents=True,exist_ok=True); path.write_text(json.dumps(payload,ensure_ascii=False,indent=2)+"\n")
+PY
+}
+
 run_stage() {
   local name="$1" index marker
   shift
@@ -246,11 +268,19 @@ run_stage() {
   if [[ -f "$marker" && "$FORCE_STAGE" != "$name" && "$FORCE_STAGE" != all ]]; then
     python3 - "$marker" "$FINGERPRINT" <<'PY'
 import hashlib,json,pathlib,sys
+
+def file_hash(path):
+ with path.open("rb") as source:
+  digest=hashlib.sha256()
+  for chunk in iter(lambda: source.read(1024 * 1024), b""):
+   digest.update(chunk)
+ return digest.hexdigest()
+
 payload=json.loads(pathlib.Path(sys.argv[1]).read_text())
 if payload.get("experiment_fingerprint") != sys.argv[2]: raise SystemExit("stage marker fingerprint不一致")
 for name,digest in payload.get("output_hashes",{}).items():
  path=pathlib.Path(name)
- if not path.exists() or hashlib.sha256(path.read_bytes()).hexdigest()!=digest: raise SystemExit(f"stage成果物が変更または欠落しています: {name}")
+ if not path.exists() or file_hash(path)!=digest: raise SystemExit(f"stage成果物が変更または欠落しています: {name}")
 PY
     echo "[SKIP] $name completed"
     return 0
@@ -260,14 +290,7 @@ PY
   echo "[START] $name"
   preflight_storage
   "$@"
-  mapfile -t outputs < <(stage_outputs "$name")
-  python3 - "$marker" "$FINGERPRINT" "$name" "${outputs[@]}" <<'PY'
-import datetime,hashlib,json,pathlib,sys
-missing=[name for name in sys.argv[4:] if not pathlib.Path(name).is_file()]
-if missing: raise SystemExit(f"stage完了成果物が不足しています: {missing}")
-payload={"stage":sys.argv[3],"experiment_fingerprint":sys.argv[2],"completed_at":datetime.datetime.now(datetime.timezone.utc).isoformat(),"output_hashes":{name:hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest() for name in sys.argv[4:]}}
-path=pathlib.Path(sys.argv[1]); path.parent.mkdir(parents=True,exist_ok=True); path.write_text(json.dumps(payload,ensure_ascii=False,indent=2)+"\n")
-PY
+  write_stage_marker "$name"
   echo "[DONE] $name"
 }
 
@@ -462,9 +485,10 @@ select_data_stage() {
 extend_scoring_selection() {
   score_next_batch || return $?
   measure_selection_pool "$DPO_INITIAL_SELECTION_POOL_COUNT"
+  # build_dpo中の追加scoringも正当なresume成果物として記録する。
+  write_stage_marker score_wildchat
   select_data_stage
-  # build_dpo中の追加scoringでselection成果物が変わるため、古いhash markerを残さない。
-  rm -f "$STATE_DIR/select_data_SUCCESS.json"
+  write_stage_marker select_data
 }
 
 build_dpo_stage() {
@@ -485,8 +509,17 @@ build_dpo_stage() {
       }
     done
   fi
-  select_data_stage
-  python3 -m tools.prepare_meditod_gold --samples "$MED_SAMPLES" --output "$DPO_DIR/gold_candidates_en.jsonl" --target "$gold_source" --seed "$SEED"
+  if [[ ! -s "$SELECT_DIR/basis_top.jsonl" || ! -s "$SELECT_DIR/domain_random.jsonl" || ! -s "$SELECT_DIR/topic_similarity_top.jsonl" ]]; then
+    select_data_stage
+    write_stage_marker select_data
+  fi
+  python3 -m tools.prepare_meditod_gold \
+    --samples "$MED_SAMPLES" \
+    --output "$DPO_DIR/gold_candidates_en.jsonl" \
+    --target "$gold_source" \
+    --allow-target-shortfall \
+    --minimum-records "$gold" \
+    --seed "$SEED"
   if [[ "$DRY_RUN" == "1" ]]; then
     python3 -m tools.meditod_pipeline_support mock-dpo --input "$SELECT_DIR/basis_top.jsonl" --output "$DPO_DIR/basis_selected_ja.jsonl" --count "$basis" --source-dataset WildChat-BASiS
     python3 -m tools.meditod_pipeline_support mock-dpo --input "$DPO_DIR/gold_candidates_en.jsonl" --output "$DPO_DIR/meditod_gold_ja.jsonl" --count "$gold" --source-dataset MediTOD --gold
@@ -532,7 +565,7 @@ build_dpo_stage() {
       (( random_selection_count > broad_count )) && random_selection_count="$broad_count"
       echo "[adaptive random] 候補を${random_selection_count}件へ拡張します。"
       select_data_stage "$random_selection_count"
-      rm -f "$STATE_DIR/select_data_SUCCESS.json"
+      write_stage_marker select_data
     done
   fi
   python3 -m tools.mix_meditod_dpo --basis "$DPO_DIR/basis_selected_ja.jsonl" --gold "$DPO_DIR/meditod_gold_ja.jsonl" --random "$DPO_DIR/random_ja.jsonl" --basis-output "$DPO_DIR/meditod_basis_train.jsonl" --random-output "$DPO_DIR/meditod_random_train.jsonl" --basis-count "$basis" --gold-count "$gold" --random-count "$random"

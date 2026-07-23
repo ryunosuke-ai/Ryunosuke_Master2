@@ -26,7 +26,18 @@ def history_text(history: list[dict[str, Any]]) -> str:
     )
 
 
-def collect_gold_candidates(samples: list[dict[str, Any]], *, target: int, seed: int) -> list[dict[str, Any]]:
+def collect_gold_candidates(
+    samples: list[dict[str, Any]],
+    *,
+    target: int,
+    seed: int,
+    allow_target_shortfall: bool = False,
+    minimum_records: int | None = None,
+) -> list[dict[str, Any]]:
+    if target <= 0:
+        raise ValueError("targetは1以上にしてください。")
+    if minimum_records is not None and not 0 < minimum_records <= target:
+        raise ValueError("minimum_recordsは1以上target以下にしてください。")
     eligible = [
         sample for sample in samples
         if sample.get("metadata", {}).get("split") == "train"
@@ -54,7 +65,8 @@ def collect_gold_candidates(samples: list[dict[str, Any]], *, target: int, seed:
         per_conversation[sample["conversation_id"]] += 1
         if len(selected) >= target:
             break
-    if len(selected) != target:
+    required = minimum_records if minimum_records is not None else target
+    if len(selected) < target and (not allow_target_shortfall or len(selected) < required):
         raise ValueError(f"MediTOD gold候補が不足しています: {len(selected)}/{target}")
     rows = []
     for sample in selected:
@@ -88,14 +100,31 @@ def main() -> int:
     parser.add_argument("--samples", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--target", type=int, default=1000)
+    parser.add_argument(
+        "--allow-target-shortfall",
+        action="store_true",
+        help="target未満でもminimum-records以上の候補があれば保存する",
+    )
+    parser.add_argument(
+        "--minimum-records",
+        type=int,
+        help="allow-target-shortfall時に必要な最低件数",
+    )
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
-    rows = collect_gold_candidates(read_jsonl(args.samples), target=args.target, seed=args.seed)
+    rows = collect_gold_candidates(
+        read_jsonl(args.samples),
+        target=args.target,
+        seed=args.seed,
+        allow_target_shortfall=args.allow_target_shortfall,
+        minimum_records=args.minimum_records,
+    )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8") as file:
         for row in rows:
             file.write(json.dumps(row, ensure_ascii=False) + "\n")
+    print(f"MediTOD gold候補を書き出しました: {output} ({len(rows)}/{args.target}件)")
     return 0
 
 
