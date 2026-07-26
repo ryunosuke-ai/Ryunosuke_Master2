@@ -438,6 +438,12 @@ prepare_broad_pool() {
     )
   fi
   python3 -m tools.prepare_meditod_broad_pool "${args[@]}"
+  if [[ "$audit" == "1" \
+    && "$MEDITOD_RESUME_MIGRATION" == "available1824_gold500_v4" \
+    && -s "$PRIORITIZED_CANDIDATES" ]]; then
+    echo "[resume] 全候補処理済みのため既存prioritized candidatesを再利用します。"
+    return
+  fi
   python3 -m tools.prioritize_health_candidates \
     --input "$HEALTH_CANDIDATES" \
     --output "$PRIORITIZED_CANDIDATES" \
