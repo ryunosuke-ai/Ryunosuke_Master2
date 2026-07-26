@@ -98,7 +98,7 @@ paths=[
  "tools/analyze_meditod_corpus_transition_bayes.py","tools/wildchat_health.py",
  "tools/prioritize_health_candidates.py","tools/meditod_selection.py","tools/measure_basis_selection_pool.py",
  "tools/prepare_meditod_personal_pool.py","tools/prepare_meditod_broad_pool.py",
- "tools/promote_meditod_dpo_rescue.py",
+ "tools/promote_meditod_dpo_rescue.py","tools/meditod_available_data_decision.py",
  "core/transition_bayes_model.py","tools/score_dialogue_with_transition_bayes_model.py",
  "tools/translate_and_generate_dpo.py","tools/build_random_dailydialog_dpo.py",
  "tools/prepare_meditod_gold.py","tools/mix_meditod_dpo.py","tools/meditod_evaluation.py",
@@ -112,6 +112,29 @@ print(hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",", ":")).en
 PY
 )"
 
+if [[ "$MEDITOD_RESUME_MIGRATION" == "available1824_gold500_v4" ]]; then
+  [[ "$BASIS_SELECTED_COUNT" == "1824" ]] || {
+    echo "available1824_gold500_v4ではMEDITOD_BASIS_SELECTED_COUNT=1824が必要です。" >&2
+    exit 20
+  }
+  [[ "$GOLD_DPO_COUNT" == "500" ]] || {
+    echo "available1824_gold500_v4ではMEDITOD_GOLD_COUNT=500が必要です。" >&2
+    exit 20
+  }
+  [[ "$RANDOM_DPO_COUNT" == "2324" ]] || {
+    echo "available1824_gold500_v4ではMEDITOD_RANDOM_COUNT=2324が必要です。" >&2
+    exit 20
+  }
+  python3 -m tools.meditod_available_data_decision \
+    --accepted "$OUTPUT_ROOT/dpo/basis_selected_ja.jsonl" \
+    --candidates "$OUTPUT_ROOT/wildchat/general_health_consultation_candidates.jsonl" \
+    --scored "$OUTPUT_ROOT/scoring/wildchat_scored_raw.jsonl" \
+    --output "$OUTPUT_ROOT/dpo/available_data_training_decision.json" \
+    --basis-count "$BASIS_SELECTED_COUNT" \
+    --gold-count "$GOLD_DPO_COUNT" \
+    --random-count "$RANDOM_DPO_COUNT"
+fi
+
 python3 - "$OUTPUT_ROOT/run_metadata.json" "$FINGERPRINT" "$RUN_TAG" "$SEED" "$DRY_RUN" "$ANALYSIS_MODEL" "$SCORING_MODEL" "$GENERATION_MODEL" "$JUDGE_MODEL" "$LOCAL_MODEL" "$MEDITOD_SOURCE_MODE" "$MEDITOD_RESUME_MIGRATION" <<'PY'
 import datetime,json,pathlib,sys
 path=pathlib.Path(sys.argv[1])
@@ -124,6 +147,7 @@ if path.exists():
   allowed_migrations={
    "target3000_personal_health_fidelity_v2",
    "target3000_broad_health_fidelity_v3",
+   "available1824_gold500_v4",
   }
   if migration not in allowed_migrations:
    raise SystemExit("同じRUN_TAGの実験条件が変わっています。互換移行には対応するMEDITOD_RESUME_MIGRATIONを指定してください。")
@@ -146,6 +170,22 @@ if [[ "$MEDITOD_RESUME_MIGRATION" == "target3000_broad_health_fidelity_v3" ]]; t
     rm -f \
       "$STATE_DIR/score_wildchat_SUCCESS.json" \
       "$STATE_DIR/select_data_SUCCESS.json" \
+      "$STATE_DIR/build_dpo_SUCCESS.json" \
+      "$STATE_DIR/train_SUCCESS.json" \
+      "$STATE_DIR/prepare_eval_SUCCESS.json" \
+      "$STATE_DIR/generate_responses_SUCCESS.json" \
+      "$STATE_DIR/oracle_eval_SUCCESS.json" \
+      "$STATE_DIR/statistics_SUCCESS.json" \
+      "$STATE_DIR/report_SUCCESS.json" \
+      "$STATE_DIR/prepare_user_eval_SUCCESS.json"
+    printf '%s\n' "$FINGERPRINT" > "$MIGRATION_MARKER"
+  fi
+fi
+
+if [[ "$MEDITOD_RESUME_MIGRATION" == "available1824_gold500_v4" ]]; then
+  MIGRATION_MARKER="$STATE_DIR/available1824_gold500_v4_migration_applied"
+  if [[ ! -f "$MIGRATION_MARKER" || "$(<"$MIGRATION_MARKER")" != "$FINGERPRINT" ]]; then
+    rm -f \
       "$STATE_DIR/build_dpo_SUCCESS.json" \
       "$STATE_DIR/train_SUCCESS.json" \
       "$STATE_DIR/prepare_eval_SUCCESS.json" \
@@ -217,7 +257,10 @@ stage_outputs() {
     extract_wildchat) printf '%s\n' "$WILD_DIR/general_health_consultation_candidates.jsonl" "$WILD_DIR/manifest.json" ;;
     score_wildchat) printf '%s\n' "$SCORED" "$OUTPUT_ROOT/scoring/selection_pool_progress.json" "$WILD_DIR/reuse_manifest.json" ;;
     select_data) printf '%s\n' "$SELECT_DIR/basis_top.jsonl" "$SELECT_DIR/domain_random.jsonl" "$SELECT_DIR/topic_similarity_top.jsonl" "$SELECT_DIR/selection_report.json" ;;
-    build_dpo) printf '%s\n' "$DPO_DIR/meditod_basis_train.jsonl" "$DPO_DIR/meditod_random_train.jsonl" "$DPO_DIR/broad_resume_manifest.json" ;;
+    build_dpo)
+      printf '%s\n' "$DPO_DIR/meditod_basis_train.jsonl" "$DPO_DIR/meditod_random_train.jsonl" "$DPO_DIR/broad_resume_manifest.json"
+      [[ "$MEDITOD_RESUME_MIGRATION" == "available1824_gold500_v4" ]] && printf '%s\n' "$DPO_DIR/available_data_training_decision.json"
+      ;;
     train) printf '%s\n' "$TRAIN_DIR/basis_lora/adapter_config.json" "$TRAIN_DIR/random_lora/adapter_config.json" ;;
     prepare_eval)
       printf '%s\n' "$EVAL_DIR/prompts_ja.jsonl" "$EVAL_DIR/prompts_all_ja.jsonl" "$EVAL_DIR/prompt_selection_manifest.json"

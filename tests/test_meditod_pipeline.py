@@ -18,6 +18,9 @@ from tools.analyze_meditod_corpus_transition_bayes import (
     mock_model,
 )
 from tools.meditod_annotation_metrics import compute
+from tools.meditod_available_data_decision import (
+    validate_available_data_decision,
+)
 from tools.meditod_dataset import (
     SourceDialogue,
     content_hash,
@@ -561,6 +564,57 @@ def test_meditod_gold_can_use_safe_shortfall_as_translation_pool():
             seed=42,
             allow_target_shortfall=True,
             minimum_records=4,
+        )
+
+
+def test_available_data_decision_requires_exhaustion_and_equal_arms(
+    tmp_path: Path,
+):
+    accepted = tmp_path / "accepted.jsonl"
+    candidates = tmp_path / "candidates.jsonl"
+    scored = tmp_path / "scored.jsonl"
+    accepted.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "source_dialogue_id": f"c{index}",
+                    "turn_index": index,
+                    "acceptance_rule": "strict",
+                    "metadata": {
+                        "translated_prompt_hash": f"h{index}",
+                        "rejected_prompt_hash": f"h{index}",
+                    },
+                }
+            )
+            for index in range(2)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    candidates.write_text("{}\n{}\n{}\n", encoding="utf-8")
+    scored.write_text("{}\n{}\n{}\n", encoding="utf-8")
+
+    payload = validate_available_data_decision(
+        accepted_path=accepted,
+        candidates_path=candidates,
+        scored_path=scored,
+        basis_count=2,
+        gold_count=1,
+        random_count=3,
+    )
+    assert payload["source_exhausted"] is True
+    assert payload["training_arms"]["basis_total"] == 3
+    assert payload["training_arms"]["random_total"] == 3
+
+    scored.write_text("{}\n{}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="全件scoring"):
+        validate_available_data_decision(
+            accepted_path=accepted,
+            candidates_path=candidates,
+            scored_path=scored,
+            basis_count=2,
+            gold_count=1,
+            random_count=3,
         )
 
 
