@@ -36,7 +36,7 @@ MediTOD train
 | `select_data` | `basis_top / domain_random / topic_similarity_top`、state-specific margin、MMR |
 | `build_dpo` | 医療情報を保った日本語化、同一context rejected、gold追加、件数監査。BASiS/Random不足時は既存poolへ3,000件単位で追加scoring |
 | `train` | Base共通のQwen3.5-27BへBASiS/Randomを同条件でDPO LoRA学習 |
-| `prepare_eval` | in-domain 100件とOOD補助標本を事前層化し、日本語化。否定・時期・数値・単位・薬剤・症状名を検査し、不一致は1回修復 |
+| `prepare_eval` | in-domain 100件とOOD補助標本を事前層化し、日本語化。空翻訳・発話数・role順を必須検査し、医療情報差分は採否に使わず監査warningへ保存 |
 | `generate_responses` | 同一promptへBase/BASiS/Random応答を生成 |
 | `oracle_eval` | 病歴聴取7軸、一般品質5軸、安全性proxy 5軸をblind評価 |
 | `statistics` | Friedman、Holm事後比較、効果量、bootstrap CI、診療cluster感度分析 |
@@ -118,6 +118,29 @@ PYTHONUNBUFFERED=1 \
 保持対象から外す。一方、個人相談の数値、投薬量、期間、年齢、バイタル、
 検査値などは保持し、不一致時はprompt/chosen翻訳だけを最大2回修復する。
 rejected候補は修復時に再生成しない。
+
+評価promptの日本語化では、fidelity判定による標本の偏りを避けるため、
+数値・薬剤・症状等の差分をhard gateにしない。差分は
+`translation_fidelity_warnings.jsonl`と選定manifestへ保存し、原文と訳文は
+評価prompt JSONLに保持する。空翻訳、発話数不一致、role順の破損だけを
+評価不能として除外する。v2の学習済みadapterから評価だけを再開する場合:
+
+```bash
+RUN_TAG=meditod_wildchat_gpt56_v2 \
+MEDITOD_DATA_TERMS_CONFIRMED=1 \
+MEDITOD_RESUME_MIGRATION=eval_fidelity_audit_only_v6 \
+MEDITOD_BASIS_SELECTED_COUNT=1824 \
+MEDITOD_GOLD_COUNT=500 \
+MEDITOD_RANDOM_COUNT=2324 \
+START_STAGE=prepare_eval \
+END_STAGE=prepare_user_eval \
+WORKERS=4 \
+SCORING_REQUESTS_PER_MINUTE=120 \
+TRAIN_CUDA_VISIBLE_DEVICES=0,1 \
+EVAL_CUDA_VISIBLE_DEVICES=0,1 \
+PYTHONUNBUFFERED=1 \
+./scripts/run_meditod_wildchat_watchdog.sh
+```
 
 ## 人手評価
 

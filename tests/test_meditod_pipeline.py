@@ -33,9 +33,11 @@ from tools.meditod_dataset import (
 )
 from tools.meditod_evaluation import (
     evaluation_translation_fidelity_errors,
+    fidelity_warning_rows,
     finalize_translated_prompts,
     select_eval_prompt_candidates,
     select_eval_prompts,
+    translate_prompts,
 )
 from tools.prepare_meditod_personal_pool import audit_resume_records
 from tools.prepare_meditod_broad_pool import (
@@ -735,3 +737,79 @@ def test_eval_candidate_reserve_obeys_consultation_cap_and_fills_failure():
     assert candidates[0]["prompt_id"] not in {
         row["prompt_id"] for row in final
     }
+
+
+def test_eval_fidelity_warning_is_audited_without_skipping_prompt():
+    candidate = {
+        "prompt_id": "meditod_eval_000",
+        "sample_id": "sample-1",
+        "conversation_id": "consultation-1",
+        "history_en": [
+            {"role": "user", "text": "I have had no fever for 3 days."},
+        ],
+        "reference_response_en": "Do you take metformin 500 mg?",
+        "next_patient_turn_en": "Yes, every morning.",
+    }
+    translated = {
+        **candidate,
+        "history_ja": [{"role": "user", "text": "熱があります。"}],
+        "reference_response_ja": "薬を飲んでいますか。",
+        "next_patient_turn_ja": "はい、毎朝です。",
+    }
+    final = finalize_translated_prompts([candidate], [translated], count=1)
+    assert len(final) == 1
+    assert final[0]["translation_fidelity_mode"] == "audit_only"
+    assert final[0]["translation_fidelity_warning"] is True
+    assert {"numbers", "negation", "medications"}.issubset(
+        final[0]["translation_fidelity_warnings"]
+    )
+    warnings = fidelity_warning_rows(final)
+    assert len(warnings) == 1
+    assert warnings[0]["prompt_id"] == "meditod_eval_000"
+
+
+def test_eval_resume_translates_missing_primary_before_using_cached_reserve(
+    tmp_path: Path,
+):
+    def candidate(prompt_id: str, role: str) -> dict:
+        return {
+            "prompt_id": prompt_id,
+            "sample_id": f"sample-{prompt_id}",
+            "conversation_id": f"consultation-{prompt_id}",
+            "selection_role": role,
+            "history_en": [{"role": "user", "text": "I have a cough."}],
+            "reference_response_en": "When did it start?",
+            "next_patient_turn_en": "Three days ago.",
+        }
+
+    rows = [
+        candidate("primary-1", "primary"),
+        candidate("primary-2", "primary"),
+        candidate("reserve-1", "reserve"),
+    ]
+    cache = tmp_path / "translations.jsonl"
+    cached_reserve = {
+        **rows[2],
+        "history_ja": [{"role": "user", "text": "咳があります。"}],
+        "reference_response_ja": "いつ始まりましたか。",
+        "next_patient_turn_ja": "3日前です。",
+    }
+    cache.write_text(
+        json.dumps(cached_reserve, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    translated = translate_prompts(
+        rows,
+        output_path=cache,
+        errors_path=None,
+        model="mock",
+        mock=True,
+        resume=True,
+        workers=1,
+        requests_per_minute=0,
+        target_count=2,
+    )
+    translated_ids = {row["prompt_id"] for row in translated}
+    assert {"primary-1", "primary-2"}.issubset(translated_ids)
+    final = finalize_translated_prompts(rows, translated, count=2)
+    assert [row["prompt_id"] for row in final] == ["primary-1", "primary-2"]

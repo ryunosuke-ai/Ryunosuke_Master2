@@ -32,7 +32,8 @@ from tools.wildchat_health import MEDICATION_PATTERN
 
 
 TRANSLATION_VERSION = "meditod_eval_translation_v1"
-TRANSLATION_FIDELITY_VERSION = "meditod_eval_medical_fidelity_v3"
+TRANSLATION_FIDELITY_VERSION = "meditod_eval_medical_fidelity_audit_v4"
+TRANSLATION_FIDELITY_MODE = "audit_only"
 STRATA = (
     "symptom_attributes",
     "associated_symptoms",
@@ -468,7 +469,7 @@ def _translate_one(
     mock: bool,
     pacer: AdaptiveRequestPacer,
 ) -> dict[str, Any]:
-    """1評価promptを翻訳し、重要情報欠落時は1回だけ修復する。"""
+    """1評価promptを翻訳し、医学情報の差分は監査情報として保存する。"""
     if mock:
         payload = {
             "history_ja": [
@@ -488,31 +489,7 @@ def _translate_one(
             pacer=pacer,
         )
     translated = validate_translation(row, payload)
-    errors = evaluation_translation_fidelity_errors(row, translated)
-    repaired = False
-    for repair_attempt in range(1, 3):
-        if not errors or mock:
-            break
-        repair_instructions = (
-            translation_instructions()
-            + "\n前回の翻訳で次の重要情報が欠落した可能性があります。省略や意味の反転をせず、"
-            "元の対応箇所へ忠実に保持してください。医学語は自然な日本語の同義表現で構いません。"
-            "診断や助言は追加しないでください。\n"
-            f"修復回数: {repair_attempt}/2\n"
-            + json.dumps(errors, ensure_ascii=False)
-        )
-        payload = _generate_translation_payload(
-            row,
-            generator=generator,
-            model=model,
-            instructions=repair_instructions,
-            pacer=pacer,
-        )
-        translated = validate_translation(row, payload)
-        repaired = True
-        errors = evaluation_translation_fidelity_errors(row, translated)
-    if errors:
-        raise ValueError(f"MediTOD評価翻訳で医療情報が失われました: {errors}")
+    warnings = evaluation_translation_fidelity_errors(row, translated)
     prepared = {
         **row,
         **translated,
@@ -520,7 +497,10 @@ def _translate_one(
         "translation_model": model,
         "translation_version": TRANSLATION_VERSION,
         "translation_fidelity_version": TRANSLATION_FIDELITY_VERSION,
-        "translation_repaired": repaired,
+        "translation_fidelity_mode": TRANSLATION_FIDELITY_MODE,
+        "translation_fidelity_warning": bool(warnings),
+        "translation_fidelity_warnings": warnings,
+        "translation_repaired": False,
     }
     prepared["model_prompt"] = build_model_prompt(prepared)
     prepared["model_prompt_template_version"] = MEDITOD_DPO_PROMPT_TEMPLATE_VERSION
@@ -565,6 +545,13 @@ def translate_prompts(
     existing_rows = read_jsonl(output_path) if resume and output_path.exists() else []
     existing = {row["prompt_id"]: row for row in existing_rows}
     output = list(existing.values())
+    requested_ids = {row["prompt_id"] for row in rows}
+    primary_ids = (
+        {row["prompt_id"] for row in rows[:target_count]}
+        if target_count is not None
+        else set()
+    )
+    attempted_ids = set(existing)
     pending = [row for row in rows if row["prompt_id"] not in existing]
     pacer = AdaptiveRequestPacer(
         requests_per_minute=max(0.0, requests_per_minute),
@@ -574,7 +561,14 @@ def translate_prompts(
     worker_count = max(1, workers)
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         for chunk_start in range(0, len(pending), worker_count):
-            if target_count is not None and len(output) >= target_count:
+            successful_requested = sum(
+                row["prompt_id"] in requested_ids for row in output
+            )
+            if (
+                target_count is not None
+                and primary_ids.issubset(attempted_ids)
+                and successful_requested >= target_count
+            ):
                 break
             chunk = pending[chunk_start : chunk_start + worker_count]
             futures = {
@@ -590,6 +584,7 @@ def translate_prompts(
             for future in as_completed(futures):
                 completed += 1
                 row = futures[future]
+                attempted_ids.add(row["prompt_id"])
                 try:
                     output.append(future.result())
                     output.sort(key=lambda value: value["prompt_id"])
@@ -605,7 +600,10 @@ def translate_prompts(
                         f"[meditod_eval_translate] skip {row['prompt_id']}: {exc}",
                         flush=True,
                     )
-    return sorted(output, key=lambda row: row["prompt_id"])
+    return sorted(
+        (row for row in output if row["prompt_id"] in requested_ids),
+        key=lambda row: row["prompt_id"],
+    )
 
 
 def finalize_translated_prompts(
@@ -614,24 +612,52 @@ def finalize_translated_prompts(
     *,
     count: int,
 ) -> list[dict[str, Any]]:
-    """主標本を優先し、失敗分だけ補欠で埋めて順序を固定する。"""
+    """主標本を優先し、構造的な失敗分だけ補欠で埋める。"""
     translated_by_id = {row["prompt_id"]: row for row in translated}
     final: list[dict[str, Any]] = []
     for candidate in candidates:
         row = translated_by_id.get(candidate["prompt_id"])
         if row is None:
             continue
-        if evaluation_translation_fidelity_errors(candidate, row):
+        try:
+            validated = validate_translation(candidate, row)
+        except ValueError:
             continue
+        warnings = evaluation_translation_fidelity_errors(candidate, validated)
         row = {
             **row,
+            **validated,
             "translation_fidelity_version": TRANSLATION_FIDELITY_VERSION,
+            "translation_fidelity_mode": TRANSLATION_FIDELITY_MODE,
+            "translation_fidelity_warning": bool(warnings),
+            "translation_fidelity_warnings": warnings,
             "translation_revalidated": True,
         }
         final.append(row)
         if len(final) >= count:
             break
     return final
+
+
+def fidelity_warning_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """採否へ影響させないfidelity警告を監査用JSONLへ整形する。"""
+    output = []
+    for row in rows:
+        warnings = row.get("translation_fidelity_warnings", {})
+        if not warnings:
+            continue
+        output.append(
+            {
+                "prompt_id": row["prompt_id"],
+                "sample_id": row["sample_id"],
+                "conversation_id": row["conversation_id"],
+                "warning_categories": sorted(warnings),
+                "warnings": warnings,
+                "translation_fidelity_version": TRANSLATION_FIDELITY_VERSION,
+                "translation_fidelity_mode": TRANSLATION_FIDELITY_MODE,
+            }
+        )
+    return output
 
 
 def generate_three_model_responses(
@@ -726,6 +752,12 @@ def blind_oracle_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                         "source_response_intents": row["source_response_intents"],
                         "source_response_slots": row["source_response_slots"],
                         "source_response_attributes": row["source_response_attributes"],
+                        "translation_fidelity_warning": row.get(
+                            "translation_fidelity_warning", False
+                        ),
+                        "translation_fidelity_warning_categories": sorted(
+                            row.get("translation_fidelity_warnings", {})
+                        ),
                         "ood": row["ood"],
                     },
                 }
@@ -741,6 +773,7 @@ def main() -> int:
     prepare.add_argument("--output", required=True)
     prepare.add_argument("--manifest", required=True)
     prepare.add_argument("--errors-output")
+    prepare.add_argument("--fidelity-warnings-output")
     prepare.add_argument("--count", type=int, default=100)
     prepare.add_argument("--seed", type=int, default=42)
     prepare.add_argument("--ood", action="store_true")
@@ -812,12 +845,20 @@ def main() -> int:
         if not translated:
             raise RuntimeError("MediTOD評価翻訳が1件も得られませんでした。")
         write_jsonl(translated, args.output)
+        warnings = fidelity_warning_rows(translated)
+        if args.fidelity_warnings_output:
+            write_jsonl(warnings, args.fidelity_warnings_output)
         primary_ids = {
             row["prompt_id"]
             for row in selected
             if row.get("selection_role") == "primary"
         }
         final_sample_ids = [row["sample_id"] for row in translated]
+        warning_categories = Counter(
+            category
+            for row in warnings
+            for category in row["warning_categories"]
+        )
         manifest.update(
             {
                 "requested_count": args.count,
@@ -829,6 +870,16 @@ def main() -> int:
                     row["prompt_id"] not in primary_ids for row in translated
                 ),
                 "translation_fidelity_version": TRANSLATION_FIDELITY_VERSION,
+                "translation_fidelity_mode": TRANSLATION_FIDELITY_MODE,
+                "translation_fidelity_warning_count": len(warnings),
+                "translation_fidelity_warning_categories": dict(
+                    warning_categories
+                ),
+                "translation_fidelity_warnings_output": (
+                    args.fidelity_warnings_output
+                    if args.fidelity_warnings_output
+                    else None
+                ),
                 "candidate_output": str(candidate_output),
                 "sample_ids_sha256": hashlib.sha256(
                     "\n".join(final_sample_ids).encode()
