@@ -34,6 +34,7 @@ artifacts/scored_dialogues/
 artifacts/datasets/
 artifacts/training_runs/
 artifacts/user_eval/
+artifacts/figures/
 artifacts/mathdial_wildchat/
 artifacts/meditod_wildchat/
 artifacts/primock57_wildchat/
