@@ -112,17 +112,18 @@ print(hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",", ":")).en
 PY
 )"
 
-if [[ "$MEDITOD_RESUME_MIGRATION" == "available1824_gold500_v4" ]]; then
+if [[ "$MEDITOD_RESUME_MIGRATION" == "available1824_gold500_v4" \
+  || "$MEDITOD_RESUME_MIGRATION" == "eval_fidelity_alias_reserve_v5" ]]; then
   [[ "$BASIS_SELECTED_COUNT" == "1824" ]] || {
-    echo "available1824_gold500_v4ではMEDITOD_BASIS_SELECTED_COUNT=1824が必要です。" >&2
+    echo "今回のMediTOD互換移行ではMEDITOD_BASIS_SELECTED_COUNT=1824が必要です。" >&2
     exit 20
   }
   [[ "$GOLD_DPO_COUNT" == "500" ]] || {
-    echo "available1824_gold500_v4ではMEDITOD_GOLD_COUNT=500が必要です。" >&2
+    echo "今回のMediTOD互換移行ではMEDITOD_GOLD_COUNT=500が必要です。" >&2
     exit 20
   }
   [[ "$RANDOM_DPO_COUNT" == "2324" ]] || {
-    echo "available1824_gold500_v4ではMEDITOD_RANDOM_COUNT=2324が必要です。" >&2
+    echo "今回のMediTOD互換移行ではMEDITOD_RANDOM_COUNT=2324が必要です。" >&2
     exit 20
   }
   python3 -m tools.meditod_available_data_decision \
@@ -148,6 +149,7 @@ if path.exists():
    "target3000_personal_health_fidelity_v2",
    "target3000_broad_health_fidelity_v3",
    "available1824_gold500_v4",
+   "eval_fidelity_alias_reserve_v5",
   }
   if migration not in allowed_migrations:
    raise SystemExit("同じRUN_TAGの実験条件が変わっています。互換移行には対応するMEDITOD_RESUME_MIGRATIONを指定してください。")
@@ -188,6 +190,20 @@ if [[ "$MEDITOD_RESUME_MIGRATION" == "available1824_gold500_v4" ]]; then
     rm -f \
       "$STATE_DIR/build_dpo_SUCCESS.json" \
       "$STATE_DIR/train_SUCCESS.json" \
+      "$STATE_DIR/prepare_eval_SUCCESS.json" \
+      "$STATE_DIR/generate_responses_SUCCESS.json" \
+      "$STATE_DIR/oracle_eval_SUCCESS.json" \
+      "$STATE_DIR/statistics_SUCCESS.json" \
+      "$STATE_DIR/report_SUCCESS.json" \
+      "$STATE_DIR/prepare_user_eval_SUCCESS.json"
+    printf '%s\n' "$FINGERPRINT" > "$MIGRATION_MARKER"
+  fi
+fi
+
+if [[ "$MEDITOD_RESUME_MIGRATION" == "eval_fidelity_alias_reserve_v5" ]]; then
+  MIGRATION_MARKER="$STATE_DIR/eval_fidelity_alias_reserve_v5_migration_applied"
+  if [[ ! -f "$MIGRATION_MARKER" || "$(<"$MIGRATION_MARKER")" != "$FINGERPRINT" ]]; then
+    rm -f \
       "$STATE_DIR/prepare_eval_SUCCESS.json" \
       "$STATE_DIR/generate_responses_SUCCESS.json" \
       "$STATE_DIR/oracle_eval_SUCCESS.json" \
@@ -662,9 +678,9 @@ prepare_eval_stage() {
   mkdir -p "$EVAL_DIR"
   local main_count="$EVAL_COUNT" ood_count="$OOD_EVAL_COUNT" mock=()
   [[ "$DRY_RUN" == "1" ]] && { main_count=2; ood_count=1; mock+=(--mock); }
-  python3 -m tools.meditod_evaluation prepare --samples "$MED_SAMPLES" --output "$EVAL_DIR/prompts_ja.jsonl" --manifest "$EVAL_DIR/prompt_selection_manifest.json" --errors-output "$EVAL_DIR/translation_errors.jsonl" --count "$main_count" --seed "$SEED" --max-per-consultation 6 --model "$SCORING_MODEL" --workers "$WORKERS" --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" --resume "${mock[@]}"
+  python3 -m tools.meditod_evaluation prepare --samples "$MED_SAMPLES" --output "$EVAL_DIR/prompts_ja.jsonl" --candidate-output "$EVAL_DIR/prompt_candidates_ja.jsonl" --manifest "$EVAL_DIR/prompt_selection_manifest.json" --errors-output "$EVAL_DIR/translation_errors.jsonl" --count "$main_count" --seed "$SEED" --max-per-consultation 6 --candidate-reserve -1 --allow-exhausted-shortfall --model "$SCORING_MODEL" --workers "$WORKERS" --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" --resume "${mock[@]}"
   if (( ood_count > 0 )); then
-    python3 -m tools.meditod_evaluation prepare --samples "$MED_SAMPLES" --output "$EVAL_DIR/ood_prompts_ja.jsonl" --manifest "$EVAL_DIR/ood_prompt_selection_manifest.json" --errors-output "$EVAL_DIR/ood_translation_errors.jsonl" --count "$ood_count" --seed "$SEED" --max-per-consultation 6 --model "$SCORING_MODEL" --workers "$WORKERS" --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" --resume --ood "${mock[@]}"
+    python3 -m tools.meditod_evaluation prepare --samples "$MED_SAMPLES" --output "$EVAL_DIR/ood_prompts_ja.jsonl" --candidate-output "$EVAL_DIR/ood_prompt_candidates_ja.jsonl" --manifest "$EVAL_DIR/ood_prompt_selection_manifest.json" --errors-output "$EVAL_DIR/ood_translation_errors.jsonl" --count "$ood_count" --seed "$SEED" --max-per-consultation 6 --candidate-reserve -1 --allow-exhausted-shortfall --model "$SCORING_MODEL" --workers "$WORKERS" --requests-per-minute "$SCORING_REQUESTS_PER_MINUTE" --resume --ood "${mock[@]}"
   fi
   python3 - "$EVAL_DIR/prompts_ja.jsonl" "$EVAL_DIR/ood_prompts_ja.jsonl" "$EVAL_DIR/prompts_all_ja.jsonl" <<'PY'
 import pathlib,sys

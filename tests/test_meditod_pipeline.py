@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,8 @@ from tools.meditod_dataset import (
 )
 from tools.meditod_evaluation import (
     evaluation_translation_fidelity_errors,
+    finalize_translated_prompts,
+    select_eval_prompt_candidates,
     select_eval_prompts,
 )
 from tools.prepare_meditod_personal_pool import audit_resume_records
@@ -661,3 +664,74 @@ def test_eval_translation_fidelity_catches_medical_information_loss():
     assert evaluation_translation_fidelity_errors(source, good) == {}
     errors = evaluation_translation_fidelity_errors(source, bad)
     assert {"numbers", "negation", "medications"}.issubset(errors)
+
+
+def test_eval_translation_fidelity_accepts_japanese_medical_aliases():
+    source = {
+        "history_en": [
+            {
+                "role": "user",
+                "text": (
+                    "I have breathlessness, fatigue and swelling. "
+                    "My temperature was 38 point, uh, point 5 C."
+                ),
+            },
+            {
+                "role": "assistant",
+                "text": "Do you take metoprolol and lisinopril?",
+            },
+        ],
+        "reference_response_en": "How long have you used insulin?",
+        "next_patient_turn_en": "For 2 1/2 months.",
+    }
+    translated = {
+        "history_ja": [
+            {
+                "role": "user",
+                "text": "息切れ、疲労、むくみがあり、体温は38.5度でした。",
+            },
+            {
+                "role": "assistant",
+                "text": "メトプロロールとリシノプリルを服用していますか。",
+            },
+        ],
+        "reference_response_ja": "インスリンはいつから使用していますか。",
+        "next_patient_turn_ja": "2か月半です。",
+    }
+    assert evaluation_translation_fidelity_errors(source, translated) == {}
+
+
+def test_eval_candidate_reserve_obeys_consultation_cap_and_fills_failure():
+    config = load_yaml(FIXTURES / "meditod_public_raw_config.yaml")
+    _, samples, _ = prepare_public_raw(
+        FIXTURES / "meditod_dialogs.json",
+        FIXTURES / "meditod_annotations.json",
+        config=config,
+        seed=42,
+    )
+    candidates, manifest = select_eval_prompt_candidates(
+        samples,
+        count=2,
+        seed=42,
+        ood=False,
+        max_per_consultation=3,
+        candidate_reserve=-1,
+    )
+    assert manifest["primary_count"] == 2
+    assert len({row["prompt_id"] for row in candidates}) == len(candidates)
+    assert max(Counter(row["conversation_id"] for row in candidates).values()) <= 3
+    translated = []
+    for row in candidates[1:]:
+        translated.append(
+            {
+                **row,
+                "history_ja": row["history_en"],
+                "reference_response_ja": row["reference_response_en"],
+                "next_patient_turn_ja": row["next_patient_turn_en"],
+            }
+        )
+    final = finalize_translated_prompts(candidates, translated, count=2)
+    assert len(final) == 2
+    assert candidates[0]["prompt_id"] not in {
+        row["prompt_id"] for row in final
+    }

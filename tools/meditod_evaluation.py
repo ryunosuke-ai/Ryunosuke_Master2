@@ -32,7 +32,7 @@ from tools.wildchat_health import MEDICATION_PATTERN
 
 
 TRANSLATION_VERSION = "meditod_eval_translation_v1"
-TRANSLATION_FIDELITY_VERSION = "meditod_eval_medical_fidelity_v2"
+TRANSLATION_FIDELITY_VERSION = "meditod_eval_medical_fidelity_v3"
 STRATA = (
     "symptom_attributes",
     "associated_symptoms",
@@ -69,13 +69,54 @@ SYMPTOM_CONCEPTS = {
     "diarrhea": ("diarrhea", "下痢"),
     "headache": ("headache", "頭痛"),
     "dizziness": ("dizzy", "dizziness", "めまい"),
-    "breathlessness": ("breathless", "shortness of breath", "息苦", "呼吸困難"),
+    "breathlessness": (
+        "breathless",
+        "breathlessness",
+        "shortness of breath",
+        "息苦",
+        "呼吸困難",
+        "息切れ",
+        "息が切れ",
+        "呼吸が苦",
+    ),
     "nausea": ("nausea", "吐き気", "悪心"),
-    "sputum": ("sputum", "phlegm", "痰"),
+    "sputum": ("sputum", "phlegm", "痰", "喀痰"),
     "bleeding": ("bleed", "blood", "出血", "血"),
-    "swelling": ("swelling", "swollen", "腫れ", "腫脹"),
-    "fatigue": ("fatigue", "tired", "倦怠", "疲れ"),
+    "swelling": ("swelling", "swollen", "腫れ", "腫脹", "むくみ", "浮腫"),
+    "fatigue": ("fatigue", "tired", "倦怠", "疲れ", "疲労", "だる"),
 }
+MEDICATION_ALIASES = {
+    "insulin": ("insulin", "インスリン"),
+    "ibuprofen": ("ibuprofen", "イブプロフェン"),
+    "metoprolol": ("metoprolol", "メトプロロール"),
+    "amoxicillin": ("amoxicillin", "アモキシシリン"),
+    "metformin": ("metformin", "メトホルミン"),
+    "lisinopril": ("lisinopril", "リシノプリル"),
+    "ramipril": ("ramipril", "ラミプリル"),
+    "penicillin": ("penicillin", "ペニシリン"),
+    "azithromycin": ("azithromycin", "アジスロマイシン"),
+    "aspirin": ("aspirin", "アスピリン"),
+    "acetaminophen": ("acetaminophen", "アセトアミノフェン"),
+    "paracetamol": ("paracetamol", "パラセタモール"),
+}
+UNIT_ALIASES = {
+    "c": ("c", "℃", "度", "摂氏"),
+    "°c": ("°c", "℃", "度", "摂氏"),
+    "mg": ("mg", "ミリグラム"),
+    "mcg": ("mcg", "マイクログラム"),
+    "g": ("g", "グラム"),
+    "kg": ("kg", "キログラム"),
+    "ml": ("ml", "ミリリットル"),
+    "l": ("l", "リットル"),
+    "cm": ("cm", "センチメートル"),
+    "mm": ("mm", "ミリメートル"),
+    "bpm": ("bpm", "回/分", "回毎分"),
+    "mmhg": ("mmhg", "水銀柱ミリメートル"),
+}
+SPOKEN_DECIMAL_PATTERN = re.compile(
+    r"\b(\d+)\s+point(?:\s*,?\s*(?:uh|um),?\s*)?(?:point\s+)?(\d+)\b",
+    re.IGNORECASE,
+)
 
 
 def read_jsonl(path: Path | str) -> list[dict[str, Any]]:
@@ -116,6 +157,40 @@ def sample_stratum(sample: dict[str, Any]) -> str:
     return "stage_transition"
 
 
+def _eligible_eval_samples(
+    samples: list[dict[str, Any]], *, ood: bool
+) -> list[dict[str, Any]]:
+    return [
+        sample
+        for sample in samples
+        if sample.get("metadata", {}).get("split") == "test"
+        and bool(sample.get("metadata", {}).get("ood")) is ood
+        and sample.get("metadata", {}).get("history_ends_with_user")
+        and sample.get("next_user_turn") is not None
+    ]
+
+
+def _eval_row(
+    sample: dict[str, Any], *, prompt_id: str, ood: bool, selection_role: str
+) -> dict[str, Any]:
+    return {
+        "prompt_id": prompt_id,
+        "sample_id": sample["sample_id"],
+        "conversation_id": sample["conversation_id"],
+        "history_en": sample["history"],
+        "reference_response_en": sample["response"],
+        "next_patient_turn_en": sample.get("next_user_turn"),
+        "selection_stratum": sample_stratum(sample),
+        "selection_role": selection_role,
+        "source_response_intents": sample["metadata"].get("response_intents", []),
+        "source_response_slots": sample["metadata"].get("response_slots", []),
+        "source_response_attributes": sample["metadata"].get(
+            "response_attributes", []
+        ),
+        "ood": ood,
+    }
+
+
 def select_eval_prompts(
     samples: list[dict[str, Any]],
     *,
@@ -124,13 +199,7 @@ def select_eval_prompts(
     ood: bool,
     max_per_consultation: int,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    candidates = [
-        sample for sample in samples
-        if sample.get("metadata", {}).get("split") == "test"
-        and bool(sample.get("metadata", {}).get("ood")) is ood
-        and sample.get("metadata", {}).get("history_ends_with_user")
-        and sample.get("next_user_turn") is not None
-    ]
+    candidates = _eligible_eval_samples(samples, ood=ood)
     by_stratum: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for sample in candidates:
         by_stratum[sample_stratum(sample)].append(sample)
@@ -169,19 +238,12 @@ def select_eval_prompts(
     rows = []
     for index, sample in enumerate(selected):
         rows.append(
-            {
-                "prompt_id": f"meditod_{'ood' if ood else 'eval'}_{index:03d}",
-                "sample_id": sample["sample_id"],
-                "conversation_id": sample["conversation_id"],
-                "history_en": sample["history"],
-                "reference_response_en": sample["response"],
-                "next_patient_turn_en": sample.get("next_user_turn"),
-                "selection_stratum": sample_stratum(sample),
-                "source_response_intents": sample["metadata"].get("response_intents", []),
-                "source_response_slots": sample["metadata"].get("response_slots", []),
-                "source_response_attributes": sample["metadata"].get("response_attributes", []),
-                "ood": ood,
-            }
+            _eval_row(
+                sample,
+                prompt_id=f"meditod_{'ood' if ood else 'eval'}_{index:03d}",
+                ood=ood,
+                selection_role="primary",
+            )
         )
     manifest = {
         "sampling_version": "meditod_eval_stratified_v1",
@@ -196,6 +258,63 @@ def select_eval_prompts(
         "selection_uses_oracle_scores": False,
     }
     return rows, manifest
+
+
+def select_eval_prompt_candidates(
+    samples: list[dict[str, Any]],
+    *,
+    count: int,
+    seed: int,
+    ood: bool,
+    max_per_consultation: int,
+    candidate_reserve: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """事前固定した主標本へ、同じ診療上限内の翻訳補欠を追加する。"""
+    primary, manifest = select_eval_prompts(
+        samples,
+        count=count,
+        seed=seed,
+        ood=ood,
+        max_per_consultation=max_per_consultation,
+    )
+    selected_ids = {row["sample_id"] for row in primary}
+    per_consultation = Counter(row["conversation_id"] for row in primary)
+    remaining = sorted(
+        (
+            sample
+            for sample in _eligible_eval_samples(samples, ood=ood)
+            if sample["sample_id"] not in selected_ids
+        ),
+        key=lambda row: _rank(seed + 3, row["sample_id"]),
+    )
+    reserve_limit = len(remaining) if candidate_reserve < 0 else candidate_reserve
+    reserve: list[dict[str, Any]] = []
+    prefix = "meditod_ood_backup" if ood else "meditod_eval_backup"
+    for sample in remaining:
+        if len(reserve) >= reserve_limit:
+            break
+        if per_consultation[sample["conversation_id"]] >= max_per_consultation:
+            continue
+        reserve.append(
+            _eval_row(
+                sample,
+                prompt_id=f"{prefix}_{len(reserve):03d}",
+                ood=ood,
+                selection_role="reserve",
+            )
+        )
+        per_consultation[sample["conversation_id"]] += 1
+    manifest.update(
+        {
+            "primary_count": len(primary),
+            "candidate_reserve_requested": candidate_reserve,
+            "candidate_reserve_count": len(reserve),
+            "candidate_pool_count": len(primary) + len(reserve),
+            "candidate_pool_uses_model_outputs": False,
+            "candidate_pool_uses_oracle_scores": False,
+        }
+    )
+    return primary + reserve, manifest
 
 
 def translation_instructions() -> str:
@@ -239,11 +358,17 @@ def evaluation_translation_fidelity_errors(
     )
     errors: dict[str, list[str]] = {}
     # MediTOD本体は患者・医療者対話なので、引用番号を除く数値を厳格に保持する。
-    missing_numbers = missing_meditod_numeric_tokens(
+    normalized_source_numbers = SPOKEN_DECIMAL_PATTERN.sub(
+        lambda match: f"{match.group(1)}.{match.group(2)}",
         source_text,
+    )
+    missing_numbers = missing_meditod_numeric_tokens(
+        normalized_source_numbers,
         translated_text,
         strict_personal=True,
     )
+    if "半" in translated_text:
+        missing_numbers = [value for value in missing_numbers if value != "1/2"]
     if missing_numbers:
         errors["numbers"] = missing_numbers
     if ENGLISH_NEGATION.search(source_text) and not JAPANESE_NEGATION.search(translated_text):
@@ -251,19 +376,31 @@ def evaluation_translation_fidelity_errors(
     if TEMPORAL_SOURCE.search(source_text) and not TEMPORAL_TRANSLATION.search(translated_text):
         errors["temporal_expression"] = ["time"]
     units = list(dict.fromkeys(match.group(0).casefold() for match in UNIT_SOURCE.finditer(source_text)))
-    missing_units = [unit for unit in units if unit not in translated_text.casefold()]
+    lowered_translation = translated_text.casefold()
+    missing_units = [
+        unit
+        for unit in units
+        if not any(
+            alias.casefold() in lowered_translation
+            for alias in UNIT_ALIASES.get(unit, (unit,))
+        )
+    ]
     if missing_units:
         errors["units"] = missing_units
     medications = list(
         dict.fromkeys(match.group(0) for match in MEDICATION_PATTERN.finditer(source_text))
     )
-    missing_medications = [
-        value for value in medications if value.casefold() not in translated_text.casefold()
-    ]
+    missing_medications = []
+    for value in medications:
+        aliases = MEDICATION_ALIASES.get(
+            value.casefold(),
+            (value,),
+        )
+        if not any(alias.casefold() in lowered_translation for alias in aliases):
+            missing_medications.append(value)
     if missing_medications:
         errors["medications"] = missing_medications
     lowered_source = source_text.casefold()
-    lowered_translation = translated_text.casefold()
     missing_symptoms = []
     for concept, variants in SYMPTOM_CONCEPTS.items():
         if any(value.casefold() in lowered_source for value in variants) and not any(
@@ -353,11 +490,15 @@ def _translate_one(
     translated = validate_translation(row, payload)
     errors = evaluation_translation_fidelity_errors(row, translated)
     repaired = False
-    if errors and not mock:
+    for repair_attempt in range(1, 3):
+        if not errors or mock:
+            break
         repair_instructions = (
             translation_instructions()
             + "\n前回の翻訳で次の重要情報が欠落した可能性があります。省略や意味の反転をせず、"
-            "元の対応箇所へ忠実に保持してください。診断や助言は追加しないでください。\n"
+            "元の対応箇所へ忠実に保持してください。医学語は自然な日本語の同義表現で構いません。"
+            "診断や助言は追加しないでください。\n"
+            f"修復回数: {repair_attempt}/2\n"
             + json.dumps(errors, ensure_ascii=False)
         )
         payload = _generate_translation_payload(
@@ -419,6 +560,7 @@ def translate_prompts(
     resume: bool,
     workers: int,
     requests_per_minute: float,
+    target_count: int | None = None,
 ) -> list[dict[str, Any]]:
     existing_rows = read_jsonl(output_path) if resume and output_path.exists() else []
     existing = {row["prompt_id"]: row for row in existing_rows}
@@ -428,32 +570,68 @@ def translate_prompts(
         requests_per_minute=max(0.0, requests_per_minute),
         initial_backoff_seconds=15.0,
     )
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
-        futures = {
-            executor.submit(
-                _translate_one,
-                row,
-                model=model,
-                mock=mock,
-                pacer=pacer,
-            ): row
-            for row in pending
-        }
-        for completed, future in enumerate(as_completed(futures), start=1):
-            row = futures[future]
-            try:
-                output.append(future.result())
-                output.sort(key=lambda value: value["prompt_id"])
-                write_jsonl(output, output_path)
-                print(
-                    f"[meditod_eval_translate] completed {completed}/{len(pending)} "
-                    f"{row['prompt_id']}",
-                    flush=True,
-                )
-            except Exception as exc:
-                append_error(errors_path, row, exc)
-                print(f"[meditod_eval_translate] skip {row['prompt_id']}: {exc}", flush=True)
+    completed = 0
+    worker_count = max(1, workers)
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        for chunk_start in range(0, len(pending), worker_count):
+            if target_count is not None and len(output) >= target_count:
+                break
+            chunk = pending[chunk_start : chunk_start + worker_count]
+            futures = {
+                executor.submit(
+                    _translate_one,
+                    row,
+                    model=model,
+                    mock=mock,
+                    pacer=pacer,
+                ): row
+                for row in chunk
+            }
+            for future in as_completed(futures):
+                completed += 1
+                row = futures[future]
+                try:
+                    output.append(future.result())
+                    output.sort(key=lambda value: value["prompt_id"])
+                    write_jsonl(output, output_path)
+                    print(
+                        f"[meditod_eval_translate] completed "
+                        f"{completed}/{len(pending)} {row['prompt_id']}",
+                        flush=True,
+                    )
+                except Exception as exc:
+                    append_error(errors_path, row, exc)
+                    print(
+                        f"[meditod_eval_translate] skip {row['prompt_id']}: {exc}",
+                        flush=True,
+                    )
     return sorted(output, key=lambda row: row["prompt_id"])
+
+
+def finalize_translated_prompts(
+    candidates: list[dict[str, Any]],
+    translated: list[dict[str, Any]],
+    *,
+    count: int,
+) -> list[dict[str, Any]]:
+    """主標本を優先し、失敗分だけ補欠で埋めて順序を固定する。"""
+    translated_by_id = {row["prompt_id"]: row for row in translated}
+    final: list[dict[str, Any]] = []
+    for candidate in candidates:
+        row = translated_by_id.get(candidate["prompt_id"])
+        if row is None:
+            continue
+        if evaluation_translation_fidelity_errors(candidate, row):
+            continue
+        row = {
+            **row,
+            "translation_fidelity_version": TRANSLATION_FIDELITY_VERSION,
+            "translation_revalidated": True,
+        }
+        final.append(row)
+        if len(final) >= count:
+            break
+    return final
 
 
 def generate_three_model_responses(
@@ -570,6 +748,14 @@ def main() -> int:
     prepare.add_argument("--model", default=resolve_scoring_model())
     prepare.add_argument("--workers", type=int, default=4)
     prepare.add_argument("--requests-per-minute", type=float, default=120.0)
+    prepare.add_argument(
+        "--candidate-reserve",
+        type=int,
+        default=0,
+        help="-1は診療単位上限内の全補欠候補を使用",
+    )
+    prepare.add_argument("--allow-exhausted-shortfall", action="store_true")
+    prepare.add_argument("--candidate-output")
     prepare.add_argument("--resume", action="store_true")
     prepare.add_argument("--mock", action="store_true")
     generate = sub.add_parser("generate")
@@ -584,25 +770,71 @@ def main() -> int:
     generate.add_argument("--mock", action="store_true")
     args = parser.parse_args()
     if args.command == "prepare":
-        selected, manifest = select_eval_prompts(
-            read_jsonl(args.samples),
+        samples = read_jsonl(args.samples)
+        selected, manifest = select_eval_prompt_candidates(
+            samples,
             count=args.count,
             seed=args.seed,
             ood=args.ood,
             max_per_consultation=args.max_per_consultation,
+            candidate_reserve=args.candidate_reserve,
         )
-        translated = translate_prompts(
+        candidate_output = Path(
+            args.candidate_output
+            or str(Path(args.output).with_name(Path(args.output).stem + "_candidates.jsonl"))
+        )
+        if (
+            args.resume
+            and not candidate_output.exists()
+            and Path(args.output).exists()
+        ):
+            write_jsonl(read_jsonl(args.output), candidate_output)
+        translated_candidates = translate_prompts(
             selected,
-            output_path=Path(args.output),
+            output_path=candidate_output,
             errors_path=Path(args.errors_output) if args.errors_output else None,
             model=args.model,
             mock=args.mock,
             resume=args.resume,
             workers=args.workers,
             requests_per_minute=args.requests_per_minute,
+            target_count=args.count,
         )
-        if len(translated) != args.count:
-            raise RuntimeError(f"MediTOD評価翻訳が不足しています: {len(translated)}/{args.count}")
+        translated = finalize_translated_prompts(
+            selected,
+            translated_candidates,
+            count=args.count,
+        )
+        if len(translated) != args.count and not args.allow_exhausted_shortfall:
+            raise RuntimeError(
+                f"MediTOD評価翻訳が不足しています: {len(translated)}/{args.count}"
+            )
+        if not translated:
+            raise RuntimeError("MediTOD評価翻訳が1件も得られませんでした。")
+        write_jsonl(translated, args.output)
+        primary_ids = {
+            row["prompt_id"]
+            for row in selected
+            if row.get("selection_role") == "primary"
+        }
+        final_sample_ids = [row["sample_id"] for row in translated]
+        manifest.update(
+            {
+                "requested_count": args.count,
+                "count": len(translated),
+                "translated_candidate_count": len(translated_candidates),
+                "translation_shortfall": len(translated) < args.count,
+                "candidate_pool_exhausted": len(translated) < args.count,
+                "reserve_used": sum(
+                    row["prompt_id"] not in primary_ids for row in translated
+                ),
+                "translation_fidelity_version": TRANSLATION_FIDELITY_VERSION,
+                "candidate_output": str(candidate_output),
+                "sample_ids_sha256": hashlib.sha256(
+                    "\n".join(final_sample_ids).encode()
+                ).hexdigest(),
+            }
+        )
         Path(args.manifest).write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         return 0
     rows = generate_three_model_responses(
