@@ -64,6 +64,65 @@ def test_public_bundle_has_no_model_identity_and_is_balanced(tmp_path: Path):
     assert len(set(positions)) >= 2
 
 
+def test_posthoc_human_review_exclusion_and_axis_questions():
+    definition = load_definition(
+        Path("configs/user_evaluations/mathdial_likert_v2.yaml")
+    )
+    excluded = definition["selection"]["human_review_exclusions"][0]["sample_id"]
+    candidates = []
+    for index in range(21):
+        row = response_row(index)
+        row.update(
+            {
+                "sample_id": excluded if index == 0 else f"kept_{index}",
+                "selection_axes_available": True,
+                "basis_axis_win_count": 7,
+                "max_pairwise_similarity": 0.2,
+                "text_distinctness": 0.8,
+                "oracle_means": {
+                    "base": 4.0,
+                    "basis": 8.0,
+                    "random_dpo": 4.0,
+                },
+                "basis_advantage": 4.0,
+            }
+        )
+        candidates.append(row)
+    selected = select_outcome_enriched(
+        candidates,
+        20,
+        definition,
+    )
+    assert excluded not in {row["sample_id"] for row in selected}
+    assert tuple(axis_keys(definition)) == (
+        "equitable_tutoring",
+        "learner_reasoning_diagnosis",
+        "mistake_location_and_targeting",
+        "guidance_quality",
+        "feedback_actionability",
+        "answer_revealing_calibration",
+        "teacher_move_stage_alignment",
+    )
+
+
+def test_meditod_posthoc_questions_are_layperson_observable():
+    definition = load_definition(
+        Path("configs/user_evaluations/meditod_likert_v2.yaml")
+    )
+    statements = {
+        axis["key"]: axis["statement"] for axis in definition["axes"]
+    }
+    assert tuple(axis_keys(definition)) == (
+        "coverage_without_redundancy",
+        "premature_assessment_avoidance",
+        "appropriate_uncertainty",
+        "unsafe_medical_advice",
+        "unsupported_diagnosis",
+    )
+    assert "情報が十分でない" in statements["unsafe_medical_advice"]
+    assert "危険" not in statements["unsafe_medical_advice"]
+
+
 def test_sqlite_assignment_resume_export_and_statistics(tmp_path: Path):
     definition = load_definition(Path("configs/user_evaluations/meditod_likert_v1.yaml"))
     private = prepare_public(tmp_path / "forms", definition)

@@ -1,0 +1,63 @@
+dataset: mathdial
+survey_version: mathdial_likert_web.v2_posthoc_axes
+page_title: 個別指導応答の7段階評価
+evaluation_title: 個別指導応答の評価
+intro: 数学を学んでいる人に対する3つの匿名応答を比較します。数学の答えだけでなく、学習者の考えを理解し、次の思考を支える会話の進め方を評価してください。
+style_features:
+  - 学習者の考えが正しいか、どこで迷ったかを具体的に捉えている
+  - 現在の理解に合う質問、ヒント、説明によって次に考えることを示している
+  - 答えを示す量や指導方法を、会話の進み具合に合わせて調整している
+example:
+  user: 分数を足すとき、分母も足して2/7だと思いました。
+  good_response: 分母は一つ分の大きさを表しているので、足す前に同じ大きさへそろえる必要があります。1/3と1/4の両方を表せる分母は何でしょうか。
+  good_explanation: 間違いの位置を具体的に捉え、必要な説明をしたうえで、学習者が次に行うことを明確にしています。
+  poor_responses:
+    - response: 正解は7/12です。
+      explanation: 答えだけを示しており、学習者の考えのどこを直せばよいか分かりません。
+    - response: もう一度よく考えてください。
+      explanation: 次に見直す箇所や行うことが具体的でなく、学習者が先へ進みにくい応答です。
+axes:
+  - key: equitable_tutoring
+    statement: 学習者が自分で考え、説明し、解き方を試せる余地を残している。
+  - key: learner_reasoning_diagnosis
+    statement: 学習者の考えが正しいか、どこが誤り・不十分かを正確に捉えている。
+  - key: mistake_location_and_targeting
+    statement: 次に見直すべき箇所や考えるべき点を、具体的に絞っている。
+  - key: guidance_quality
+    statement: 質問、ヒント、説明が正確で、学習者の現在の理解に合っている。
+  - key: feedback_actionability
+    statement: 学習者が次に何を考え、計算し、確かめればよいか分かる。
+  - key: answer_revealing_calibration
+    statement: 答えや解き方を示す量とタイミングが、会話の進み具合に合っている。
+  - key: teacher_move_stage_alignment
+    statement: 質問、ヒント、説明、理解確認の使い分けが、会話の段階に合っている。
+final_choice_question: 3つの応答のうち、学習者の考えを正確に捉え、現在の段階に合う質問・ヒント・説明によって、自分で次に進めるよう支える個別指導応答として、最もふさわしいものはどれですか。
+selection:
+  version: mathdial_human_eval_posthoc_axes.v2
+  status: outcome_enriched_secondary_human_eval_posthoc_axes
+  oracle_axes:
+    - equitable_tutoring
+    - learner_reasoning_diagnosis
+    - mistake_location_and_targeting
+    - guidance_quality
+    - feedback_actionability
+    - answer_revealing_calibration
+    - teacher_move_stage_alignment
+  min_axis_wins: 4
+  min_basis_mean: 7.0
+  min_basis_advantage: 0.5
+  max_pairwise_text_similarity: 0.92
+  require_all_strata: false
+  stratum_penalty: 0.05
+  conversation_penalty: 0.5
+  human_review_exclusions:
+    - sample_id: mathdial_test_000270_175ee0198c16#assistant-0002
+      reason: 正しい40回をBASiS応答が誤りと判定しており、人手評価を逆方向へ誘導する
+    - sample_id: mathdial_test_000296_cf79a3f04307#assistant-0002
+      reason: 「1.5倍増加」の原文解釈が曖昧で、指導スタイル以外の翻訳解釈差が支配的である
+    - sample_id: mathdial_test_000598_2029b4d12381#assistant-0002
+      reason: 「その数」の参照先が曖昧で、応答差より問題文解釈の影響が大きい
+  rank_weights:
+    basis_advantage: 1.0
+    axis_win_fraction: 0.35
+    text_distinctness: 0.35

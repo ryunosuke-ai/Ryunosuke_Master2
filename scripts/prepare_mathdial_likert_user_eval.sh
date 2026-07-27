@@ -4,10 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-SOURCE_RUN="${SOURCE_RUN:-artifacts/mathdial_wildchat/evaluation_rechecks/mathdial_v6_instruction_discriminative_followup_v1}"
+SOURCE_RUN="${SOURCE_RUN:-artifacts/mathdial_wildchat/evaluation_rechecks/mathdial_v6_instruction_outcome_selected_top100_v1}"
 RESPONSES="${RESPONSES:-$SOURCE_RUN/evaluation/responses.jsonl}"
 ORACLE_RAW="${ORACLE_RAW:-$SOURCE_RUN/evaluation/oracle/pedagogical_v2/raw.jsonl}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-$SOURCE_RUN/user_eval}"
+DEFINITION="${DEFINITION:-configs/user_evaluations/mathdial_likert_v2.yaml}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-$SOURCE_RUN/user_eval_v2_posthoc_axes}"
 COUNT="${COUNT:-20}"
 SEED="${SEED:-42}"
 
@@ -15,4 +16,5 @@ SEED="${SEED:-42}"
 [[ -s "$ORACLE_RAW" ]] || { echo "MathDial Oracle rawが見つかりません: $ORACLE_RAW" >&2; exit 2; }
 python3 -m tools.prepare_three_model_likert_eval \
   --dataset mathdial --responses "$RESPONSES" --oracle-raw "$ORACLE_RAW" \
-  --output-root "$OUTPUT_ROOT" --count "$COUNT" --seed "$SEED"
+  --definition "$DEFINITION" --output-root "$OUTPUT_ROOT" \
+  --count "$COUNT" --seed "$SEED"

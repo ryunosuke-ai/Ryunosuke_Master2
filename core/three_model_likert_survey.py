@@ -67,6 +67,49 @@ def load_definition(path: Path) -> dict[str, Any]:
         raise ValueError("評価軸は重複のない5〜10項目にしてください。")
     if len(definition["style_features"]) != 3:
         raise ValueError("会話スタイルの説明は3項目にしてください。")
+    selection = definition.get("selection")
+    if selection is not None:
+        if not isinstance(selection, dict):
+            raise ValueError("selectionはmappingで指定してください。")
+        oracle_axes = selection.get("oracle_axes")
+        if (
+            not isinstance(oracle_axes, list)
+            or not oracle_axes
+            or any(not str(axis).strip() for axis in oracle_axes)
+            or len({str(axis) for axis in oracle_axes}) != len(oracle_axes)
+        ):
+            raise ValueError("selection.oracle_axesは重複のない1項目以上にしてください。")
+        min_axis_wins = int(selection.get("min_axis_wins", 1))
+        if not 1 <= min_axis_wins <= len(oracle_axes):
+            raise ValueError("selection.min_axis_winsがoracle_axes数の範囲外です。")
+        max_similarity = float(selection.get("max_pairwise_text_similarity", 0.92))
+        if not 0.0 <= max_similarity < 1.0:
+            raise ValueError(
+                "selection.max_pairwise_text_similarityは0以上1未満です。"
+            )
+        if not isinstance(selection.get("require_all_strata", True), bool):
+            raise ValueError("selection.require_all_strataは真偽値で指定してください。")
+        for key in ("stratum_penalty", "conversation_penalty"):
+            if float(selection.get(key, 0.0)) < 0.0:
+                raise ValueError(f"selection.{key}は0以上にしてください。")
+        exclusions = selection.get("human_review_exclusions", [])
+        if not isinstance(exclusions, list):
+            raise ValueError(
+                "selection.human_review_exclusionsはlistで指定してください。"
+            )
+        exclusion_ids = []
+        for row in exclusions:
+            if (
+                not isinstance(row, dict)
+                or not str(row.get("sample_id") or "").strip()
+                or not str(row.get("reason") or "").strip()
+            ):
+                raise ValueError(
+                    "human_review_exclusionsにはsample_idとreasonが必要です。"
+                )
+            exclusion_ids.append(str(row["sample_id"]))
+        if len(exclusion_ids) != len(set(exclusion_ids)):
+            raise ValueError("human_review_exclusionsのsample_idが重複しています。")
     return definition
 
 

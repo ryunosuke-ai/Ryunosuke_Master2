@@ -7,7 +7,7 @@ cd "$ROOT_DIR"
 
 DATASET="${DATASET:?DATASETにはmathdialまたはmeditodを指定してください}"
 case "$DATASET" in mathdial|meditod) ;; *) echo "DATASETはmathdialまたはmeditodです。" >&2; exit 2;; esac
-DEFINITION="${DEFINITION:-configs/user_evaluations/${DATASET}_likert_v1.yaml}"
+DEFINITION="${DEFINITION:-configs/user_evaluations/${DATASET}_likert_v2.yaml}"
 FORM_ROOT="${FORM_ROOT:?FORM_ROOTにprepare済み人手評価ディレクトリを指定してください}"
 DATABASE="${DATABASE:-artifacts/user_eval/web/${DATASET}_likert_responses.sqlite3}"
 HOST="${HOST:-0.0.0.0}"

@@ -93,7 +93,7 @@ import hashlib,json,pathlib,sys
 paths=[
  "configs/datasets/meditod.yaml","configs/datasets/wildchat_health.yaml",
  "configs/evaluations/meditod_oracle_v1.yaml","configs/training/meditod_dpo.yaml",
- "configs/user_evaluations/meditod_likert_v1.yaml","core/dpo_prompting.py",
+ "configs/user_evaluations/meditod_likert_v2.yaml","core/dpo_prompting.py",
  "tools/meditod_dataset.py","tools/prepare_meditod.py","tools/prepare_meditod_for_analysis.py",
  "tools/analyze_meditod_corpus_transition_bayes.py","tools/wildchat_health.py",
  "tools/prioritize_health_candidates.py","tools/meditod_selection.py","tools/measure_basis_selection_pool.py",
@@ -308,7 +308,7 @@ stage_outputs() {
       (( OOD_EVAL_COUNT > 0 )) && printf '%s\n' "$EVAL_DIR/statistics_ood/model_summary.csv" "$EVAL_DIR/statistics_ood/cluster_omnibus_friedman.csv"
       ;;
     report) printf '%s\n' "$OUTPUT_ROOT/reports/final_report.md" ;;
-    prepare_user_eval) printf '%s\n' "$OUTPUT_ROOT/user_eval/manifest.json" ;;
+    prepare_user_eval) printf '%s\n' "$OUTPUT_ROOT/user_eval_v2_posthoc_axes/manifest.json" ;;
   esac
 }
 
@@ -757,7 +757,15 @@ report_stage() {
 prepare_user_eval_stage() {
   local count=20
   [[ "$DRY_RUN" == "1" ]] && count=2
-  python3 -m tools.prepare_three_model_likert_eval --dataset meditod --responses "$EVAL_DIR/responses.jsonl" --oracle-raw "$EVAL_DIR/oracle/history/raw.jsonl" --output-root "$OUTPUT_ROOT/user_eval" --count "$count" --seed "$SEED"
+  python3 -m tools.prepare_three_model_likert_eval \
+    --dataset meditod \
+    --responses "$EVAL_DIR/responses.jsonl" \
+    --oracle-raw "$EVAL_DIR/oracle/history/raw.jsonl" \
+    --oracle-raw "$EVAL_DIR/oracle/safety/raw.jsonl" \
+    --definition configs/user_evaluations/meditod_likert_v2.yaml \
+    --output-root "$OUTPUT_ROOT/user_eval_v2_posthoc_axes" \
+    --count "$count" \
+    --seed "$SEED"
 }
 
 preflight_storage

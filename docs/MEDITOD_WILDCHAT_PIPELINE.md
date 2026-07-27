@@ -147,34 +147,34 @@ PYTHONUNBUFFERED=1 \
 MediTOD本run完了後:
 
 ```bash
-FORM_ROOT=artifacts/meditod_wildchat/runs/meditod_wildchat_gpt56_v1/user_eval \
-DATABASE=artifacts/user_eval/web/meditod_likert_responses.sqlite3 \
+FORM_ROOT=artifacts/meditod_wildchat/runs/meditod_wildchat_gpt56_v2/user_eval_v2_posthoc_axes \
+DATABASE=artifacts/user_eval/web/meditod_likert_responses_v2.sqlite3 \
 PUBLIC_HOST=192.168.1.17 \
 PORT=8505 \
 ./scripts/run_meditod_likert_user_eval_web.sh
 ```
 
-MathDial識別追試150件から人手評価itemを作成し、別DBで起動する:
+MathDial事後選択100件から人手評価itemを作成し、別DBで起動する:
 
 ```bash
 ./scripts/prepare_mathdial_likert_user_eval.sh
 
-FORM_ROOT=artifacts/mathdial_wildchat/evaluation_rechecks/mathdial_v6_instruction_discriminative_followup_v1/user_eval \
-DATABASE=artifacts/user_eval/web/mathdial_likert_responses.sqlite3 \
+FORM_ROOT=artifacts/mathdial_wildchat/evaluation_rechecks/mathdial_v6_instruction_outcome_selected_top100_v1/user_eval_v2_posthoc_axes \
+DATABASE=artifacts/user_eval/web/mathdial_likert_responses_v2.sqlite3 \
 PUBLIC_HOST=192.168.1.17 \
 PORT=8504 \
 ./scripts/run_mathdial_likert_user_eval_web.sh
 ```
 
-公開itemはモデル名、Oracle値、正解位置を含まない。復号情報は`private_answer_key.jsonl`だけに保存する。選定標本は`outcome_enriched_secondary_human_eval`であり、test全体の無条件な主結果として解釈しない。
+公開itemはモデル名、Oracle値、正解位置を含まない。復号情報は`private_answer_key.jsonl`だけに保存する。選定には事後採用軸、BASiS優位幅、軸別勝数、応答間の文章差、人手可読性監査を用いる。標本は`outcome_enriched_secondary_human_eval_posthoc_axes`であり、test全体の無条件な主結果として解釈しない。
 
 回答統計:
 
 ```bash
 python3 -m tools.analyze_three_model_likert_responses \
-  --database artifacts/user_eval/web/meditod_likert_responses.sqlite3 \
-  --definition configs/user_evaluations/meditod_likert_v1.yaml \
-  --private-answer-key artifacts/meditod_wildchat/runs/meditod_wildchat_gpt56_v1/user_eval/private_answer_key.jsonl \
+  --database artifacts/user_eval/web/meditod_likert_responses_v2.sqlite3 \
+  --definition configs/user_evaluations/meditod_likert_v2.yaml \
+  --private-answer-key artifacts/meditod_wildchat/runs/meditod_wildchat_gpt56_v2/user_eval_v2_posthoc_axes/private_answer_key.jsonl \
   --output-dir artifacts/user_eval/web/meditod_statistics
 ```
 
