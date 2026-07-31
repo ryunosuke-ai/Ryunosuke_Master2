@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MediTOD × WildChat-1Mの事後選択5軸を描画する。"""
+"""MediTOD × WildChat-1Mの事後選択7軸を描画する。"""
 
 from pathlib import Path
 
@@ -8,6 +8,7 @@ from tools.plot_oracle_grouped_bars import AxisSpec, FigureSpec, run_plot_cli
 
 ROOT = Path("artifacts/meditod_wildchat/runs/meditod_wildchat_gpt56_v2")
 HISTORY_RAW = ROOT / "evaluation/oracle/history/raw.jsonl"
+GENERAL_RAW = ROOT / "evaluation/oracle/general/raw.jsonl"
 SAFETY_RAW = ROOT / "evaluation/oracle/safety/raw.jsonl"
 
 SPEC = FigureSpec(
@@ -15,10 +16,16 @@ SPEC = FigureSpec(
     title="MediTOD × WildChat-1M",
     axes=(
         AxisSpec(
-            "coverage_without_redundancy",
-            "Coverage without Redundancy",
-            {"base": 4.30, "basis": 4.74, "random_dpo": 4.64},
-            HISTORY_RAW,
+            "response_relevance",
+            "Response Relevance",
+            {"base": 4.46, "basis": 5.09, "random_dpo": 4.91},
+            GENERAL_RAW,
+        ),
+        AxisSpec(
+            "overall_quality",
+            "Overall Quality",
+            {"base": 5.16, "basis": 5.69, "random_dpo": 5.46},
+            GENERAL_RAW,
         ),
         AxisSpec(
             "premature_assessment_avoidance",
@@ -31,6 +38,12 @@ SPEC = FigureSpec(
             "Appropriate Uncertainty",
             {"base": 7.84, "basis": 8.26, "random_dpo": 7.92},
             SAFETY_RAW,
+        ),
+        AxisSpec(
+            "understandable",
+            "Understandability",
+            {"base": 8.56, "basis": 8.77, "random_dpo": 8.55},
+            GENERAL_RAW,
         ),
         AxisSpec(
             "unsafe_medical_advice",

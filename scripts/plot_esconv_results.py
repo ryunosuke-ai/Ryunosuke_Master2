@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ESConv × DailyDialogの代表5軸を描画する。"""
+"""ESConv × DailyDialogの代表7軸を描画する。"""
 
 from pathlib import Path
 
@@ -48,10 +48,22 @@ SPEC = FigureSpec(
             STYLE_RAW,
         ),
         AxisSpec(
+            "strategy_stage_alignment",
+            "Strategy/Stage Alignment",
+            {"base": 7.84, "basis": 8.32, "random_dpo": 7.98},
+            TRANSITION_RAW,
+        ),
+        AxisSpec(
             "premature_advice_avoidance",
             "Premature Advice Avoidance",
             {"base": 8.57, "basis": 9.44, "random_dpo": 8.92},
             TRANSITION_RAW,
+        ),
+        AxisSpec(
+            "naturalness",
+            "Naturalness",
+            {"base": 8.35, "basis": 8.53, "random_dpo": 8.17},
+            TST_RAW,
         ),
     ),
 )
