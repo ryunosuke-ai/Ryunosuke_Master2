@@ -18,6 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from apps.esconv_likert_user_eval import (  # noqa: E402
     apply_page_style,
+    conversation_history_html,
     readable_text_html,
     render_html_panel,
     reset_evaluation_scroll,
@@ -65,7 +66,7 @@ def build_reference_html(
     parts = [
         '<div class="reference-panel">',
         '<div class="reference-heading">これまでの会話</div>',
-        f'<div class="conversation-text">{readable_text_html(item["conversation"])}</div>',
+        f'<div class="conversation-text">{conversation_history_html(item["conversation"])}</div>',
     ]
     for position in RESPONSE_POSITIONS:
         parts.extend(
@@ -114,14 +115,20 @@ def first_unanswered(items: list[dict[str, Any]], saved: dict[str, Any]) -> int:
 
 def render_start(database: Path, definition: dict[str, Any], experiments: dict[str, list[dict[str, Any]]], requested: str | None) -> None:
     st.title(definition["page_title"])
-    st.caption(f"実験{requested}" if requested else "実験A/B自動割当")
+    single_form = len(experiments) == 1
+    st.caption(
+        "全員共通の10問"
+        if single_form
+        else (f"実験{requested}" if requested else "実験A/B自動割当")
+    )
     features = "".join(f"<li>{html.escape(str(value))}</li>" for value in definition["style_features"])
     render_html_panel(
         "survey-intro",
         "<h3>実験指示</h3>"
         f"<p>{html.escape(str(definition['intro']))}</p>"
         f'<ul class="style-list">{features}</ul>'
-        f"<p>評価は全部で{len(next(iter(experiments.values())))}件です。各評価では、これまでの会話と匿名の応答A〜Cを示します。各応答を同じ7項目で1〜7点評価し、最後に最もふさわしい応答を選んでください。</p>",
+        f"<p>評価は全部で{len(next(iter(experiments.values())))}件です。各評価では、これまでの会話と匿名の応答A〜Cを示します。各応答を同じ項目で1〜7点評価し、最後に最もふさわしい応答を選んでください。</p>"
+        "<p>評価画面では、左側にこれまでの会話と3つの応答、右側に回答欄が表示されます。左側の内容を見比べながら、右側の質問に順番に回答してください。会話が長い場合は直近のやり取りを表示し、前半は「前半の会話を表示」から確認できます。左側はそのままに、右側だけをスクロールして進められます。</p>",
     )
     st.subheader("評価例")
     example = definition["example"]
@@ -176,7 +183,7 @@ def render_evaluation(database: Path, definition: dict[str, Any], participant: P
     st.caption(f"評価 {index + 1} / {total}　保存済み {len(saved_all)} / {total}")
     notice = st.container(key="evaluation_validation", border=False)
     with st.form(f"evaluation_{participant.participant_id}_{item_id}"):
-        reference_column, rating_column = st.columns([1.08, 0.92], gap="large")
+        reference_column, rating_column = st.columns([1.12, 0.88], gap="large")
         with reference_column:
             st.markdown(
                 build_reference_html(item, definition),
@@ -272,6 +279,8 @@ def main() -> None:
     except (OSError, ValueError) as exc:
         st.error(f"評価データを読み込めませんでした: {exc}")
         st.stop()
+    if len(experiments) == 1:
+        requested = next(iter(experiments))
     if "generic_survey_participant" not in st.session_state:
         render_start(args.database, definition, experiments, requested)
         return

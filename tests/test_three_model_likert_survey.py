@@ -19,7 +19,12 @@ from core.three_model_likert_survey import (
     save_response,
 )
 from tools.analyze_three_model_likert_responses import analyze, load_ratings
-from tools.prepare_three_model_likert_eval import build_records, select_outcome_enriched, write_jsonl
+from tools.prepare_three_model_likert_eval import (
+    build_records,
+    response_integrity_issues,
+    select_outcome_enriched,
+    write_jsonl,
+)
 
 
 def response_row(index: int) -> dict:
@@ -62,6 +67,58 @@ def test_public_bundle_has_no_model_identity_and_is_balanced(tmp_path: Path):
     assert "oracle" not in public_text.lower()
     positions = [next(position for position, model in row["position_to_model"].items() if model == "basis") for row in private]
     assert len(set(positions)) >= 2
+
+
+def test_single_form_bundle_loads_only_experiment_a(tmp_path: Path):
+    definition = load_definition(
+        Path("configs/user_evaluations/meditod_likert_v1.yaml")
+    )
+    selected = select_outcome_enriched(
+        [response_row(index) for index in range(10)],
+        10,
+    )
+    public, _ = build_records(
+        selected,
+        definition,
+        seed=42,
+        single_form=True,
+    )
+    write_jsonl(
+        tmp_path / "experiment_a" / "form_items_public.jsonl",
+        public["A"],
+    )
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "dataset": definition["dataset"],
+                "survey_version": definition["survey_version"],
+                "survey_mode": "single",
+                "experiments": ["A"],
+                "items_per_experiment": 10,
+            }
+        ),
+        encoding="utf-8",
+    )
+    experiments = load_public_experiments(tmp_path, definition)
+    assert set(experiments) == {"A"}
+    assert len(experiments["A"]) == 10
+
+
+def test_response_integrity_rejects_truncated_generation():
+    assert response_integrity_issues(
+        {
+            "basis": "計算をもう一度、1",
+            "base": "もう一度計算してみましょう。",
+            "random_dpo": "次の式を確認してください。",
+        }
+    ) == {"basis": "truncated_fragment"}
+    assert not response_integrity_issues(
+        {
+            "basis": "数値を一つずつ確認しましょう。",
+            "base": "式をもう一度確認しましょう。",
+            "random_dpo": "次の手順を考えてください。",
+        }
+    )
 
 
 def test_posthoc_human_review_exclusion_and_axis_questions():

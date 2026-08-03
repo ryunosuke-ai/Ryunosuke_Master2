@@ -17,10 +17,14 @@ HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8503}"
 PUBLIC_HOST="${PUBLIC_HOST:-}"
 
-if [[ ! -s "$FORM_ROOT/experiment_a/form_items_public.jsonl" || \
-      ! -s "$FORM_ROOT/experiment_b/form_items_public.jsonl" ]]; then
+if [[ ! -s "$FORM_ROOT/experiment_a/form_items_public.jsonl" ]]; then
   python3 -m scripts.prepare_esconv_google_form_likert_blocks \
     --output-dir "$FORM_ROOT"
+fi
+
+SINGLE_FORM=0
+if [[ ! -s "$FORM_ROOT/experiment_b/form_items_public.jsonl" ]]; then
+  SINGLE_FORM=1
 fi
 
 mkdir -p "$(dirname "$DATABASE")"
@@ -29,8 +33,12 @@ if [[ -z "$PUBLIC_HOST" ]]; then
   PUBLIC_HOST="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
 fi
 PUBLIC_HOST="${PUBLIC_HOST:-localhost}"
-printf '[survey] 実験A: http://%s:%s/?experiment=A\n' "$PUBLIC_HOST" "$PORT"
-printf '[survey] 実験B: http://%s:%s/?experiment=B\n' "$PUBLIC_HOST" "$PORT"
+if [[ "$SINGLE_FORM" == "1" ]]; then
+  printf '[survey] 全員共通: http://%s:%s/\n' "$PUBLIC_HOST" "$PORT"
+else
+  printf '[survey] 実験A: http://%s:%s/?experiment=A\n' "$PUBLIC_HOST" "$PORT"
+  printf '[survey] 実験B: http://%s:%s/?experiment=B\n' "$PUBLIC_HOST" "$PORT"
+fi
 
 exec python3 -m streamlit run apps/esconv_likert_user_eval.py \
   --server.address "$HOST" \

@@ -8,6 +8,7 @@ import difflib
 import hashlib
 import json
 import random
+import re
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -93,7 +94,37 @@ def readable_and_distinct(responses: dict[str, str]) -> tuple[bool, str]:
         return False, "identical_response"
     if any("<script" in value.lower() or "```" in value for value in normalized.values()):
         return False, "display_risk"
+    integrity_issues = response_integrity_issues(normalized)
+    if integrity_issues:
+        model, issue = next(iter(integrity_issues.items()))
+        return False, f"response_integrity:{model}:{issue}"
     return True, "passed"
+
+
+def response_integrity_issues(responses: dict[str, str]) -> dict[str, str]:
+    """人手評価に不適切な途中切れ・文字化け応答を検出する。"""
+
+    issues: dict[str, str] = {}
+    for model, raw_value in responses.items():
+        value = " ".join(str(raw_value).split()).strip()
+        if re.search(r"[\uac00-\ud7a3]", value):
+            issues[model] = "unexpected_hangul"
+            continue
+        if "\ufffd" in value:
+            issues[model] = "replacement_character"
+            continue
+        if re.search(r"(?:[、,，:：;/／]|(?:もう一度|例えば|そして|次に))\s*$", value):
+            issues[model] = "unfinished_ending"
+            continue
+        if re.search(r"[、,，]\s*[0-9A-Za-zＡ-Ｚａ-ｚ０-９]\s*$", value):
+            issues[model] = "truncated_fragment"
+            continue
+        if value.count("（") != value.count("）"):
+            issues[model] = "unbalanced_parentheses"
+            continue
+        if value.count("「") != value.count("」"):
+            issues[model] = "unbalanced_japanese_quote"
+    return issues
 
 
 def text_distinctness(responses: dict[str, str]) -> dict[str, float]:
@@ -331,15 +362,25 @@ def position_orders(count: int, seed: int) -> list[tuple[str, str, str]]:
     return orders
 
 
-def build_records(selected: list[dict[str, Any]], definition: dict[str, Any], seed: int) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
+def build_records(
+    selected: list[dict[str, Any]],
+    definition: dict[str, Any],
+    seed: int,
+    *,
+    single_form: bool = False,
+) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
     orders = position_orders(len(selected), seed)
-    public = {"A": [], "B": []}
+    public = {"A": []} if single_form else {"A": [], "B": []}
     private = []
     half = len(selected) // 2
     for index, (row, order) in enumerate(zip(selected, orders), start=1):
-        experiment = "A" if index <= half else "B"
-        number = index if experiment == "A" else index - half
-        item_id = f"{definition['dataset']}_{experiment.lower()}_{number:02d}"
+        experiment = "A" if single_form or index <= half else "B"
+        number = index if single_form or experiment == "A" else index - half
+        item_id = (
+            f"{definition['dataset']}_{number:02d}"
+            if single_form
+            else f"{definition['dataset']}_{experiment.lower()}_{number:02d}"
+        )
         item = {
             "item_id": item_id,
             "item_number": number,
@@ -377,9 +418,71 @@ def build_records(selected: list[dict[str, Any]], definition: dict[str, Any], se
                 ),
                 "text_distinctness": row.get("text_distinctness"),
                 "response_sha256": {model: sha256_text(value) for model, value in row["responses"].items()},
+                "response_integrity_issues": response_integrity_issues(
+                    row["responses"]
+                ),
             }
         )
     return public, private
+
+
+def write_private_selection_review(
+    path: Path,
+    *,
+    selected: list[dict[str, Any]],
+    definition: dict[str, Any],
+) -> None:
+    """選定根拠と未編集の3モデル応答を研究者向けに保存する。"""
+
+    lines = [
+        f"# {definition['dataset']}単一10問の非公開選定監査",
+        "",
+        "> モデル名とOracle得点を含むため、実験参加者には共有しない。",
+        "> 応答は生成時の原文から一切編集していない。途中切れ・文字化け・",
+        "> 内容矛盾・識別困難な候補は、別の評価済み候補へ差し替えた。",
+        "> Oracle結果を用いて富化した副次的人手評価であり、test全体の",
+        "> 無条件な主評価としては扱わない。",
+        "",
+    ]
+    for index, row in enumerate(selected, start=1):
+        means = row["oracle_means"]
+        lines.extend(
+            [
+                f"## {index}. {row['sample_id']}",
+                "",
+                f"- 層: `{row['stratum']}`",
+                (
+                    "- 採用軸平均: "
+                    f"BASiS={means['basis']:.2f}, Base={means['base']:.2f}, "
+                    f"Random={means['random_dpo']:.2f}"
+                ),
+                f"- 最良比較モデルとの差: {row['basis_advantage']:.2f}",
+                (
+                    "- BASiSが上回った軸: "
+                    f"{row['basis_axis_win_count']}/{len(row['selection_axes'])}"
+                ),
+                f"- 応答識別度: {row['text_distinctness']:.3f}",
+                "- 応答完全性検査: passed",
+                "",
+                "### これまでの会話",
+                "",
+                row["conversation"],
+                "",
+                "### BASiS",
+                "",
+                row["responses"]["basis"],
+                "",
+                "### Base",
+                "",
+                row["responses"]["base"],
+                "",
+                "### Random-DPO",
+                "",
+                row["responses"]["random_dpo"],
+                "",
+            ]
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main() -> int:
@@ -391,9 +494,17 @@ def main() -> int:
     parser.add_argument("--definition", type=Path)
     parser.add_argument("--count", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--single-form",
+        action="store_true",
+        help="A/Bへ分割せず、全参加者が同じitemを評価する。",
+    )
     args = parser.parse_args()
-    if args.count < 2 or args.count % 2:
-        raise ValueError("--countは2以上の偶数にしてください。")
+    if args.single_form:
+        if args.count < 1:
+            raise ValueError("単一フォームの--countは1以上にしてください。")
+    elif args.count < 2 or args.count % 2:
+        raise ValueError("A/B形式の--countは2以上の偶数にしてください。")
     definition_path = args.definition or Path(
         f"configs/user_evaluations/{args.dataset}_likert_v2.yaml"
     )
@@ -407,13 +518,23 @@ def main() -> int:
         selection_axes=settings["oracle_axes"] or None,
     )
     selected = select_outcome_enriched(candidates, args.count, definition)
-    public, private = build_records(selected, definition, args.seed)
+    public, private = build_records(
+        selected,
+        definition,
+        args.seed,
+        single_form=args.single_form,
+    )
     for experiment, rows in public.items():
         write_jsonl(args.output_root / f"experiment_{experiment.lower()}" / "form_items_public.jsonl", rows)
     write_jsonl(args.output_root / "private_answer_key.jsonl", private)
+    write_private_selection_review(
+        args.output_root / "selection_review_private.md",
+        selected=selected,
+        definition=definition,
+    )
     write_jsonl(args.output_root / "blind_review_sheet.jsonl", [
         {"item_id": item["item_id"], "conversation": item["conversation"], "response_a": item["response_a"], "response_b": item["response_b"], "response_c": item["response_c"]}
-        for experiment in ("A", "B") for item in public[experiment]
+        for experiment in public for item in public[experiment]
     ])
     with (args.output_root / "candidate_audit.csv").open("w", encoding="utf-8", newline="") as file:
         fieldnames = [
@@ -422,6 +543,7 @@ def main() -> int:
             "stratum",
             "readability_passed",
             "readability_reason",
+            "response_integrity_issues",
             "selection_axes_available",
             "basis_advantage",
             "basis_mean",
@@ -444,6 +566,11 @@ def main() -> int:
                     "stratum": row["stratum"],
                     "readability_passed": row["readability_passed"],
                     "readability_reason": row["readability_reason"],
+                    "response_integrity_issues": json.dumps(
+                        response_integrity_issues(row["responses"]),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
                     "selection_axes_available": row["selection_axes_available"],
                     "basis_advantage": row["basis_advantage"],
                     "basis_mean": row["oracle_means"]["basis"],
@@ -471,7 +598,11 @@ def main() -> int:
         "interpretation": "Oracle上でBASiS優位な項目へ富化した副次的人手評価であり、test全体の無条件な主結果ではない。",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "count": args.count,
-        "items_per_experiment": args.count // 2,
+        "survey_mode": "single" if args.single_form else "split",
+        "experiments": ["A"] if args.single_form else ["A", "B"],
+        "items_per_experiment": (
+            args.count if args.single_form else args.count // 2
+        ),
         "seed": args.seed,
         "oracle_axes": list(oracle_axes),
         "selection_axes": list(settings["oracle_axes"] or oracle_axes),
@@ -515,6 +646,14 @@ def main() -> int:
             ).hexdigest(),
         },
         "public_information_excludes": ["model identity", "Oracle score", "answer position"],
+        "response_integrity": {
+            "source_responses_modified": False,
+            "truncated_response_policy": "exclude_without_editing",
+            "selected_issue_count": sum(
+                bool(response_integrity_issues(row["responses"]))
+                for row in selected
+            ),
+        },
     }
     args.output_root.mkdir(parents=True, exist_ok=True)
     (args.output_root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

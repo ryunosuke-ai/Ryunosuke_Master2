@@ -190,14 +190,48 @@ def apply_page_style() -> None:
             margin: 0 0 5px;
         }
         .conversation-text {
-            white-space: pre-wrap;
-            line-height: 1.48;
+            line-height: 1.42;
             line-break: strict;
             text-wrap: pretty;
             background: #f7f8fa;
             border-left: 4px solid #6d7782;
             padding: 8px 10px;
             margin-bottom: 7px;
+        }
+        .conversation-turn {
+            border-bottom: 1px solid #e5e8eb;
+            padding: 5px 2px 6px;
+        }
+        .conversation-turn:last-child {
+            border-bottom: 0;
+        }
+        .conversation-speaker {
+            color: #52606d;
+            font-size: 0.76rem;
+            font-weight: 750;
+            margin-right: 6px;
+        }
+        .conversation-utterance {
+            font-size: 0.84rem;
+        }
+        .older-history {
+            background: #ffffff;
+            border: 1px solid #dfe3e7;
+            border-radius: 4px;
+            margin-bottom: 7px;
+            padding: 5px 8px;
+        }
+        .older-history summary {
+            color: #3f6078;
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-weight: 700;
+        }
+        .recent-history-label {
+            color: #52606d;
+            font-size: 0.76rem;
+            font-weight: 700;
+            margin: 5px 0 2px;
         }
         .response-card {
             border-top: 1px solid #dfe3e7;
@@ -209,7 +243,8 @@ def apply_page_style() -> None:
         }
         .response-text {
             white-space: pre-wrap;
-            line-height: 1.52;
+            font-size: 0.88rem;
+            line-height: 1.48;
             line-break: strict;
             text-wrap: pretty;
             overflow-wrap: anywhere;
@@ -310,10 +345,15 @@ def render_start_screen(
 ) -> None:
     """実験指示、例示、同意、氏名入力を表示する。"""
     st.title("相談支援応答の7段階評価")
+    single_form = len(experiments) == 1
     experiment_label = (
-        f"実験{requested_experiment}"
-        if requested_experiment is not None
-        else "実験A/B自動割当"
+        "全員共通の10問"
+        if single_form
+        else (
+            f"実験{requested_experiment}"
+            if requested_experiment is not None
+            else "実験A/B自動割当"
+        )
     )
     st.caption(
         f"{experiment_label}・研究室内で実施する3つの匿名応答の比較評価です。"
@@ -331,6 +371,11 @@ def render_start_screen(
             "最後の相談者の発話に対する「応答A〜C」を示します。"
             "それぞれの応答について同じ7項目を1〜7で評価し、最後に"
             "最もふさわしい応答を1つ選んでください。</p>"
+            "<p>評価画面では、左側にこれまでの会話と3つの応答、"
+            "右側に回答欄が表示されます。左側の内容を見比べながら、"
+            "右側の質問に順番に回答してください。会話が長い場合は直近の"
+            "やり取りを表示し、前半は「前半の会話を表示」から確認できます。"
+            "左側はそのままに、右側だけをスクロールして進められます。</p>"
         ),
     )
 
@@ -429,9 +474,45 @@ def readable_text_html(value: Any) -> str:
     return re.sub(r"(?:<br>\s*)+$", "", escaped)
 
 
+def conversation_history_html(value: Any, *, recent_turns: int = 6) -> str:
+    """会話を発話単位で整形し、長い履歴では過去部分を折りたたむ。"""
+
+    raw_turns = [
+        turn.strip()
+        for turn in re.split(r"\n\s*\n", str(value).strip())
+        if turn.strip()
+    ]
+
+    def render_turn(turn: str) -> str:
+        match = re.match(r"^([^:\n]{1,16}):\s*(.*)$", turn, flags=re.DOTALL)
+        if match:
+            speaker, utterance = match.groups()
+        else:
+            speaker, utterance = "発話", turn
+        return (
+            '<div class="conversation-turn">'
+            f'<span class="conversation-speaker">{html.escape(speaker)}</span>'
+            f'<span class="conversation-utterance">'
+            f'{readable_text_html(utterance)}</span></div>'
+        )
+
+    rendered = [render_turn(turn) for turn in raw_turns]
+    if len(rendered) <= recent_turns:
+        return "".join(rendered)
+    older_count = len(rendered) - recent_turns
+    return (
+        '<details class="older-history">'
+        f'<summary>前半の会話（{older_count}発話）を表示</summary>'
+        + "".join(rendered[:older_count])
+        + "</details>"
+        + '<div class="recent-history-label">直近の会話</div>'
+        + "".join(rendered[older_count:])
+    )
+
+
 def build_reference_html(item: dict[str, Any]) -> str:
     """固定表示する会話と3応答を、モデル情報なしでHTML化する。"""
-    conversation = readable_text_html(item["conversation"])
+    conversation = conversation_history_html(item["conversation"])
     parts = [
         '<div class="reference-panel">',
         '<div class="reference-heading">これまでの会話</div>',
@@ -604,7 +685,7 @@ def render_evaluation(
         border=False,
     )
     with st.form(f"evaluation_form_{participant.participant_id}_{item_id}"):
-        reference_column, rating_column = st.columns([1.08, 0.92], gap="large")
+        reference_column, rating_column = st.columns([1.12, 0.88], gap="large")
         with reference_column:
             st.markdown(build_reference_html(item), unsafe_allow_html=True)
         rating_scroll = rating_column.container(
@@ -757,6 +838,8 @@ def main() -> None:
     except ValueError as exc:
         st.error(str(exc))
         st.stop()
+    if len(experiments) == 1:
+        requested_experiment = next(iter(experiments))
     if "esconv_survey_participant" not in st.session_state:
         render_start_screen(args.database, experiments, requested_experiment)
         return

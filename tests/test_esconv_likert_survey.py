@@ -10,6 +10,7 @@ from streamlit.testing.v1 import AppTest
 
 from apps.esconv_likert_user_eval import (
     build_reference_html,
+    conversation_history_html,
     find_missing_evaluation_fields,
     first_unanswered_index,
     readable_text_html,
@@ -78,6 +79,33 @@ def test_public_experiments_load_without_private_model_identity(tmp_path: Path):
     assert set(experiments) == {"A", "B"}
     assert len(experiments["A"]) == len(experiments["B"]) == 10
     assert "position_to_model" not in experiments["A"][0]
+
+
+def test_single_form_loads_only_configured_experiment(tmp_path: Path):
+    directory = tmp_path / "experiment_a"
+    directory.mkdir(parents=True)
+    with (directory / "form_items_public.jsonl").open(
+        "w", encoding="utf-8"
+    ) as file:
+        for index in range(1, 11):
+            file.write(json.dumps(public_item(index), ensure_ascii=False) + "\n")
+    (tmp_path / "questionnaire_spec.json").write_text(
+        json.dumps({"survey_mode": "single", "experiment_keys": ["A"]}),
+        encoding="utf-8",
+    )
+    experiments = load_public_experiments(tmp_path)
+    assert set(experiments) == {"A"}
+    assert len(experiments["A"]) == 10
+
+
+def test_long_history_is_compacted_without_losing_earlier_turns():
+    history = "\n\n".join(
+        f"User: 発話{index}" for index in range(10)
+    )
+    rendered = conversation_history_html(history, recent_turns=6)
+    assert "前半の会話（4発話）を表示" in rendered
+    assert "発話0" in rendered
+    assert "発話9" in rendered
 
 
 def test_public_item_rejects_private_mapping():

@@ -139,9 +139,19 @@ def load_public_experiments(form_root: Path, definition: dict[str, Any]) -> dict
     manifest = json.loads((form_root / "manifest.json").read_text(encoding="utf-8"))
     if manifest.get("dataset") != definition["dataset"] or manifest.get("survey_version") != definition["survey_version"]:
         raise ValueError("公開itemと評価configのdataset/versionが一致しません。")
+    configured_experiments = tuple(
+        str(value).upper()
+        for value in manifest.get("experiments", EXPERIMENTS)
+    )
+    if (
+        not configured_experiments
+        or any(value not in EXPERIMENTS for value in configured_experiments)
+        or len(set(configured_experiments)) != len(configured_experiments)
+    ):
+        raise ValueError("manifest.experimentsは重複のないA/Bで指定してください。")
     experiments = {}
     expected = manifest.get("items_per_experiment")
-    for experiment in EXPERIMENTS:
+    for experiment in configured_experiments:
         path = form_root / f"experiment_{experiment.lower()}" / "form_items_public.jsonl"
         rows = read_jsonl(path)
         if expected is not None and len(rows) != int(expected):

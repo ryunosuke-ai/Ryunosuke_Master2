@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ESConv Likert評価20件を、カテゴリ均衡した2実験へ分割する。"""
+"""ESConv Likert評価を、分割形式または単一10問形式で作成する。"""
 
 from __future__ import annotations
 
@@ -40,6 +40,9 @@ from scripts.prepare_esconv_google_form_likert_eval import (  # noqa: E402
     write_csv,
     write_markdown,
 )
+from tools.prepare_three_model_likert_eval import (  # noqa: E402
+    response_integrity_issues,
+)
 
 
 DEFAULT_OUTPUT_DIR = Path(
@@ -67,6 +70,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--count", type=int, default=20)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--diagnostic-permutations", type=int, default=100_000)
+    parser.add_argument(
+        "--single-form",
+        action="store_true",
+        help="監査済み候補から上位10件を選び、A/Bへ分割しない。",
+    )
     return parser.parse_args()
 
 
@@ -268,6 +276,7 @@ def write_experiment(
     experiment: str,
     selected: list[dict[str, Any]],
     seed: int,
+    single_form: bool = False,
 ) -> dict[str, Any]:
     """1実験につき、位置を均衡した1つのフォームを書く。"""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -287,7 +296,11 @@ def write_experiment(
         }
         for index, row in enumerate(selected, start=1)
     ]
-    title = f"相談支援応答の7段階評価・実験{experiment}"
+    title = (
+        "相談支援応答の7段階評価"
+        if single_form
+        else f"相談支援応答の7段階評価・実験{experiment}"
+    )
     write_jsonl(output_dir / "form_items_public.jsonl", public_rows)
     write_jsonl(output_dir / "private_model_mapping.jsonl", private_rows)
     write_private_answer_key(
@@ -330,7 +343,11 @@ def write_experiment(
     }
 
 
-def write_assignment_template(path: Path) -> None:
+def write_assignment_template(
+    path: Path,
+    *,
+    experiments: tuple[str, ...] = EXPERIMENTS,
+) -> None:
     """参加者の均等割当を記録する空のCSVを作る。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8-sig", newline="") as file:
@@ -345,7 +362,7 @@ def write_assignment_template(path: Path) -> None:
             ),
         )
         writer.writeheader()
-        for experiment in EXPERIMENTS:
+        for experiment in experiments:
             writer.writerow(
                 {
                     "participant_name": "",
@@ -415,10 +432,10 @@ def write_private_selection_audit(
         for item in review_config["items"]
     }
     lines = [
-        "# ESConvユーザ評価20件の非公開選定監査",
+        f"# ESConvユーザ評価{len(selected)}件の非公開選定監査",
         "",
         "> モデル名とOracle結果を含むため、実験参加者には共有しない。",
-        "> この20件はOracle結果を見た後に選んだ対象化ユーザ評価であり、",
+        f"> この{len(selected)}件はOracle結果を見た後に選んだ対象化ユーザ評価であり、",
         "> ESConv全体に対する無条件の有意差検定ではない。",
         "",
     ]
@@ -485,7 +502,7 @@ def validate_split(
 
 
 def main() -> int:
-    """実験A/Bの2つのGoogle Form成果物を生成する。"""
+    """分割形式または単一形式の評価成果物を生成する。"""
     args = parse_args()
     response_path = args.v2_run / "three_model_responses.jsonl"
     axis_scores = load_axis_scores(
@@ -496,19 +513,43 @@ def main() -> int:
         response_path=response_path,
         axis_scores=axis_scores,
     )
-    selected, review_config = select_human_reviewed_items(
+    review_payload = json.loads(
+        args.selection_config.read_text(encoding="utf-8")
+    )
+    reviewed_count = len(review_payload.get("items") or ())
+    reviewed, review_config = select_human_reviewed_items(
         candidates,
         config_path=args.selection_config,
-        total=args.count,
+        total=reviewed_count,
     )
-    if len(selected) != 20:
-        raise ValueError("実験A/Bは20件を10件ずつ分ける設計です。")
-    experiments = split_discriminative_items(selected)
-    source_ids = {row["prompt_id"] for row in selected}
-    ids_a = {row["prompt_id"] for row in experiments["A"]}
-    ids_b = {row["prompt_id"] for row in experiments["B"]}
-    if ids_a & ids_b or ids_a | ids_b != source_ids:
-        raise ValueError("実験A/Bの重複または欠落を検出しました。")
+    if args.single_form:
+        if args.count != 10:
+            raise ValueError("単一フォームは10件に固定しています。")
+        selected = select_discriminative_items(reviewed, total=args.count)
+        experiments = {"A": selected}
+        experiment_keys = ("A",)
+    else:
+        selected = reviewed
+        if len(selected) != 20:
+            raise ValueError("実験A/Bは20件を10件ずつ分ける設計です。")
+        experiments = split_discriminative_items(selected)
+        source_ids = {row["prompt_id"] for row in selected}
+        ids_a = {row["prompt_id"] for row in experiments["A"]}
+        ids_b = {row["prompt_id"] for row in experiments["B"]}
+        if ids_a & ids_b or ids_a | ids_b != source_ids:
+            raise ValueError("実験A/Bの重複または欠落を検出しました。")
+        experiment_keys = EXPERIMENTS
+
+    integrity_failures = {
+        row["prompt_id"]: response_integrity_issues(row["responses"])
+        for row in selected
+        if response_integrity_issues(row["responses"])
+    }
+    if integrity_failures:
+        raise ValueError(
+            "選定したESConv応答に途中切れ・文字化けがあります: "
+            f"{integrity_failures}"
+        )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     diagnostics = selection_diagnostics(
@@ -525,9 +566,15 @@ def main() -> int:
     write_json(
         args.output_dir / "questionnaire_spec.json",
         {
-            "version": "esconv_google_form_human_reviewed_two_forms.v7",
-            "experiments": 2,
-            "forms": 2,
+            "version": (
+                "esconv_google_form_human_reviewed_single10.v8"
+                if args.single_form
+                else "esconv_google_form_human_reviewed_two_forms.v7"
+            ),
+            "survey_mode": "single" if args.single_form else "split",
+            "experiment_keys": list(experiment_keys),
+            "experiments": len(experiment_keys),
+            "forms": len(experiment_keys),
             "items_per_participant": 10,
             "participant_field": "full_name",
             "contains_personal_data": True,
@@ -537,7 +584,7 @@ def main() -> int:
             "final_choices_per_participant": 10,
             "likert_anchors": LIKERT_ANCHORS,
             "statements": list(LIKERT_STATEMENTS),
-            "assignment_groups": list(EXPERIMENTS),
+            "assignment_groups": list(experiment_keys),
             "position_control": (
                 "各フォーム内で各モデルが応答A/B/Cの各位置へ"
                 "3回または4回現れるよう固定配置する。"
@@ -546,7 +593,7 @@ def main() -> int:
     )
 
     experiment_manifests: dict[str, Any] = {}
-    for experiment_index, experiment in enumerate(EXPERIMENTS):
+    for experiment_index, experiment in enumerate(experiment_keys):
         rows = experiments[experiment]
         experiment_dir = args.output_dir / f"experiment_{experiment.lower()}"
         form_manifest = write_experiment(
@@ -554,6 +601,7 @@ def main() -> int:
             experiment=experiment,
             selected=rows,
             seed=args.seed + experiment_index,
+            single_form=args.single_form,
         )
         experiment_manifests[experiment] = {
             "count": len(rows),
@@ -567,16 +615,27 @@ def main() -> int:
             "form": form_manifest,
         }
 
-    write_assignment_template(args.output_dir / "participant_assignment_template.csv")
+    write_assignment_template(
+        args.output_dir / "participant_assignment_template.csv",
+        experiments=experiment_keys,
+    )
     write_json(
         args.output_dir / "block_manifest.json",
         {
-            "version": "esconv_human_reviewed_likert_two_forms.v7",
+            "version": (
+                "esconv_human_reviewed_likert_single10.v8"
+                if args.single_form
+                else "esconv_human_reviewed_likert_two_forms.v7"
+            ),
+            "survey_mode": "single" if args.single_form else "split",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "seed": args.seed,
             "source_selected_count": len(selected),
             "split_rule": (
-                "Oracle候補をLLMが人間の可読性・支援スタイル対比の明瞭さで"
+                "監査済み20件からOracle代表軸平均と最良controlとの差が"
+                "大きい上位10件を固定する。"
+                if args.single_form
+                else "Oracle候補をLLMが人間の可読性・支援スタイル対比の明瞭さで"
                 "全件監査して固定した20件を使い、カテゴリ構成差を最小化した"
                 "上で、Oracle優位度の合計差が最小となる10件ずつへ分割する。"
             ),
@@ -607,12 +666,20 @@ def main() -> int:
                 row["basis_advantage_over_best_control"] for row in selected
             ),
             "posthoc_selection": True,
+            "response_integrity": {
+                "source_responses_modified": False,
+                "truncated_response_policy": "exclude_without_editing",
+                "selected_issue_count": 0,
+            },
             "inference_scope": (
                 "OracleでBASiS優位が確認された場面に限定した対象化ユーザ評価。"
             ),
             "experiments": experiment_manifests,
             "participant_assignment": (
-                "参加者を実験A/Bへできるだけ同数に割り当て、"
+                "全参加者が同一の10件を評価する。氏名は個人情報として"
+                "研究担当者だけが取り扱う。"
+                if args.single_form
+                else "参加者を実験A/Bへできるだけ同数に割り当て、"
                 "各参加者は一方だけを評価する。氏名は個人情報として"
                 "研究担当者だけが取り扱う。"
             ),
@@ -624,10 +691,17 @@ def main() -> int:
             },
         },
     )
-    print(
-        "ESConv Likert評価を実験A/Bへ分割しました: "
-        f"{args.output_dir} (A={len(experiments['A'])}, B={len(experiments['B'])})"
-    )
+    if args.single_form:
+        print(
+            "ESConv Likert単一10問評価を書き出しました: "
+            f"{args.output_dir} ({len(experiments['A'])}件)"
+        )
+    else:
+        print(
+            "ESConv Likert評価を実験A/Bへ分割しました: "
+            f"{args.output_dir} "
+            f"(A={len(experiments['A'])}, B={len(experiments['B'])})"
+        )
     return 0
 
 

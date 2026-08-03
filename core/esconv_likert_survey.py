@@ -104,9 +104,24 @@ def validate_public_item(item: dict[str, Any], *, experiment: str) -> None:
 
 
 def load_public_experiments(form_root: Path) -> dict[str, list[dict[str, Any]]]:
-    """Google Form用公開JSONLから実験A/Bを読む。"""
+    """Google Form用公開JSONLから分割形式または単一形式を読む。"""
+    questionnaire_path = form_root / "questionnaire_spec.json"
+    configured_experiments = EXPERIMENTS
+    if questionnaire_path.exists():
+        questionnaire = json.loads(questionnaire_path.read_text(encoding="utf-8"))
+        raw_experiments = questionnaire.get("experiment_keys")
+        if raw_experiments is not None:
+            configured_experiments = tuple(
+                str(value).upper() for value in raw_experiments
+            )
+    if (
+        not configured_experiments
+        or any(value not in EXPERIMENTS for value in configured_experiments)
+        or len(set(configured_experiments)) != len(configured_experiments)
+    ):
+        raise ValueError("experiment_keysは重複のないA/Bで指定してください。")
     experiments: dict[str, list[dict[str, Any]]] = {}
-    for experiment in EXPERIMENTS:
+    for experiment in configured_experiments:
         path = (
             form_root
             / f"experiment_{experiment.lower()}"
