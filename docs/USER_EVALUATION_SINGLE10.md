@@ -70,3 +70,17 @@ PUBLIC_HOST=192.168.1.17 PORT=8505 \
 
 各アプリはA/B指定のない共通URLを表示する。回答は各データセット専用SQLiteへ
 逐次保存され、同じ氏名で再度開くと未回答の問題から再開する。
+
+## 最新結果の出力
+
+回答受付中でも、次のコマンドで3データセットのSQLiteスナップショットを
+CSVへ再集計できる。
+
+```bash
+./scripts/update_single10_user_eval_results.sh
+```
+
+各データセットの`artifacts/user_eval/results/<dataset>_single10/`へ、
+`responses_long_private.csv`、`axis_model_summary.csv`、`friedman.csv`、
+`holm_posthoc.csv`、`final_choice_counts.csv`、`metadata.json`を書き出す。
+同じコマンドを再実行すると、その時点の最新回答でCSVを更新する。

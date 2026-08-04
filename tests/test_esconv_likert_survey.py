@@ -30,6 +30,8 @@ from scripts.prepare_esconv_google_form_likert_eval import (
     LIKERT_STATEMENTS,
     STYLE_FEATURES,
 )
+from tools.analyze_esconv_likert_responses import load_private_answer_key
+from tools.analyze_three_model_likert_responses import analyze, load_ratings
 
 
 def public_item(index: int) -> dict:
@@ -185,6 +187,80 @@ def test_response_upsert_resume_and_csv_export(tmp_path: Path):
     assert written == len(EXPECTED_AXIS_KEYS) * len(RESPONSE_POSITIONS)
     assert rows[0]["full_name"] == "研究 太郎"
     assert rows[0]["final_choice_reason"].startswith("気持ち")
+
+
+def test_esconv_private_answer_key_and_model_statistics(tmp_path: Path):
+    """ESConvの応答位置を3モデルへ復号して集計できる。"""
+
+    answer_key = tmp_path / "answer_key.csv"
+    with answer_key.open("w", encoding="utf-8-sig", newline="") as file:
+        writer = csv.DictWriter(
+            file,
+            fieldnames=[
+                "item_id",
+                "basis_response_position",
+                "base_response_position",
+                "random_response_position",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "item_id": "item_01",
+                "basis_response_position": "応答B",
+                "base_response_position": "応答A",
+                "random_response_position": "応答C",
+            }
+        )
+    private = load_private_answer_key(answer_key)
+    assert private == {
+        "item_01": {"A": "base", "B": "basis", "C": "random_dpo"}
+    }
+
+    database = tmp_path / "responses.sqlite3"
+    for index in range(2):
+        participant, _ = assign_participant(database, f"参加者 {index}")
+        ratings = complete_ratings(4)
+        for axis in ratings.values():
+            axis["B"] = 7
+            axis["C"] = 3
+        save_response(
+            database,
+            participant=participant,
+            item_id="item_01",
+            ratings=ratings,
+            final_choice="応答B",
+            final_choice_reason="文脈に最も合っているため",
+            comment="",
+        )
+
+    values, choices = load_ratings(database, private)
+    summary, omnibus, _ = analyze(
+        values,
+        permutations=100,
+        bootstrap=100,
+        seed=42,
+    )
+    assert choices["basis"] == 2
+    assert any(
+        row["axis"] == "style_strength"
+        and row["model"] == "basis"
+        and row["mean"] == 7
+        for row in summary
+    )
+    assert any(row["axis"] == "style_strength" for row in omnibus)
+
+
+def test_esconv_private_answer_key_rejects_duplicate_positions(tmp_path: Path):
+    answer_key = tmp_path / "invalid_answer_key.csv"
+    answer_key.write_text(
+        "item_id,basis_response_position,base_response_position,"
+        "random_response_position\n"
+        "item_01,応答A,応答A,応答C\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="A/B/C"):
+        load_private_answer_key(answer_key)
 
 
 def test_existing_database_adds_reason_without_losing_responses(tmp_path: Path):
