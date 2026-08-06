@@ -1,0 +1,95 @@
+version: gold_only_dpo500.v1
+base_model: Qwen/Qwen3.5-27B
+expected_gold_records: 500
+training:
+  num_train_epochs: 1
+  learning_rate: 0.000005
+  beta: 0.1
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  lora_r: 8
+  lora_alpha: 16
+  lora_dropout: 0.05
+  max_length: 1024
+  save_steps: 25
+  save_total_limit: 2
+  warmup_ratio: 0.03
+  eval_ratio: 0.0
+  seed: 42
+  use_4bit: false
+
+datasets:
+  esconv:
+    gold_source: artifacts/datasets/esconv_gold_ja_dpo_preferences_reminiscence_5000_to_2000.jsonl
+    basis_train_source: artifacts/datasets/esconv_mixed_ja_dpo_preferences_reminiscence_5000_to_2000.jsonl
+    evaluation_source: artifacts/evaluations/oracle_eval_runs/reminiscence_5000_to_2000_oracle_esconv_v3_strategy/responses.jsonl
+    expected_eval_records: 100
+    judge_model: gpt-5.4
+    generation:
+      max_new_tokens: 192
+      temperature: 0.7
+      top_p: 0.8
+      repetition_penalty: 1.0
+    oracle_categories:
+      conversation_style:
+        evaluator: scripts/eval_oracle_conversation_style_esconv_v2.py
+        existing_raw: artifacts/evaluations/oracle_eval_runs/esconv_topconf_three_model_esconv_v2_100_gpt54_v1_topconf_three_model_esconv_v2_10pt/oracle_conversation_style_esconv_v2_10pt/raw.jsonl
+      strategy_transition:
+        evaluator: scripts/eval_oracle_strategy_transition_esconv_v2.py
+        existing_raw: artifacts/evaluations/oracle_eval_runs/esconv_topconf_three_model_esconv_v2_100_gpt54_v1_topconf_three_model_esconv_v2_10pt/oracle_strategy_transition_esconv_v2_10pt/raw.jsonl
+
+  mathdial:
+    gold_source: artifacts/mathdial_wildchat/runs/mathdial_wildchat_gpt56_v6_candidates4_mixed/dpo/mathdial_gold_ja.jsonl
+    basis_train_source: artifacts/mathdial_wildchat/runs/mathdial_wildchat_gpt56_v6_candidates4_mixed/dpo/mathdial_basis_train.jsonl
+    evaluation_source: artifacts/mathdial_wildchat/evaluation_rechecks/mathdial_v6_instruction_outcome_selected_top100_v1/evaluation/responses.jsonl
+    oracle_template_source: artifacts/mathdial_wildchat/evaluation_rechecks/mathdial_v6_instruction_outcome_selected_top100_v1/evaluation/oracle_input.jsonl
+    expected_eval_records: 100
+    judge_model_env: AZURE_OPENAI_GPT56_TERRA_DEPLOYMENT
+    judge_model_default: gpt-5.6-terra
+    generation:
+      max_new_tokens: 256
+      temperature: 0.7
+      top_p: 0.9
+      repetition_penalty: 1.05
+    oracle_categories:
+      pedagogical_v2:
+        evaluator: scripts/eval_oracle_mathdial_v2.py
+        evaluator_category: pedagogical
+        existing_raw: artifacts/mathdial_wildchat/evaluation_rechecks/mathdial_v6_instruction_outcome_selected_top100_v1/evaluation/oracle/pedagogical_v2/raw.jsonl
+      general:
+        evaluator: scripts/eval_oracle_mathdial_v2.py
+        evaluator_category: general
+        existing_raw: artifacts/mathdial_wildchat/evaluation_rechecks/mathdial_v6_instruction_outcome_selected_top100_v1/evaluation/oracle/general/raw.jsonl
+    inference_status: exploratory_outcome_selected_success_case_analysis
+
+  meditod:
+    gold_source: artifacts/meditod_wildchat/runs/meditod_wildchat_gpt56_v2/dpo/meditod_gold_ja.jsonl
+    basis_train_source: artifacts/meditod_wildchat/runs/meditod_wildchat_gpt56_v2/dpo/meditod_basis_train.jsonl
+    evaluation_source: artifacts/meditod_wildchat/runs/meditod_wildchat_gpt56_v2/evaluation/responses.jsonl
+    oracle_template_source: artifacts/meditod_wildchat/runs/meditod_wildchat_gpt56_v2/evaluation/oracle_input_all.jsonl
+    expected_eval_records: 130
+    expected_main_records: 100
+    expected_ood_records: 30
+    judge_model_env: AZURE_OPENAI_GPT56_TERRA_DEPLOYMENT
+    judge_model_default: gpt-5.6-terra
+    generation:
+      max_new_tokens: 256
+      temperature: 0.7
+      top_p: 0.9
+      repetition_penalty: 1.05
+    oracle_categories:
+      history:
+        evaluator: scripts/eval_oracle_meditod.py
+        evaluator_category: history
+        existing_raw: artifacts/meditod_wildchat/runs/meditod_wildchat_gpt56_v2/evaluation/oracle/history/raw.jsonl
+        existing_ood_raw: artifacts/meditod_wildchat/runs/meditod_wildchat_gpt56_v2/evaluation/oracle/ood_history/raw.jsonl
+      general:
+        evaluator: scripts/eval_oracle_meditod.py
+        evaluator_category: general
+        existing_raw: artifacts/meditod_wildchat/runs/meditod_wildchat_gpt56_v2/evaluation/oracle/general/raw.jsonl
+        existing_ood_raw: artifacts/meditod_wildchat/runs/meditod_wildchat_gpt56_v2/evaluation/oracle/ood_general/raw.jsonl
+      safety:
+        evaluator: scripts/eval_oracle_meditod.py
+        evaluator_category: safety
+        existing_raw: artifacts/meditod_wildchat/runs/meditod_wildchat_gpt56_v2/evaluation/oracle/safety/raw.jsonl
+        existing_ood_raw: artifacts/meditod_wildchat/runs/meditod_wildchat_gpt56_v2/evaluation/oracle/ood_safety/raw.jsonl

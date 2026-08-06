@@ -134,14 +134,37 @@ def load_lora_pair_bundle(
     use_4bit: bool,
 ) -> ChatBundle:
     """1つのベースモデルへ2つのLoRA adapterを読み込む。"""
+
+    return load_lora_bundle(
+        base_model_id,
+        adapters={
+            BASE_ADAPTER_NAME: base_lora_path,
+            DPO_ADAPTER_NAME: dpo_lora_path,
+        },
+        use_4bit=use_4bit,
+    )
+
+
+def load_lora_bundle(
+    base_model_id: str,
+    *,
+    adapters: dict[str, str],
+    use_4bit: bool,
+) -> ChatBundle:
+    """1つのベースモデルへ1つ以上の名前付きLoRA adapterを読み込む。"""
+
+    if not adapters:
+        raise ValueError("adaptersは1件以上必要です。")
+    if any(not str(name).strip() for name in adapters):
+        raise ValueError("adapter名は空にできません。")
     suppress_external_warnings()
     deps = load_training_modules()
     disable_peft_bitsandbytes_dispatch()
     torch = deps["torch"]
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA対応GPUが見つかりません。Qwen3.5-27B の比較にはGPU環境が必要です。")
-    require_lora_path(base_lora_path, label="Bayes-DPO")
-    require_lora_path(dpo_lora_path, label="Random-DPO")
+    for adapter_name, adapter_path in adapters.items():
+        require_lora_path(adapter_path, label=adapter_name)
 
     tokenizer = load_tokenizer(base_model_id, deps)
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
@@ -172,12 +195,15 @@ def load_lora_pair_bundle(
     base_model = deps["ModelClass"].from_pretrained(base_model_id, **model_kwargs)
     if hasattr(base_model, "config"):
         base_model.config.use_cache = True
+    iterator = iter(adapters.items())
+    first_name, first_path = next(iterator)
     model = deps["PeftModel"].from_pretrained(
         base_model,
-        base_lora_path,
-        adapter_name=BASE_ADAPTER_NAME,
+        first_path,
+        adapter_name=first_name,
     )
-    model.load_adapter(dpo_lora_path, adapter_name=DPO_ADAPTER_NAME)
+    for adapter_name, adapter_path in iterator:
+        model.load_adapter(adapter_path, adapter_name=adapter_name)
     model.eval()
     return ChatBundle(tokenizer=tokenizer, model=model, torch=torch)
 

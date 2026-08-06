@@ -38,6 +38,7 @@ artifacts/figures/
 artifacts/mathdial_wildchat/
 artifacts/meditod_wildchat/
 artifacts/primock57_wildchat/
+artifacts/gold_only_dpo/
 *.safetensors
 *.bin
 *.pt
