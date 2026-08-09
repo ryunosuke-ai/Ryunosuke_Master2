@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import subprocess
@@ -8,6 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from scripts.export_gold_only_axis_results import load_scores, write_scores
 from scripts.run_gold_only_four_model_statistics import analyze, load_axis_scores
 from tools.gold_only_dpo import (
     FOUR_MODELS,
@@ -328,3 +330,36 @@ def test_gold_only_watchdog_restarts_stalled_resumable_stage(tmp_path: Path):
     log = (tmp_path / "run/watchdog/watchdog.log").read_text(encoding="utf-8")
     assert "stall dataset=esconv stage=generate_responses" in log
     assert "attempt=2" in log
+
+
+def test_axis_score_export_writes_readable_text_and_json(tmp_path: Path):
+    statistics = tmp_path / "statistics"
+    statistics.mkdir()
+    rows = [
+        {
+            "axis": "style.axis_one",
+            "model_name": model,
+            "n": "10",
+            "mean": str(value),
+            "std": "0.5",
+            "ci95_low": str(value - 0.2),
+            "ci95_high": str(value + 0.2),
+            "is_highest": str(model == "basis"),
+        }
+        for model, value in zip(
+            ("base", "gold_only", "basis", "random_dpo"),
+            (6.0, 7.0, 8.0, 5.0),
+        )
+    ]
+    summary_path = statistics / "model_summary.csv"
+    with summary_path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    scores = load_scores(statistics)
+    output = tmp_path / "axis_scores_main"
+    write_scores(dataset="fixture", evaluation_set="main", scores=scores, output=output)
+    text = output.with_suffix(".txt").read_text(encoding="utf-8")
+    payload = json.loads(output.with_suffix(".json").read_text(encoding="utf-8"))
+    assert "BASiS-DPO: 8.000" in text
+    assert payload["axes"][0]["scores"]["Gold-only DPO"] == 7.0
