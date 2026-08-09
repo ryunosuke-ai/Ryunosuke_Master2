@@ -356,10 +356,58 @@ def test_axis_score_export_writes_readable_text_and_json(tmp_path: Path):
         writer = csv.DictWriter(file, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
+    omnibus_rows = [
+        {
+            "axis": "style.axis_one",
+            "n": "10",
+            "models": "4",
+            "friedman_chi2": "9.0",
+            "degrees_of_freedom": "3",
+            "p_value": "0.01",
+            "kendalls_w": "0.3",
+            "significant": "True",
+            "highest_model": "basis",
+        }
+    ]
+    with (statistics / "omnibus_friedman.csv").open(
+        "w", encoding="utf-8", newline=""
+    ) as file:
+        writer = csv.DictWriter(file, fieldnames=list(omnibus_rows[0]))
+        writer.writeheader()
+        writer.writerows(omnibus_rows)
+    posthoc_rows = [
+        {
+            "axis": "style.axis_one",
+            "comparison": "BASiS_vs_Base",
+            "n": "10",
+            "mean_diff": "2.0",
+            "median_diff": "2.0",
+            "ci95_low": "1.0",
+            "ci95_high": "3.0",
+            "p_raw": "0.0005",
+            "p_holm": "0.0008",
+            "cohens_dz": "1.0",
+            "rank_biserial": "1.0",
+            "wins": "10",
+            "ties": "0",
+            "losses": "0",
+            "left_win_rate": "1.0",
+            "tie_rate": "0.0",
+            "right_win_rate": "0.0",
+            "significant": "True",
+        }
+    ]
+    with (statistics / "posthoc_pairwise.csv").open(
+        "w", encoding="utf-8", newline=""
+    ) as file:
+        writer = csv.DictWriter(file, fieldnames=list(posthoc_rows[0]))
+        writer.writeheader()
+        writer.writerows(posthoc_rows)
     scores = load_scores(statistics)
     output = tmp_path / "axis_scores_main"
     write_scores(dataset="fixture", evaluation_set="main", scores=scores, output=output)
     text = output.with_suffix(".txt").read_text(encoding="utf-8")
     payload = json.loads(output.with_suffix(".json").read_text(encoding="utf-8"))
-    assert "BASiS-DPO: 8.000" in text
-    assert payload["axes"][0]["scores"]["Gold-only DPO"] == 7.0
+    assert "BASiS-DPO: mean=8.000" in text
+    assert "p_holm=0.0008, stars=***" in text
+    assert payload["axes"][0]["models"]["Gold-only DPO"]["mean"] == 7.0
