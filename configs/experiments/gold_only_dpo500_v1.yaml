@@ -31,6 +31,9 @@ datasets:
       top_p: 0.8
       repetition_penalty: 1.0
     oracle_categories:
+      text_style_transfer:
+        evaluator: scripts/eval_oracle_tst.py
+        existing_raw: artifacts/evaluations/oracle_eval_runs/esconv_topconf_three_model_gpt54_100_10pt_topconf_three_model_10pt/oracle_tst_10pt/raw.jsonl
       conversation_style:
         evaluator: scripts/eval_oracle_conversation_style_esconv_v2.py
         existing_raw: artifacts/evaluations/oracle_eval_runs/esconv_topconf_three_model_esconv_v2_100_gpt54_v1_topconf_three_model_esconv_v2_10pt/oracle_conversation_style_esconv_v2_10pt/raw.jsonl

@@ -9,7 +9,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from scripts.export_gold_only_axis_results import load_scores, write_scores
+from scripts.export_gold_only_axis_results import (
+    REPRESENTATIVE_AXES,
+    load_scores,
+    select_representative_scores,
+    write_scores,
+)
 from scripts.run_gold_only_four_model_statistics import analyze, load_axis_scores
 from tools.gold_only_dpo import (
     FOUR_MODELS,
@@ -285,6 +290,7 @@ def test_gold_only_shell_scripts_have_valid_syntax_and_fixed_conditions():
         "scripts/run_gold_only_dpo_dataset_pipeline.sh",
         "scripts/run_gold_only_dpo_dataset_watchdog.sh",
         "scripts/run_gold_only_dpo_all_watchdog.sh",
+        "scripts/complete_gold_only_representative_axes.sh",
     ):
         subprocess.run(["bash", "-n", str(ROOT / relative)], check=True)
     pipeline = (ROOT / "scripts/run_gold_only_dpo_dataset_pipeline.sh").read_text(
@@ -295,6 +301,23 @@ def test_gold_only_shell_scripts_have_valid_syntax_and_fixed_conditions():
     assert "--no-4bit" in pipeline
     assert "--resume-from-checkpoint auto" in pipeline
     assert "START_STAGE" in pipeline and "END_STAGE" in pipeline
+
+
+def test_representative_axis_selection_is_exact_and_ordered():
+    for dataset, axes in REPRESENTATIVE_AXES.items():
+        rows = [
+            {"axis_key": axis, "value": index}
+            for index, axis in enumerate(reversed(axes))
+        ]
+        selected = select_representative_scores(dataset, rows)
+        assert [row["axis_key"] for row in selected] == list(axes)
+
+
+def test_representative_axis_selection_rejects_missing_axis():
+    axes = REPRESENTATIVE_AXES["esconv"]
+    rows = [{"axis_key": axis} for axis in axes[:-1]]
+    with pytest.raises(ValueError, match="代表軸の評価が不足"):
+        select_representative_scores("esconv", rows)
 
 
 def test_gold_only_watchdog_restarts_stalled_resumable_stage(tmp_path: Path):

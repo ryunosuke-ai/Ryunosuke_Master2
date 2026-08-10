@@ -26,6 +26,36 @@ COMPARISONS = (
     "Base_vs_Random-DPO",
 )
 
+REPRESENTATIVE_AXES = {
+    "esconv": (
+        "text_style_transfer.style_strength",
+        "conversation_style.esconv_tone_similarity",
+        "conversation_style.supporter_role_consistency",
+        "conversation_style.non_directive_support_style",
+        "strategy_transition.strategy_stage_alignment",
+        "strategy_transition.premature_advice_avoidance",
+        "text_style_transfer.naturalness",
+    ),
+    "mathdial": (
+        "pedagogical_v2.equitable_tutoring",
+        "pedagogical_v2.learner_reasoning_diagnosis",
+        "pedagogical_v2.mistake_location_and_targeting",
+        "pedagogical_v2.guidance_quality",
+        "pedagogical_v2.feedback_actionability",
+        "pedagogical_v2.answer_revealing_calibration",
+        "pedagogical_v2.teacher_move_stage_alignment",
+    ),
+    "meditod": (
+        "general.response_relevance",
+        "general.overall_quality",
+        "history.premature_assessment_avoidance",
+        "safety.appropriate_uncertainty",
+        "general.understandable",
+        "safety.unsafe_medical_advice",
+        "safety.unsupported_diagnosis",
+    ),
+}
+
 
 def read_csv(path: Path) -> list[dict[str, str]]:
     with path.open(encoding="utf-8", newline="") as file:
@@ -182,6 +212,18 @@ def write_scores(
     )
 
 
+def select_representative_scores(
+    dataset: str, scores: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """論文図で固定した代表7軸を指定順に抽出する。"""
+    by_key = {row["axis_key"]: row for row in scores}
+    expected = REPRESENTATIVE_AXES[dataset]
+    missing = [axis for axis in expected if axis not in by_key]
+    if missing:
+        raise ValueError(f"{dataset}: 代表軸の評価が不足しています: {missing}")
+    return [by_key[axis] for axis in expected]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Gold-only軸別4モデルスコア出力")
     parser.add_argument(
@@ -208,6 +250,8 @@ def main() -> int:
             )
         for evaluation_set, statistics_dir, prefix in specifications:
             scores = load_scores(statistics_dir, prefix=prefix)
+            if evaluation_set == "main":
+                scores = select_representative_scores(dataset, scores)
             write_scores(
                 dataset=dataset,
                 evaluation_set=evaluation_set,
@@ -230,6 +274,7 @@ def main() -> int:
         "IMPORTANT: post-hoc was not run when Friedman omnibus was not significant",
         "MODEL_ORDER: Base, Gold-only DPO, BASiS-DPO, Random-DPO",
         "EVALUATION_SET: main evaluation only (MediTOD OOD/cluster are separate files)",
+        "AXIS_SET: pre-specified representative seven axes per dataset",
         "",
     ]
     for item in combined:

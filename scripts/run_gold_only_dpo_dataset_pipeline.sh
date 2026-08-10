@@ -66,6 +66,7 @@ paths += [
  pathlib.Path('tools/run_oracle_evaluation_lora_pair.py'),
  pathlib.Path('scripts/run_gold_only_four_model_statistics.py'),
  pathlib.Path('scripts/run_gold_only_dpo_dataset_pipeline.sh'),
+ pathlib.Path('scripts/eval_oracle_tst.py'),
  pathlib.Path('scripts/eval_oracle_conversation_style_esconv_v2.py'),
  pathlib.Path('scripts/eval_oracle_strategy_transition_esconv_v2.py'),
  pathlib.Path('scripts/eval_oracle_mathdial_v2.py'),pathlib.Path('scripts/eval_oracle_meditod.py'),
@@ -226,8 +227,10 @@ oracle_stage() {
   [[ -n "$JUDGE_MODEL" ]] || { echo "judge modelが解決できません。" >&2; exit 20; }
   case "$DATASET" in
     esconv)
+      run_oracle_category scripts.eval_oracle_tst "$EVAL_DIR/oracle_input_gold.jsonl" "$EVAL_DIR/oracle_gold/main/text_style_transfer"
       run_oracle_category scripts.eval_oracle_conversation_style_esconv_v2 "$EVAL_DIR/oracle_input_gold.jsonl" "$EVAL_DIR/oracle_gold/main/conversation_style"
       run_oracle_category scripts.eval_oracle_strategy_transition_esconv_v2 "$EVAL_DIR/oracle_input_gold.jsonl" "$EVAL_DIR/oracle_gold/main/strategy_transition"
+      merge_category "artifacts/evaluations/oracle_eval_runs/esconv_topconf_three_model_gpt54_100_10pt_topconf_three_model_10pt/oracle_tst_10pt/raw.jsonl" "$EVAL_DIR/oracle_gold/main/text_style_transfer/raw.jsonl" "$EVAL_DIR/oracle_combined/main/text_style_transfer/raw.jsonl" 100
       merge_category "artifacts/evaluations/oracle_eval_runs/esconv_topconf_three_model_esconv_v2_100_gpt54_v1_topconf_three_model_esconv_v2_10pt/oracle_conversation_style_esconv_v2_10pt/raw.jsonl" "$EVAL_DIR/oracle_gold/main/conversation_style/raw.jsonl" "$EVAL_DIR/oracle_combined/main/conversation_style/raw.jsonl" 100
       merge_category "artifacts/evaluations/oracle_eval_runs/esconv_topconf_three_model_esconv_v2_100_gpt54_v1_topconf_three_model_esconv_v2_10pt/oracle_strategy_transition_esconv_v2_10pt/raw.jsonl" "$EVAL_DIR/oracle_gold/main/strategy_transition/raw.jsonl" "$EVAL_DIR/oracle_combined/main/strategy_transition/raw.jsonl" 100
       ;;
@@ -253,7 +256,7 @@ statistics_stage() {
   local permutations=10000 bootstrap=2000; [[ "$DRY_RUN" == "1" ]] && { permutations=100; bootstrap=100; }
   local common=(--permutations "$permutations" --bootstrap "$bootstrap" --seed "$SEED")
   case "$DATASET" in
-    esconv) python3 -m scripts.run_gold_only_four_model_statistics --raw "conversation_style=$EVAL_DIR/oracle_combined/main/conversation_style/raw.jsonl" --raw "strategy_transition=$EVAL_DIR/oracle_combined/main/strategy_transition/raw.jsonl" --output-dir "$OUTPUT_ROOT/statistics" "${common[@]}" ;;
+    esconv) python3 -m scripts.run_gold_only_four_model_statistics --raw "text_style_transfer=$EVAL_DIR/oracle_combined/main/text_style_transfer/raw.jsonl" --raw "conversation_style=$EVAL_DIR/oracle_combined/main/conversation_style/raw.jsonl" --raw "strategy_transition=$EVAL_DIR/oracle_combined/main/strategy_transition/raw.jsonl" --output-dir "$OUTPUT_ROOT/statistics" "${common[@]}" ;;
     mathdial) python3 -m scripts.run_gold_only_four_model_statistics --raw "pedagogical_v2=$EVAL_DIR/oracle_combined/main/pedagogical_v2/raw.jsonl" --raw "general=$EVAL_DIR/oracle_combined/main/general/raw.jsonl" --output-dir "$OUTPUT_ROOT/statistics" --inference-status exploratory_outcome_selected_success_case_analysis "${common[@]}" ;;
     meditod)
       python3 -m scripts.run_gold_only_four_model_statistics --raw "history=$EVAL_DIR/oracle_combined/main/history/raw.jsonl" --raw "general=$EVAL_DIR/oracle_combined/main/general/raw.jsonl" --raw "safety=$EVAL_DIR/oracle_combined/main/safety/raw.jsonl" --output-dir "$OUTPUT_ROOT/statistics" --cluster-map "$EVAL_DIR/oracle_input_gold.jsonl" "${common[@]}"
@@ -271,7 +274,7 @@ GENERATION_OUTPUTS=("$EVAL_DIR/gold_only_responses.jsonl" "$EVAL_DIR/generation_
 [[ "$DATASET" == "meditod" ]] && GENERATION_OUTPUTS+=("$EVAL_DIR/oracle_input_gold_ood.jsonl")
 run_stage generate_responses generate_stage "${GENERATION_OUTPUTS[@]}"
 case "$DATASET" in
-  esconv) ORACLE_OUTPUTS=("$EVAL_DIR/oracle_combined/main/conversation_style/raw.jsonl" "$EVAL_DIR/oracle_combined/main/strategy_transition/raw.jsonl") ;;
+  esconv) ORACLE_OUTPUTS=("$EVAL_DIR/oracle_combined/main/text_style_transfer/raw.jsonl" "$EVAL_DIR/oracle_combined/main/conversation_style/raw.jsonl" "$EVAL_DIR/oracle_combined/main/strategy_transition/raw.jsonl") ;;
   mathdial) ORACLE_OUTPUTS=("$EVAL_DIR/oracle_combined/main/pedagogical_v2/raw.jsonl" "$EVAL_DIR/oracle_combined/main/general/raw.jsonl") ;;
   meditod) ORACLE_OUTPUTS=("$EVAL_DIR/oracle_combined/main/history/raw.jsonl" "$EVAL_DIR/oracle_combined/main/general/raw.jsonl" "$EVAL_DIR/oracle_combined/main/safety/raw.jsonl" "$EVAL_DIR/oracle_combined/ood/history/raw.jsonl" "$EVAL_DIR/oracle_combined/ood/general/raw.jsonl" "$EVAL_DIR/oracle_combined/ood/safety/raw.jsonl") ;;
 esac
