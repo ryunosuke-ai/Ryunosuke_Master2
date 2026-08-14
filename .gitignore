@@ -39,6 +39,7 @@ artifacts/mathdial_wildchat/
 artifacts/meditod_wildchat/
 artifacts/primock57_wildchat/
 artifacts/gold_only_dpo/
+artifacts/cross_model_oracle/
 *.safetensors
 *.bin
 *.pt
